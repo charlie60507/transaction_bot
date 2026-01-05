@@ -37,8 +37,8 @@ const RX = {
   ]
 };
 
-/** ===== Entry: append last 15 days for both banks; Cathay-style logs ===== */
-function appendLast15DaysToSheet() {
+/** ===== Entry: append last 7 days for both banks; Cathay-style logs ===== */
+function appendLast7DaysToSheet() {
   const lock = LockService.getScriptLock();
   try {
     lock.tryLock(20 * 1000);
@@ -46,8 +46,8 @@ function appendLast15DaysToSheet() {
     const sh = getOrCreateSheet_();
     ensureHeaderAndCheckbox_(sh);
 
-    // Last 15-day window (inclusive, Taiwan timezone)
-    const { start15d0, today0, ymdStart15d, ymdToday } = timeWindow15d_();
+    // Last 7-day window (inclusive, Taiwan timezone)
+    const { start7d0, today0, ymdStart7d, ymdToday } = timeWindow7d_();
 
     // Load existing rows to build dedup index (ignore F/G)
     const lastRow = sh.getLastRow();
@@ -66,7 +66,7 @@ function appendLast15DaysToSheet() {
     {
       const q = [
         CFG.FUBON_QUERY_SUBJECT,
-        'after:' + fmtYMD_(start15d0),
+        'after:' + fmtYMD_(start7d0),
         'before:' + fmtYMD_(addDays_(today0, 1))
       ].join(' ');
       const threads = GmailApp.search(q, 0, 500);
@@ -75,7 +75,7 @@ function appendLast15DaysToSheet() {
           const parsed = parseFubonEmail_(msg);
           if (!parsed) continue;
           const { id, dateStr, dt, last4, amount, merchant, category, link } = parsed;
-          if (dateStr < ymdStart15d || dateStr > ymdToday) continue;
+          if (dateStr < ymdStart7d || dateStr > ymdToday) continue;
 
           console.log(`=== Subject: ${msg.getSubject()} | Date: ${msg.getDate()} | total 1 entry ===`);
 
@@ -112,7 +112,7 @@ function appendLast15DaysToSheet() {
 
     /** ===== Cathay (Consumption): multiple records per email ===== */
     {
-      const q = `label:"${CFG.CATHAY_LABEL}" subject:"${CFG.CATHAY_SUBJECT}" after:${fmtYMD_(start15d0)} before:${fmtYMD_(addDays_(today0, 1))}`;
+      const q = `label:"${CFG.CATHAY_LABEL}" subject:"${CFG.CATHAY_SUBJECT}" after:${fmtYMD_(start7d0)} before:${fmtYMD_(addDays_(today0, 1))}`;
       const threads = GmailApp.search(q, 0, 200);
       for (const th of threads) {
         for (const msg of th.getMessages()) {
@@ -126,7 +126,7 @@ function appendLast15DaysToSheet() {
           for (const r of rows) {
             const ymd = r.authDate || '';
             if (!ymd) continue;
-            if (ymd < ymdStart15d || ymd > ymdToday) continue;
+            if (ymd < ymdStart7d || ymd > ymdToday) continue;
 
             const dt = toDateInTZ_(ymd, (r.authTime || '00:00:00'), TZ);
             const row = [
@@ -163,7 +163,7 @@ function appendLast15DaysToSheet() {
 
     /** ===== Cathay (Transfer): one record per email ===== */
     {
-      const q = `from:cathaybk subject:"CUBE App轉帳通知" after:${fmtYMD_(start15d0)} before:${fmtYMD_(addDays_(today0, 1))}`;
+      const q = `from:cathaybk subject:"CUBE App轉帳通知" after:${fmtYMD_(start7d0)} before:${fmtYMD_(addDays_(today0, 1))}`;
       const threads = GmailApp.search(q, 0, 100);
       for (const th of threads) {
         for (const msg of th.getMessages()) {
@@ -176,7 +176,7 @@ function appendLast15DaysToSheet() {
           const parsed = parseCathayTransfer_(msg);
           if (!parsed) continue;
           const { id, dateStr, dt, last4, amount, merchant, category, link } = parsed;
-          if (dateStr < ymdStart15d || dateStr > ymdToday) continue;
+          if (dateStr < ymdStart7d || dateStr > ymdToday) continue;
 
           console.log(`=== Subject: ${msg.getSubject()} | Date: ${msg.getDate()} | total 1 entry ===`);
 
@@ -397,15 +397,15 @@ function sortByAuthTime_(sh, ascending) {
   ]);
 }
 
-// Last 15-day window (inclusive) using Taiwan timezone
-function timeWindow15d_() {
+// Last 7-day window (inclusive) using Taiwan timezone
+function timeWindow7d_() {
   const now = new Date();
   const todayStr = Utilities.formatDate(now, TZ, 'yyyy/MM/dd') + ' 00:00:00';
   const today0 = new Date(todayStr);
-  const start15d0 = addDays_(today0, -14);
-  const ymdStart15d = Utilities.formatDate(start15d0, TZ, 'yyyy/MM/dd');
+  const start7d0 = addDays_(today0, -6);
+  const ymdStart7d = Utilities.formatDate(start7d0, TZ, 'yyyy/MM/dd');
   const ymdToday = Utilities.formatDate(today0, TZ, 'yyyy/MM/dd');
-  return { start15d0, today0, ymdStart15d, ymdToday };
+  return { start7d0, today0, ymdStart7d, ymdToday };
 }
 
 function addDays_(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
