@@ -1,9 +1,9 @@
 ## Cards Transaction Bot (Apps Script)
 
-English README describing how to run, configure, and deploy this Apps Script project that ingests Gmail credit card notifications (Fubon and Cathay), parses transactions, and appends the last 7 days into a Google Sheet.
+English README describing how to run, configure, and deploy this Apps Script project that ingests Gmail credit card notifications (Fubon and Cathay), parses transactions, and appends the last 15 days into a Google Sheet.
 
 ### What it does
-- Scans Gmail with configurable queries/labels for Fubon (one record per email) and Cathay (multiple records per email).
+- Scans Gmail with configurable queries/labels for Fubon (one record per email) and Cathay (multiple records per email) to fetch the last 15 days of transactions.
 - Deduplicates by bank + MessageId + auth datetime + card last4 + amount.
 - Appends parsed rows into the target sheet and formats the date column; defaults column J to “支出” when empty.
 
@@ -41,11 +41,11 @@ clasp login
 clasp push
 
 # test run
-clasp run appendLast7DaysToSheet --params '[]'
+clasp run appendLast15DaysToSheet --params '[]'
 ```
 
 ### Triggers
-In the Apps Script UI, add a time-based trigger (e.g., hourly) for `appendLast7DaysToSheet`.
+In the Apps Script UI, add a time-based trigger (e.g., hourly) for `appendLast15DaysToSheet`.
 
 ### Notes
 - Keep `.env` out of version control (already ignored).

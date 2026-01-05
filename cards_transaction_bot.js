@@ -37,8 +37,8 @@ const RX = {
   ]
 };
 
-/** ===== Entry: append last 7 days for both banks; Cathay-style logs ===== */
-function appendLast7DaysToSheet() {
+/** ===== Entry: append last 15 days for both banks; Cathay-style logs ===== */
+function appendLast15DaysToSheet() {
   const lock = LockService.getScriptLock();
   try {
     lock.tryLock(20 * 1000);
@@ -46,8 +46,8 @@ function appendLast7DaysToSheet() {
     const sh = getOrCreateSheet_();
     ensureHeaderAndCheckbox_(sh);
 
-    // Last 7-day window (inclusive, Taiwan timezone)
-    const { start7d0, today0, ymdStart7d, ymdToday } = timeWindow7d_();
+    // Last 15-day window (inclusive, Taiwan timezone)
+    const { start15d0, today0, ymdStart15d, ymdToday } = timeWindow15d_();
 
     // Load existing rows to build dedup index (ignore F/G)
     const lastRow = sh.getLastRow();
@@ -57,13 +57,16 @@ function appendLast7DaysToSheet() {
       existing = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
     }
     const existingKeySet = new Set(existing.map(row => makeDedupKeyFromRow_(row)));
+    const existingLooseKeySet = new Set(existing.map(row => makeLooseDedupKeyFromRow_(row)));
+    // Strict MessageID check set (Column I is index 8)
+    const existingMessageIds = new Set(existing.map(row => String(row[8] || '')));
     const newRows = [];
 
     /** ===== Fubon: one record per email ===== */
     {
       const q = [
         CFG.FUBON_QUERY_SUBJECT,
-        'after:' + fmtYMD_(start7d0),
+        'after:' + fmtYMD_(start15d0),
         'before:' + fmtYMD_(addDays_(today0, 1))
       ].join(' ');
       const threads = GmailApp.search(q, 0, 500);
@@ -72,7 +75,7 @@ function appendLast7DaysToSheet() {
           const parsed = parseFubonEmail_(msg);
           if (!parsed) continue;
           const { id, dateStr, dt, last4, amount, merchant, category, link } = parsed;
-          if (dateStr < ymdStart7d || dateStr > ymdToday) continue;
+          if (dateStr < ymdStart15d || dateStr > ymdToday) continue;
 
           console.log(`=== Subject: ${msg.getSubject()} | Date: ${msg.getDate()} | total 1 entry ===`);
 
@@ -107,9 +110,9 @@ function appendLast7DaysToSheet() {
       }
     }
 
-    /** ===== Cathay: multiple records per email ===== */
+    /** ===== Cathay (Consumption): multiple records per email ===== */
     {
-      const q = `label:"${CFG.CATHAY_LABEL}" subject:"${CFG.CATHAY_SUBJECT}" after:${fmtYMD_(start7d0)} before:${fmtYMD_(addDays_(today0,1))}`;
+      const q = `label:"${CFG.CATHAY_LABEL}" subject:"${CFG.CATHAY_SUBJECT}" after:${fmtYMD_(start15d0)} before:${fmtYMD_(addDays_(today0, 1))}`;
       const threads = GmailApp.search(q, 0, 200);
       for (const th of threads) {
         for (const msg of th.getMessages()) {
@@ -123,7 +126,7 @@ function appendLast7DaysToSheet() {
           for (const r of rows) {
             const ymd = r.authDate || '';
             if (!ymd) continue;
-            if (ymd < ymdStart7d || ymd > ymdToday) continue;
+            if (ymd < ymdStart15d || ymd > ymdToday) continue;
 
             const dt = toDateInTZ_(ymd, (r.authTime || '00:00:00'), TZ);
             const row = [
@@ -158,6 +161,60 @@ function appendLast7DaysToSheet() {
       }
     }
 
+    /** ===== Cathay (Transfer): one record per email ===== */
+    {
+      const q = `from:cathaybk subject:"CUBE App轉帳通知" after:${fmtYMD_(start15d0)} before:${fmtYMD_(addDays_(today0, 1))}`;
+      const threads = GmailApp.search(q, 0, 100);
+      for (const th of threads) {
+        for (const msg of th.getMessages()) {
+          // STRICT CHECK: If MessageID exists, skip immediately
+          if (existingMessageIds.has(msg.getId())) {
+            console.log(`Skipping duplicate transfer email (MessageId exists): ${msg.getId()}`);
+            continue;
+          }
+
+          const parsed = parseCathayTransfer_(msg);
+          if (!parsed) continue;
+          const { id, dateStr, dt, last4, amount, merchant, category, link } = parsed;
+          if (dateStr < ymdStart15d || dateStr > ymdToday) continue;
+
+          console.log(`=== Subject: ${msg.getSubject()} | Date: ${msg.getDate()} | total 1 entry ===`);
+
+          const row = [
+            false,           // A recorded (checkbox)
+            '國泰',          // B bank name
+            dt,              // C auth datetime (Date)
+            last4 || '',     // D card last4 (account last 5)
+            amount || '',    // E amount NTD
+            merchant || '',  // F merchant (editable)
+            category || '',  // G category (editable)
+            link,            // H Gmail link
+            id               // I MessageId
+          ];
+
+          const key = makeDedupKey_({ bank: '國泰', dt, last4: row[3], amount: row[4], messageId: row[8] });
+          const looseKey = makeLooseDedupKey_({ bank: '國泰', dt, last4: row[3], amount: row[4] });
+
+          // STRICT check (same messageId) OR LOOSE check (same details, ignore messageId)
+          if (!existingKeySet.has(key) && !existingLooseKeySet.has(looseKey)) {
+            existingKeySet.add(key);
+            existingLooseKeySet.add(looseKey);
+            newRows.push(row);
+            console.log(`✅ Created transaction (Transfer): ${JSON.stringify({
+              bank: '國泰',
+              accountLast5: row[3],
+              authDate: fmtYMD_(dt),
+              authTime: Utilities.formatDate(dt, TZ, 'HH:mm:ss'),
+              amount: row[4],
+              currency: 'TWD',
+              merchant: row[5],
+              category: row[6]
+            })}`);
+          }
+        }
+      }
+    }
+
     // Append new rows
     if (newRows.length > 0) {
       const startRow = sh.getLastRow() + 1;
@@ -187,7 +244,7 @@ function appendLast7DaysToSheet() {
 
     Logger.log(`Done. inserted=${newRows.length}`);
   } finally {
-    try { lock.releaseLock(); } catch (e) {}
+    try { lock.releaseLock(); } catch (e) { }
   }
 }
 
@@ -209,9 +266,9 @@ function parseFubonEmail_(msg) {
   const timeText = pick_(RX.TIME, html, plain) || '';
   const timeStr = normalizeTime_(timeText);
 
-  const last4    = pick_(RX.LAST4, html, plain) || '';
-  const amtRaw   = pick_(RX.AMOUNT, html, plain);
-  const amount   = amtRaw ? Number(String(amtRaw).replace(/,/g, '')) : '';
+  const last4 = pick_(RX.LAST4, html, plain) || '';
+  const amtRaw = pick_(RX.AMOUNT, html, plain);
+  const amount = amtRaw ? Number(String(amtRaw).replace(/,/g, '')) : '';
   const merchant = (pick_(RX.MERCHANT, html, plain) || '').trim();
   const category = (pick_(RX.CATEGORY, html, plain) || '').trim();
 
@@ -273,6 +330,34 @@ function parseCathayConsumptionPlain_(text) {
   return rows;
 }
 
+/** Cathay: parse transfer notification email */
+function parseCathayTransfer_(msg) {
+  const id = msg.getId();
+  const plain = msg.getPlainBody();
+  const link = `https://mail.google.com/mail/#all/${id}`;
+
+  // Date/Time
+  const dateMatch = plain.match(/您於(\d{4}\/\d{2}\/\d{2})\s+(\d{2}:\d{2}:\d{2})/);
+  if (!dateMatch) return null;
+  const dateStr = dateMatch[1];
+  const timeStr = dateMatch[2];
+
+  // Amount
+  const amtMatch = plain.match(/轉帳金額\s+([\d,]+)/);
+  const amount = amtMatch ? Number(amtMatch[1].replace(/,/g, '')) : '';
+
+  // Account
+  const accMatch = plain.match(/轉入帳號\s+.*(\d{4,5})/);
+  const last4 = accMatch ? accMatch[1] : '';
+
+  // Merchant/Remark
+  const remarkMatch = plain.match(/備註\s+(.*)/);
+  const merchant = (remarkMatch && remarkMatch[1].trim()) ? remarkMatch[1].trim() : '轉帳';
+
+  const dt = toDateInTZ_(dateStr, timeStr, TZ);
+  return { id, dateStr, dt, last4, amount, merchant, category: '轉帳', link };
+}
+
 /* =========================
  *       Sheet utilities
  * ========================= */
@@ -312,15 +397,15 @@ function sortByAuthTime_(sh, ascending) {
   ]);
 }
 
-// Last 7-day window (inclusive) using Taiwan timezone
-function timeWindow7d_() {
+// Last 15-day window (inclusive) using Taiwan timezone
+function timeWindow15d_() {
   const now = new Date();
   const todayStr = Utilities.formatDate(now, TZ, 'yyyy/MM/dd') + ' 00:00:00';
   const today0 = new Date(todayStr);
-  const start7d0 = addDays_(today0, -6);
-  const ymdStart7d = Utilities.formatDate(start7d0, TZ, 'yyyy/MM/dd');
-  const ymdToday   = Utilities.formatDate(today0, TZ, 'yyyy/MM/dd');
-  return { start7d0, today0, ymdStart7d, ymdToday };
+  const start15d0 = addDays_(today0, -14);
+  const ymdStart15d = Utilities.formatDate(start15d0, TZ, 'yyyy/MM/dd');
+  const ymdToday = Utilities.formatDate(today0, TZ, 'yyyy/MM/dd');
+  return { start15d0, today0, ymdStart15d, ymdToday };
 }
 
 function addDays_(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
@@ -390,7 +475,7 @@ function normalizeTime_(t) {
 
 function toDateInTZ_(ymd, hms, tz) {
   const offset = tz === 'Asia/Taipei' ? '+08:00' : '+00:00';
-  const iso = `${ymd.replace(/\//g, '-') }T${hms}${offset}`;
+  const iso = `${ymd.replace(/\//g, '-')}T${hms}${offset}`;
   return new Date(iso);
 }
 
@@ -402,12 +487,27 @@ function makeDedupKey_({ bank, dt, last4, amount, messageId }) {
 
 /** Build dedup key from existing row (A~I), ignoring editable F/G columns */
 function makeDedupKeyFromRow_(row) {
-  const bank      = String(row[1] || '');     // B bank
-  const dt        = row[2] instanceof Date ? row[2] : new Date(row[2]); // C auth datetime
-  const last4     = String(row[3] || '');     // D
-  const amount    = String(row[4] || '');     // E
+  const bank = String(row[1] || '');     // B bank
+  const dt = row[2] instanceof Date ? row[2] : new Date(row[2]); // C auth datetime
+  const last4 = String(row[3] || '');     // D
+  const amount = String(row[4] || '');     // E
   const messageId = String(row[8] || '');     // I
   return makeDedupKey_({ bank, dt, last4, amount, messageId });
+}
+
+/** Build LOOSE dedup key: bank + auth datetime + last4 + amount (no MessageId) */
+function makeLooseDedupKey_({ bank, dt, last4, amount }) {
+  const ymdhms = Utilities.formatDate(dt, TZ, 'yyyy/MM/dd HH:mm:ss');
+  return [bank || '', ymdhms, String(last4 || ''), String(amount || '')].join('|');
+}
+
+/** Build LOOSE dedup key from row */
+function makeLooseDedupKeyFromRow_(row) {
+  const bank = String(row[1] || '');
+  const dt = row[2] instanceof Date ? row[2] : new Date(row[2]);
+  const last4 = String(row[3] || '');
+  const amount = String(row[4] || '');
+  return makeLooseDedupKey_({ bank, dt, last4, amount });
 }
 
 /* -------------------------
@@ -425,12 +525,12 @@ function backfillExpenseForCreditCards_() {
   const vals = rng.getValues();
 
   const COL_BANK = 1;   // B bank
-  const COL_IO   = 9;   // J income/expense
+  const COL_IO = 9;   // J income/expense
 
   let updated = 0;
   for (let i = 0; i < vals.length; i++) {
     const bank = String(vals[i][COL_BANK] || "");
-    const io   = vals[i][COL_IO];
+    const io = vals[i][COL_IO];
     if ((bank === "富邦" || bank === "國泰") && (io === "" || io === null)) {
       vals[i][COL_IO] = "支出";
       updated++;
