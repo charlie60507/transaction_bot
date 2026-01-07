@@ -1,11 +1,15 @@
 ## Cards Transaction Bot (Apps Script)
 
-English README describing how to run, configure, and deploy this Apps Script project that ingests Gmail credit card notifications (Fubon and Cathay), parses transactions, and appends the last 15 days into a Google Sheet.
+English README describing how to run, configure, and deploy this Apps Script project that ingests Gmail credit card notifications (Fubon and Cathay) and **Cube App Transfers**. It parses transactions and appends the **last 7 days** of data into a Google Sheet.
 
 ### What it does
-- Scans Gmail with configurable queries/labels for Fubon (one record per email) and Cathay (multiple records per email) to fetch the last 15 days of transactions.
-- Deduplicates by bank + MessageId + auth datetime + card last4 + amount.
-- Appends parsed rows into the target sheet and formats the date column; defaults column J to “支出” when empty.
+- **Consumption**: Scans Gmail for Fubon (one record per email) and Cathay (multiple records per email) transactions.
+- **Transfers**: Scans Cathay Cube App transfer notifications.
+- **Retention**: Fetches the last **7 days** of transactions to ensure no data loss over weekends or holidays.
+- **Robust Deduplication**:
+    - **General**: Checks `Bank + MessageId + Time + Last4 + Amount`.
+    - **Transfers**: Uses **Strict MessageID Check** (if MessageID exists, skip) + Fallback Loose Check (Time + Amount) for legacy data.
+- **Auto-Formatting**: Appends parsed rows and defaults "Income/Expense" column to "支出".
 
 ### Prerequisites
 - Node.js and `npm`
@@ -41,11 +45,11 @@ clasp login
 clasp push
 
 # test run
-clasp run appendLast15DaysToSheet --params '[]'
+clasp run appendLast7DaysToSheet --params '[]'
 ```
 
 ### Triggers
-In the Apps Script UI, add a time-based trigger (e.g., hourly) for `appendLast15DaysToSheet`.
+In the Apps Script UI, add a time-based trigger (e.g., hourly) for `appendLast7DaysToSheet`.
 
 ### Notes
 - Keep `.env` out of version control (already ignored).

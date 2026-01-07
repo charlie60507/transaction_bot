@@ -1,5 +1,6 @@
 /** ===== Shared config (loaded from Script Properties to avoid hardcoding secrets) ===== */
 const CONFIG = loadConfig_();
+const SORT_ORDER = CONFIG.sortOrder; // 'ASC' | 'DESC' | 'NONE'
 const TZ = CONFIG.tz;
 const SPREADSHEET_ID = CONFIG.spreadsheetId;
 const SHEET_NAME = CONFIG.sheetName;
@@ -92,8 +93,11 @@ function appendLast7DaysToSheet() {
           ];
 
           const key = makeDedupKey_({ bank: '富邦', dt, last4: row[3], amount: row[4], messageId: row[8] });
-          if (!existingKeySet.has(key)) {
+          const looseKey = makeLooseDedupKey_({ bank: '富邦', dt, last4: row[3], amount: row[4] });
+
+          if (!existingKeySet.has(key) && !existingLooseKeySet.has(looseKey)) {
             existingKeySet.add(key);
+            existingLooseKeySet.add(looseKey);
             newRows.push(row);
             console.log(`✅ Created transaction: ${JSON.stringify({
               bank: '富邦',
@@ -142,8 +146,11 @@ function appendLast7DaysToSheet() {
             ];
 
             const key = makeDedupKey_({ bank: '國泰', dt, last4: row[3], amount: row[4], messageId: row[8] });
-            if (!existingKeySet.has(key)) {
+            const looseKey = makeLooseDedupKey_({ bank: '國泰', dt, last4: row[3], amount: row[4] });
+
+            if (!existingKeySet.has(key) && !existingLooseKeySet.has(looseKey)) {
               existingKeySet.add(key);
+              existingLooseKeySet.add(looseKey);
               newRows.push(row);
               console.log(`✅ Created transaction: ${JSON.stringify({
                 bank: '國泰',
@@ -239,7 +246,7 @@ function appendLast7DaysToSheet() {
 
     // Checkbox validation, sort, freeze header
     applyCheckboxValidation_(sh);
-    sortByAuthTime_(sh, true);
+    sortByAuthTime_(sh, SORT_ORDER);
     sh.setFrozenRows(1);
 
     Logger.log(`Done. inserted=${newRows.length}`);
@@ -386,14 +393,18 @@ function applyCheckboxValidation_(sh) {
   range.setDataValidation(rule);
 }
 
-function sortByAuthTime_(sh, ascending) {
+function sortByAuthTime_(sh, order) {
+  if (order === 'NONE') return;
+
+  const ascending = (order !== 'DESC'); // Default to ASC if not explicitly DESC (so 'ASC' or undefined works like before)
+
   const lastRow = sh.getLastRow();
   const lastCol = sh.getLastColumn();
   if (lastRow <= 2) return;
   const range = sh.getRange(2, 1, lastRow - 1, lastCol);
   range.sort([
-    { column: 3, ascending: !!ascending }, // column C: auth datetime
-    { column: 9, ascending: true }         // secondary key: MessageId (stable)
+    { column: 3, ascending: ascending }, // column C: auth datetime
+    { column: 9, ascending: true }       // secondary key: MessageId (stable)
   ]);
 }
 
@@ -560,7 +571,8 @@ function loadConfig_() {
       FUBON_QUERY_SUBJECT: props.getProperty('FUBON_QUERY_SUBJECT') || '(subject:"即時消費通知" OR subject:"富邦信用卡消費通知" OR subject:"富邦信用卡即時消費通知")',
       CATHAY_LABEL: props.getProperty('CATHAY_LABEL') || '國泰世華消費',
       CATHAY_SUBJECT: props.getProperty('CATHAY_SUBJECT') || '消費彙整通知'
-    }
+    },
+    sortOrder: props.getProperty('SORT_ORDER') || 'ASC'
   };
 }
 
