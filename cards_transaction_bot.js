@@ -93,7 +93,7 @@ function appendLast7DaysToSheet() {
           ];
 
           const key = makeDedupKey_({ bank: '富邦', dt, last4: row[3], amount: row[4], messageId: row[8] });
-          const looseKey = makeLooseDedupKey_({ bank: '富邦', dt, last4: row[3], amount: row[4] });
+          const looseKey = makeLooseDedupKey_({ bank: '富邦', dt, amount: row[4] });
 
           if (!existingKeySet.has(key) && !existingLooseKeySet.has(looseKey)) {
             existingKeySet.add(key);
@@ -146,7 +146,7 @@ function appendLast7DaysToSheet() {
             ];
 
             const key = makeDedupKey_({ bank: '國泰', dt, last4: row[3], amount: row[4], messageId: row[8] });
-            const looseKey = makeLooseDedupKey_({ bank: '國泰', dt, last4: row[3], amount: row[4] });
+            const looseKey = makeLooseDedupKey_({ bank: '國泰', dt, amount: row[4] });
 
             if (!existingKeySet.has(key) && !existingLooseKeySet.has(looseKey)) {
               existingKeySet.add(key);
@@ -200,7 +200,7 @@ function appendLast7DaysToSheet() {
           ];
 
           const key = makeDedupKey_({ bank: '國泰', dt, last4: row[3], amount: row[4], messageId: row[8] });
-          const looseKey = makeLooseDedupKey_({ bank: '國泰', dt, last4: row[3], amount: row[4] });
+          const looseKey = makeLooseDedupKey_({ bank: '國泰', dt, amount: row[4] });
 
           // STRICT check (same messageId) OR LOOSE check (same details, ignore messageId)
           if (!existingKeySet.has(key) && !existingLooseKeySet.has(looseKey)) {
@@ -506,19 +506,18 @@ function makeDedupKeyFromRow_(row) {
   return makeDedupKey_({ bank, dt, last4, amount, messageId });
 }
 
-/** Build LOOSE dedup key: bank + auth datetime + last4 + amount (no MessageId) */
-function makeLooseDedupKey_({ bank, dt, last4, amount }) {
-  const ymdhms = Utilities.formatDate(dt, TZ, 'yyyy/MM/dd HH:mm:ss');
-  return [bank || '', ymdhms, String(last4 || ''), String(amount || '')].join('|');
+/** Build LOOSE dedup key: bank + auth datetime (minute precision) + amount (no MessageId, no last4) */
+function makeLooseDedupKey_({ bank, dt, amount }) {
+  const ymdhm = Utilities.formatDate(dt, TZ, 'yyyy/MM/dd HH:mm');
+  return [bank || '', ymdhm, String(amount || '')].join('|');
 }
 
 /** Build LOOSE dedup key from row */
 function makeLooseDedupKeyFromRow_(row) {
   const bank = String(row[1] || '');
   const dt = row[2] instanceof Date ? row[2] : new Date(row[2]);
-  const last4 = String(row[3] || '');
   const amount = String(row[4] || '');
-  return makeLooseDedupKey_({ bank, dt, last4, amount });
+  return makeLooseDedupKey_({ bank, dt, amount });
 }
 
 /* -------------------------
