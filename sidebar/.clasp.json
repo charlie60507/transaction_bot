@@ -1,0 +1,16 @@
+{
+  "scriptId": "1P4l2DY_XwHjRBSeja7MOkSFCrvZXufo2AzKrfd8ex9Srg3uHKg1VK5R7",
+  "rootDir": "sidebar",
+  "scriptExtensions": [
+    ".js",
+    ".gs"
+  ],
+  "htmlExtensions": [
+    ".html"
+  ],
+  "jsonExtensions": [
+    ".json"
+  ],
+  "filePushOrder": [],
+  "skipSubdirectories": false
+}

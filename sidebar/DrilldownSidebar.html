@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+    background: #f5f5f5;
+    color: #333;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  /* Header */
+  .header {
+    background: linear-gradient(135deg, #1a73e8, #0d47a1);
+    color: #fff;
+    padding: 20px 16px 16px;
+  }
+  .header-label {
+    font-size: 12px;
+    opacity: 0.8;
+    margin-bottom: 2px;
+  }
+  .header-title {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+
+  /* Stats grid */
+  .stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .stat-box {
+    background: rgba(255,255,255,0.15);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .stat-label {
+    font-size: 10px;
+    opacity: 0.75;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .stat-value {
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .stat-box.wide {
+    grid-column: 1 / -1;
+  }
+
+  /* Transaction list */
+  .list { padding: 12px; }
+  .card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 12px;
+    margin-bottom: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .card:nth-child(even) { background: #fafafa; }
+
+  .card-body { flex: 1; min-width: 0; }
+  .card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2px;
+  }
+  .merchant {
+    font-weight: 600;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 140px;
+  }
+  .amount {
+    font-weight: 700;
+    font-size: 14px;
+    color: #d32f2f;
+    white-space: nowrap;
+  }
+  .card-bottom {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #888;
+  }
+
+  /* Bank badge */
+  .badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: #fff;
+    white-space: nowrap;
+  }
+  .badge-fubon { background: #1565c0; }
+  .badge-cathay { background: #2e7d32; }
+  .badge-other { background: #757575; }
+
+  /* Gmail link */
+  .gmail-link {
+    color: #1a73e8;
+    text-decoration: none;
+    font-size: 18px;
+    flex-shrink: 0;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+  }
+  .gmail-link:hover { opacity: 1; }
+
+  /* Empty / error states */
+  .empty-state, .error-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: #888;
+  }
+  .empty-icon, .error-icon {
+    font-size: 48px;
+    margin-bottom: 12px;
+  }
+  .error-state { color: #d32f2f; }
+  .error-state p { font-size: 14px; }
+
+  /* Footer */
+  .footer {
+    text-align: center;
+    padding: 12px;
+    font-size: 11px;
+    color: #aaa;
+  }
+</style>
+</head>
+<body>
+<script>
+  var d = JSON.parse(<?= data ?>);
+
+  function fmt(n) {
+    return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  function badgeClass(bank) {
+    if (bank.indexOf('富邦') >= 0) return 'badge-fubon';
+    if (bank.indexOf('國泰') >= 0) return 'badge-cathay';
+    return 'badge-other';
+  }
+
+  function esc(s) {
+    var el = document.createElement('span');
+    el.textContent = s;
+    return el.innerHTML;
+  }
+
+  var html = '';
+
+  if (d.error) {
+    html += '<div class="error-state">';
+    html += '<div class="error-icon">&#9888;&#65039;</div>';
+    html += '<p>' + esc(d.error) + '</p>';
+    html += '</div>';
+
+  } else if (d.transactions.length === 0) {
+    html += '<div class="header">';
+    html += '<div class="header-label">' + d.year + ' 年 ' + d.month + ' 月</div>';
+    html += '<div class="header-title">' + esc(d.category) + '</div>';
+    html += '</div>';
+    html += '<div class="empty-state">';
+    html += '<div class="empty-icon">&#128203;</div>';
+    html += '<p>這個月沒有此類別的交易</p>';
+    html += '</div>';
+
+  } else {
+    var s = d.stats;
+    html += '<div class="header">';
+    html += '<div class="header-label">' + d.year + ' 年 ' + d.month + ' 月</div>';
+    html += '<div class="header-title">' + esc(d.category) + '</div>';
+    html += '<div class="stats">';
+    html += '<div class="stat-box"><div class="stat-label">總金額</div><div class="stat-value">$' + fmt(s.total) + '</div></div>';
+    html += '<div class="stat-box"><div class="stat-label">交易筆數</div><div class="stat-value">' + s.count + ' 筆</div></div>';
+    html += '<div class="stat-box"><div class="stat-label">日均消費</div><div class="stat-value">$' + fmt(s.dailyAvg) + '</div></div>';
+    if (s.largest) {
+      html += '<div class="stat-box"><div class="stat-label">最大筆</div><div class="stat-value">$' + fmt(s.largest.amount) + '</div></div>';
+      html += '<div class="stat-box wide"><div class="stat-label">最大筆交易</div><div class="stat-value" style="font-size:13px">' + esc(s.largest.merchant) + '</div></div>';
+    }
+    html += '</div></div>';
+
+    html += '<div class="list">';
+    for (var i = 0; i < d.transactions.length; i++) {
+      var t = d.transactions[i];
+      html += '<div class="card">';
+      html += '<div class="card-body">';
+      html += '<div class="card-top">';
+      html += '<span class="merchant" title="' + esc(t.merchant) + '">' + esc(t.merchant || '(未知商店)') + '</span>';
+      html += '<span class="amount">NT$' + fmt(t.amount) + '</span>';
+      html += '</div>';
+      html += '<div class="card-bottom">';
+      html += '<span class="badge ' + badgeClass(t.bank) + '">' + esc(t.bank) + '</span>';
+      html += '<span>' + esc(t.date) + '</span>';
+      if (t.last4) html += '<span>****' + esc(t.last4) + '</span>';
+      html += '</div></div>';
+      if (t.link) {
+        html += '<a class="gmail-link" href="' + t.link + '" target="_blank" title="開啟 Gmail">&#9993;&#65039;</a>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+
+    html += '<div class="footer">' + d.transactions.length + ' 筆交易</div>';
+  }
+
+  document.body.innerHTML = html;
+</script>
+</body>
+</html>

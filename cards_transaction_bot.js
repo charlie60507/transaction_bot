@@ -584,3 +584,6 @@ function parseHeader_(headerValue) {
   }
   return ['已記帳', '銀行', '授權日期時間', '卡末四碼', '金額_NTD', '交易內容/商店', '類別', 'Gmail連結', 'MessageId'];
 }
+
+/* NOTE: Sidebar / drilldown UI lives in the bound script (sidebar/ directory).
+   The standalone script cannot use getUi() or showSidebar(). */
