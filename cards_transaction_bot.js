@@ -242,6 +242,10 @@ function appendLast7DaysToSheet() {
         }
       }
       jRange.setValues(jVals);
+
+      // Auto-categorize column K for new rows (rule-based + Gemini fallback)
+      const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+      autoCategorizeRows_(ss, sh, startRow, newRows.length);
     }
 
     // Checkbox validation, sort, freeze header
@@ -551,6 +555,13 @@ function backfillExpenseForCreditCards_() {
   Logger.log(`Backfill done. updated=${updated}`);
 }
 
+/** Helper: set script properties from clasp run */
+function setScriptProperties(obj) {
+  const props = PropertiesService.getScriptProperties();
+  props.setProperties(obj);
+  Logger.log('Set properties: ' + Object.keys(obj).join(', '));
+}
+
 /* =========================
  *       Config utilities
  * ========================= */
@@ -571,7 +582,8 @@ function loadConfig_() {
       CATHAY_LABEL: props.getProperty('CATHAY_LABEL') || '國泰世華消費',
       CATHAY_SUBJECT: props.getProperty('CATHAY_SUBJECT') || '消費彙整通知'
     },
-    sortOrder: props.getProperty('SORT_ORDER') || 'ASC'
+    sortOrder: props.getProperty('SORT_ORDER') || 'ASC',
+    geminiApiKey: props.getProperty('GEMINI_API_KEY') || ''
   };
 }
 
@@ -587,3 +599,324 @@ function parseHeader_(headerValue) {
 
 /* NOTE: Sidebar / drilldown UI lives in the bound script (sidebar/ directory).
    The standalone script cannot use getUi() or showSidebar(). */
+
+/* =========================
+ *   Auto-Categorization
+ * ========================= */
+
+/** Compute longest common prefix of an array of strings, trimmed at word/CJK boundary */
+function extractCommonPrefix_(strings) {
+  if (!strings || strings.length === 0) return '';
+  if (strings.length === 1) return strings[0].trim();
+
+  let prefix = strings[0];
+  for (let i = 1; i < strings.length; i++) {
+    let j = 0;
+    while (j < prefix.length && j < strings[i].length && prefix[j] === strings[i][j]) j++;
+    prefix = prefix.substring(0, j);
+    if (!prefix) return '';
+  }
+
+  // Trim at word boundary: remove trailing partial Latin words and whitespace
+  prefix = prefix.replace(/\s+$/, '');          // trailing spaces
+  prefix = prefix.replace(/[a-zA-Z0-9]+$/, ''); // trailing partial Latin word
+  prefix = prefix.replace(/\s+$/, '');          // spaces left after trimming
+  return prefix;
+}
+
+/** Given merchants sharing a category, extract prefix keyword or fall back to individual names */
+function extractKeywordsFromGroup_(merchants, minLength) {
+  minLength = minLength || 2;
+  const unique = [...new Set(merchants.map(m => m.trim()).filter(m => m))];
+  if (unique.length === 0) return [];
+  if (unique.length === 1) return [unique[0]];
+
+  const prefix = extractCommonPrefix_(unique);
+  if (prefix.length >= minLength) {
+    return [prefix];
+  }
+  // No valid common prefix — return all unique merchants individually
+  return unique;
+}
+
+/** Load keyword→category rules from the category sheet, sorted longest-keyword-first */
+function loadCategoryRules_(ss) {
+  const sh = ss.getSheetByName('category');
+  if (!sh || sh.getLastRow() < 2) return [];
+
+  const data = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+  const rules = [];
+  for (const row of data) {
+    const keyword = String(row[0] || '').trim();
+    const category = String(row[1] || '').trim();
+    if (keyword && category) {
+      rules.push({ keyword: keyword, keywordLower: keyword.toLowerCase(), category });
+    }
+  }
+  // Longest keyword first for most-specific match
+  rules.sort((a, b) => b.keyword.length - a.keyword.length);
+  return rules;
+}
+
+/** Load valid category names from META sheet row 2 */
+function loadValidCategories_(ss) {
+  const sh = ss.getSheetByName('META');
+  if (!sh) return [];
+  const vals = sh.getRange(2, 1, 1, sh.getLastColumn()).getValues()[0];
+  return vals.map(v => String(v || '').trim()).filter(v => v.length > 0);
+}
+
+/** Match merchant against rules (case-insensitive substring). Returns category or null */
+function matchCategory_(merchant, rules) {
+  if (!merchant) return null;
+  const normalized = merchant.toLowerCase().trim();
+  for (const r of rules) {
+    if (normalized.includes(r.keywordLower)) {
+      return r.category;
+    }
+  }
+  return null;
+}
+
+/** Call Gemini API to classify merchants in batch. Returns Map<merchant, category|null> */
+function classifyWithGemini_(merchants, validCategories) {
+  const result = {};
+  if (!merchants.length) return result;
+
+  const apiKey = CONFIG.geminiApiKey;
+  if (!apiKey) {
+    console.log('GEMINI_API_KEY not set, skipping AI classification');
+    return result;
+  }
+
+  const categoryList = validCategories.join(', ');
+  const merchantList = merchants.map((m, i) => `${i + 1}. ${m}`).join('\n');
+
+  const prompt = `你是台灣信用卡消費分類器。請將以下商店分類到這些類別之一：${categoryList}。
+如果不確定，回覆 "unknown"。
+請只回覆 JSON 格式，不要加任何其他文字：{"商店名": "類別", ...}
+
+商店列表：
+${merchantList}`;
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.1 }
+    };
+
+    const res = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    if (res.getResponseCode() !== 200) {
+      console.log(`Gemini API error: ${res.getResponseCode()} ${res.getContentText().substring(0, 200)}`);
+      return result;
+    }
+
+    const body = JSON.parse(res.getContentText());
+    const text = body.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+    // Extract JSON from response (may be wrapped in markdown code block)
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.log('Gemini response has no JSON: ' + text.substring(0, 200));
+      return result;
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    const validSet = new Set(validCategories);
+
+    for (const [merchant, cat] of Object.entries(parsed)) {
+      const category = String(cat || '').trim();
+      if (category && category !== 'unknown' && validSet.has(category)) {
+        result[merchant] = category;
+      }
+    }
+
+    console.log(`Gemini classified ${Object.keys(result).length}/${merchants.length} merchants`);
+  } catch (e) {
+    console.log('Gemini classification error: ' + e.message);
+  }
+
+  return result;
+}
+
+/** Write new keyword→category mappings back to category sheet (avoid duplicates) */
+function writeCategoryRulesBack_(ss, newMappings) {
+  if (!newMappings.length) return;
+
+  const sh = ss.getSheetByName('category');
+  if (!sh) return;
+
+  // Group new mappings by category and extract prefixes
+  const catToKeywords = {};
+  for (const m of newMappings) {
+    if (!catToKeywords[m.category]) catToKeywords[m.category] = [];
+    catToKeywords[m.category].push(m.keyword);
+  }
+  const optimized = [];
+  for (const [cat, keywords] of Object.entries(catToKeywords)) {
+    const extracted = extractKeywordsFromGroup_(keywords);
+    for (const kw of extracted) {
+      optimized.push({ keyword: kw, category: cat });
+    }
+  }
+
+  // Load existing keywords
+  const lastRow = sh.getLastRow();
+  const existingKeywords = new Set();
+  if (lastRow >= 2) {
+    const existing = sh.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (const row of existing) {
+      existingKeywords.add(String(row[0] || '').trim().toLowerCase());
+    }
+  }
+
+  // Append only new ones
+  const toAppend = [];
+  for (const m of optimized) {
+    if (!existingKeywords.has(m.keyword.toLowerCase())) {
+      toAppend.push([m.keyword, m.category]);
+      existingKeywords.add(m.keyword.toLowerCase());
+    }
+  }
+
+  if (toAppend.length > 0) {
+    const appendRow = sh.getLastRow() + 1;
+    sh.getRange(appendRow, 1, toAppend.length, 2).setValues(toAppend);
+    console.log(`Wrote ${toAppend.length} new rules to category sheet`);
+  }
+}
+
+/** Main orchestrator: auto-categorize column K for newly appended rows */
+function autoCategorizeRows_(ss, sh, startRow, numRows) {
+  if (numRows <= 0) return;
+
+  try {
+    const rules = loadCategoryRules_(ss);
+    const validCategories = loadValidCategories_(ss);
+    if (validCategories.length === 0) {
+      console.log('No valid categories in META sheet, skipping auto-categorize');
+      return;
+    }
+
+    // Read merchant (col F=6) and existing K (col 11) for target rows
+    const merchantRange = sh.getRange(startRow, 6, numRows, 1);
+    const merchants = merchantRange.getValues();
+    const kRange = sh.getRange(startRow, 11, numRows, 1);
+    const kVals = kRange.getValues();
+
+    const unmatched = []; // { index, merchant }
+    const newKVals = kVals.map(r => [r[0]]); // clone
+
+    for (let i = 0; i < numRows; i++) {
+      // Only fill if K is blank
+      if (newKVals[i][0] !== '' && newKVals[i][0] !== null) continue;
+
+      const merchant = String(merchants[i][0] || '').trim();
+      if (!merchant) continue;
+
+      const matched = matchCategory_(merchant, rules);
+      if (matched) {
+        newKVals[i][0] = matched;
+      } else {
+        unmatched.push({ index: i, merchant });
+      }
+    }
+
+    // Gemini fallback for unmatched
+    if (unmatched.length > 0) {
+      const uniqueMerchants = [...new Set(unmatched.map(u => u.merchant))];
+      const aiResults = classifyWithGemini_(uniqueMerchants, validCategories);
+
+      const newRules = [];
+      for (const u of unmatched) {
+        const cat = aiResults[u.merchant];
+        if (cat) {
+          newKVals[u.index][0] = cat;
+          newRules.push({ keyword: u.merchant, category: cat });
+        }
+      }
+
+      // Cache AI results back to category sheet
+      writeCategoryRulesBack_(ss, newRules);
+    }
+
+    // Write K values back
+    kRange.setValues(newKVals);
+
+    const filled = newKVals.filter(r => r[0] !== '' && r[0] !== null).length;
+    console.log(`Auto-categorized ${filled}/${numRows} new rows`);
+  } catch (e) {
+    console.log('Auto-categorize error (non-blocking): ' + e.message);
+  }
+}
+
+/** One-time bootstrap: build category rules from existing manually-categorized transactions */
+function bootstrapCategoryRules() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sh = ss.getSheetByName(SHEET_NAME);
+  if (!sh || sh.getLastRow() <= 1) {
+    Logger.log('No transactions to bootstrap from');
+    return;
+  }
+
+  const data = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+  const validCategories = new Set(loadValidCategories_(ss));
+
+  // Count: merchant → { category → count }
+  const merchantCats = {};
+  for (const row of data) {
+    const merchant = String(row[5] || '').trim(); // col F
+    const manualCat = String(row[10] || '').trim(); // col K
+    if (!merchant || !manualCat) continue;
+    if (!validCategories.has(manualCat)) continue;
+
+    if (!merchantCats[merchant]) merchantCats[merchant] = {};
+    merchantCats[merchant][manualCat] = (merchantCats[merchant][manualCat] || 0) + 1;
+  }
+
+  // Pick most frequent category per merchant
+  const merchantToBestCat = {};
+  for (const [merchant, cats] of Object.entries(merchantCats)) {
+    let bestCat = '';
+    let bestCount = 0;
+    for (const [cat, count] of Object.entries(cats)) {
+      if (count > bestCount) { bestCat = cat; bestCount = count; }
+    }
+    if (bestCat) merchantToBestCat[merchant] = bestCat;
+  }
+
+  // Group merchants by category, then extract common prefix per group
+  const catToMerchants = {};
+  for (const [merchant, cat] of Object.entries(merchantToBestCat)) {
+    if (!catToMerchants[cat]) catToMerchants[cat] = [];
+    catToMerchants[cat].push(merchant);
+  }
+
+  const rules = [];
+  for (const [cat, merchants] of Object.entries(catToMerchants)) {
+    const keywords = extractKeywordsFromGroup_(merchants);
+    for (const kw of keywords) {
+      rules.push({ keyword: kw, category: cat });
+    }
+  }
+
+  // Ensure category sheet has header
+  const catSheet = ss.getSheetByName('category');
+  if (!catSheet) {
+    Logger.log('category sheet not found');
+    return;
+  }
+  if (catSheet.getLastRow() === 0 || String(catSheet.getRange(1, 1).getValue()) !== '交易關鍵字') {
+    catSheet.getRange(1, 1, 1, 2).setValues([['交易關鍵字', '種類']]);
+  }
+
+  writeCategoryRulesBack_(ss, rules);
+  Logger.log(`Bootstrap done. ${rules.length} rules created from existing transactions.`);
+}
