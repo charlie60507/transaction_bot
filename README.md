@@ -11,6 +11,26 @@ English README describing how to run, configure, and deploy this Apps Script pro
     - **Transfers**: Uses **Strict MessageID Check** (if MessageID exists, skip) + Fallback Loose Check (Time + Amount) for legacy data.
 - **Auto-Formatting**: Appends parsed rows and defaults "Income/Expense" column to "支出".
 
+### Tagging (標籤)
+
+A second, lightweight classification dimension that you fully control with plain keyword rules — **rule-based only, no Gemini**.
+
+- **`tag` sheet**: create a sheet named `tag` with header `交易關鍵字 | 標籤`. Each row maps a keyword to a tag (e.g. `全家 → 日常採購`, `UBER EATS → 外送`). This sheet is the sole source of truth; maintain it by hand.
+- **標籤 column**: tags are written to **column L** of `Transactions` (column K = 種類手動 used by the category path / Dashboard pivot stays untouched).
+- **Matching**: on newly appended rows, the merchant text (`交易內容/商店`, column F) is matched against the rules by case-insensitive substring, longest keyword first; the first match's tag fills column L. No match → left blank for manual entry. Existing values are never overwritten. The step is non-blocking — a failure never affects ingestion or the category path.
+
+**Per-tag spend report (`標籤統計` sheet)** — create a sheet named `標籤統計` and paste this QUERY into `A1` for an all-time, per-tag total (highest first):
+
+```
+=QUERY(Transactions!A:L, "select L, sum(E) where L is not null and L<>'' group by L order by sum(E) desc label sum(E) '總花費'", 1)
+```
+
+Optional month × tag breakdown:
+
+```
+=QUERY(Transactions!A:L, "select month(C)+1, L, sum(E) where L<>'' group by month(C)+1, L order by month(C)+1", 1)
+```
+
 ### Prerequisites
 - Node.js and `npm`
 - `@google/clasp` installed globally: `npm install -g @google/clasp`

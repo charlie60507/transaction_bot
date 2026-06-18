@@ -246,6 +246,9 @@ function appendLast7DaysToSheet() {
       // Auto-categorize column K for new rows (rule-based + Gemini fallback)
       const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
       autoCategorizeRows_(ss, sh, startRow, newRows.length);
+
+      // Auto-tag column L for new rows (rule-based only, no AI)
+      autoTagRows_(ss, sh, startRow, newRows.length);
     }
 
     // Checkbox validation, sort, freeze header
@@ -658,6 +661,25 @@ function loadCategoryRules_(ss) {
   return rules;
 }
 
+/** Load keyword→tag rules from the tag sheet, sorted longest-keyword-first */
+function loadTagRules_(ss) {
+  const sh = ss.getSheetByName('tag');
+  if (!sh || sh.getLastRow() < 2) return [];
+
+  const data = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+  const rules = [];
+  for (const row of data) {
+    const keyword = String(row[0] || '').trim();
+    const tag = String(row[1] || '').trim();
+    if (keyword && tag) {
+      rules.push({ keyword: keyword, keywordLower: keyword.toLowerCase(), tag });
+    }
+  }
+  // Longest keyword first for most-specific match
+  rules.sort((a, b) => b.keyword.length - a.keyword.length);
+  return rules;
+}
+
 /** Load valid category names from META sheet row 2 */
 function loadValidCategories_(ss) {
   const sh = ss.getSheetByName('META');
@@ -673,6 +695,18 @@ function matchCategory_(merchant, rules) {
   for (const r of rules) {
     if (normalized.includes(r.keywordLower)) {
       return r.category;
+    }
+  }
+  return null;
+}
+
+/** Match merchant against tag rules (case-insensitive substring). Returns tag or null */
+function matchTag_(merchant, rules) {
+  if (!merchant) return null;
+  const normalized = merchant.toLowerCase().trim();
+  for (const r of rules) {
+    if (normalized.includes(r.keywordLower)) {
+      return r.tag;
     }
   }
   return null;
@@ -854,6 +888,43 @@ function autoCategorizeRows_(ss, sh, startRow, numRows) {
     console.log(`Auto-categorized ${filled}/${numRows} new rows`);
   } catch (e) {
     console.log('Auto-categorize error (non-blocking): ' + e.message);
+  }
+}
+
+/** Auto-tag column L for newly appended rows (rule-based only, no AI, single value) */
+function autoTagRows_(ss, sh, startRow, numRows) {
+  if (numRows <= 0) return;
+
+  try {
+    const rules = loadTagRules_(ss);
+    if (rules.length === 0) {
+      console.log('No tag rules in tag sheet, skipping auto-tag');
+      return;
+    }
+
+    // Read merchant (col F=6) and existing L (col 12) for target rows
+    const merchants = sh.getRange(startRow, 6, numRows, 1).getValues();
+    const lRange = sh.getRange(startRow, 12, numRows, 1);
+    const lVals = lRange.getValues();
+    const newLVals = lVals.map(r => [r[0]]); // clone
+
+    for (let i = 0; i < numRows; i++) {
+      // Only fill if L is blank
+      if (newLVals[i][0] !== '' && newLVals[i][0] !== null) continue;
+
+      const merchant = String(merchants[i][0] || '').trim();
+      if (!merchant) continue;
+
+      const matched = matchTag_(merchant, rules);
+      if (matched) newLVals[i][0] = matched;
+    }
+
+    lRange.setValues(newLVals);
+
+    const filled = newLVals.filter(r => r[0] !== '' && r[0] !== null).length;
+    console.log(`Auto-tagged ${filled}/${numRows} new rows`);
+  } catch (e) {
+    console.log('Auto-tag error (non-blocking): ' + e.message);
   }
 }
 
