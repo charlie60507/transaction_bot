@@ -639,9 +639,9 @@ function extractKeywordsFromGroup_(merchants, minLength) {
   return unique;
 }
 
-/** Load keyword→category rules from the category sheet, sorted longest-keyword-first */
+/** Load keyword→category rules from META cols A:B (交易關鍵字, 種類), sorted longest-keyword-first */
 function loadCategoryRules_(ss) {
-  const sh = ss.getSheetByName('category');
+  const sh = ss.getSheetByName('META');
   if (!sh || sh.getLastRow() < 2) return [];
 
   const data = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
@@ -658,11 +658,11 @@ function loadCategoryRules_(ss) {
   return rules;
 }
 
-/** Load valid category names from META column A (種類), vertical layout starting row 2 */
+/** Load valid category names from META column D (種類清單), starting row 2 */
 function loadValidCategories_(ss) {
   const sh = ss.getSheetByName('META');
   if (!sh || sh.getLastRow() < 2) return [];
-  const vals = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+  const vals = sh.getRange(2, 4, sh.getLastRow() - 1, 1).getValues();
   return vals.map(r => String(r[0] || '').trim()).filter(v => v.length > 0);
 }
 
@@ -746,11 +746,11 @@ ${merchantList}`;
   return result;
 }
 
-/** Write new keyword→category mappings back to category sheet (avoid duplicates) */
+/** Write new keyword→category mappings back to META cols A:B (avoid duplicates) */
 function writeCategoryRulesBack_(ss, newMappings) {
   if (!newMappings.length) return;
 
-  const sh = ss.getSheetByName('category');
+  const sh = ss.getSheetByName('META');
   if (!sh) return;
 
   // Group new mappings by category and extract prefixes
@@ -767,13 +767,18 @@ function writeCategoryRulesBack_(ss, newMappings) {
     }
   }
 
-  // Load existing keywords
-  const lastRow = sh.getLastRow();
+  // Scan column A only (rules live in A:B; the D/E vocab lists may extend further down)
+  const sheetLastRow = sh.getLastRow();
   const existingKeywords = new Set();
-  if (lastRow >= 2) {
-    const existing = sh.getRange(2, 1, lastRow - 1, 1).getValues();
-    for (const row of existing) {
-      existingKeywords.add(String(row[0] || '').trim().toLowerCase());
+  let lastKeywordRow = 1; // header row
+  if (sheetLastRow >= 2) {
+    const colA = sh.getRange(2, 1, sheetLastRow - 1, 1).getValues();
+    for (let i = 0; i < colA.length; i++) {
+      const kw = String(colA[i][0] || '').trim();
+      if (kw) {
+        existingKeywords.add(kw.toLowerCase());
+        lastKeywordRow = i + 2; // +2: data starts at row 2
+      }
     }
   }
 
@@ -787,9 +792,10 @@ function writeCategoryRulesBack_(ss, newMappings) {
   }
 
   if (toAppend.length > 0) {
-    const appendRow = sh.getLastRow() + 1;
+    // Append after the last rule in column A, NOT after the sheet's last row
+    const appendRow = lastKeywordRow + 1;
     sh.getRange(appendRow, 1, toAppend.length, 2).setValues(toAppend);
-    console.log(`Wrote ${toAppend.length} new rules to category sheet`);
+    console.log(`Wrote ${toAppend.length} new rules to META sheet`);
   }
 }
 
@@ -843,7 +849,7 @@ function autoCategorizeRows_(ss, sh, startRow, numRows) {
         }
       }
 
-      // Cache AI results back to category sheet
+      // Cache AI results back to META rule columns
       writeCategoryRulesBack_(ss, newRules);
     }
 
@@ -907,10 +913,10 @@ function bootstrapCategoryRules() {
     }
   }
 
-  // Ensure category sheet has header
-  const catSheet = ss.getSheetByName('category');
+  // Ensure META rule columns have headers (A:B only — do not touch D/E vocab lists)
+  const catSheet = ss.getSheetByName('META');
   if (!catSheet) {
-    Logger.log('category sheet not found');
+    Logger.log('META sheet not found');
     return;
   }
   if (catSheet.getLastRow() === 0 || String(catSheet.getRange(1, 1).getValue()) !== '交易關鍵字') {
@@ -919,4 +925,76 @@ function bootstrapCategoryRules() {
 
   writeCategoryRulesBack_(ss, rules);
   Logger.log(`Bootstrap done. ${rules.length} rules created from existing transactions.`);
+}
+
+/** One-time migration: merge the `category` sheet + vertical META into a single META page.
+ *  New layout: A 交易關鍵字 | B 種類 (rules) | C spacer | D 種類清單 | E TAG清單 (vocab).
+ *  Rebuilds the dropdowns and deletes the old `category` sheet. Run once from the editor. */
+function migrateMetaCategoryToMerged() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const meta = ss.getSheetByName('META');
+  if (!meta) { Logger.log('ABORT: META sheet not found.'); return; }
+
+  // --- 1. Read all source data into memory FIRST (before any destructive write) ---
+  // Rules from the old `category` sheet (A=keyword, B=種類)
+  const catSheet = ss.getSheetByName('category');
+  const rules = [];
+  if (catSheet && catSheet.getLastRow() >= 2) {
+    const data = catSheet.getRange(2, 1, catSheet.getLastRow() - 1, 2).getValues();
+    for (const row of data) {
+      const kw = String(row[0] || '').trim();
+      const cat = String(row[1] || '').trim();
+      if (kw && cat) rules.push([kw, cat]);
+    }
+  }
+  // Current META vertical lists: A = 種類, B = TAG
+  const catList = [];
+  const tagList = [];
+  if (meta.getLastRow() >= 2) {
+    const mvals = meta.getRange(2, 1, meta.getLastRow() - 1, 2).getValues();
+    for (const row of mvals) {
+      const c = String(row[0] || '').trim();
+      const t = String(row[1] || '').trim();
+      if (c) catList.push([c]);
+      if (t) tagList.push([t]);
+    }
+  }
+
+  // --- 2. Locate Transactions columns: 種類 = K (col 11); TAG by header name. Abort if TAG missing. ---
+  const trans = ss.getSheetByName(SHEET_NAME);
+  if (!trans) { Logger.log('ABORT: Transactions sheet not found.'); return; }
+  const headers = trans.getRange(1, 1, 1, trans.getLastColumn()).getValues()[0];
+  const tagColIdx0 = headers.indexOf('TAG');
+  const catColNum = 11; // K = 種類手動 (matches sidebar IDX_CATEGORY_MANUAL:10)
+  Logger.log(`Detected -> 種類 col=${catColNum} (K); TAG header index=${tagColIdx0} (col ${tagColIdx0 + 1})`);
+  if (tagColIdx0 === -1) {
+    Logger.log('ABORT: Transactions "TAG" column not found — no changes made.');
+    return;
+  }
+  const tagColNum = tagColIdx0 + 1;
+
+  // --- 3. Rewrite META into the merged layout ---
+  meta.clear();
+  meta.getRange(1, 1, 1, 5).setValues([['交易關鍵字', '種類', '', '種類清單', 'TAG清單']]);
+  if (rules.length) meta.getRange(2, 1, rules.length, 2).setValues(rules);
+  if (catList.length) meta.getRange(2, 4, catList.length, 1).setValues(catList);
+  if (tagList.length) meta.getRange(2, 5, tagList.length, 1).setValues(tagList);
+
+  // --- 4. Rebuild data-validation dropdowns ---
+  const catRule = SpreadsheetApp.newDataValidation()
+    .requireValueInRange(meta.getRange('D2:D'), true).setAllowInvalid(true).build();
+  const tagRule = SpreadsheetApp.newDataValidation()
+    .requireValueInRange(meta.getRange('E2:E'), true).setAllowInvalid(true).build();
+
+  const transRows = trans.getLastRow() - 1;
+  if (transRows > 0) {
+    trans.getRange(2, catColNum, transRows, 1).setDataValidation(catRule); // K → 種類清單
+    trans.getRange(2, tagColNum, transRows, 1).setDataValidation(tagRule); // TAG → TAG清單
+  }
+  meta.getRange('B2:B').setDataValidation(catRule); // rule 種類 col → 種類清單
+
+  // --- 5. Delete the old category sheet (data now lives in META) ---
+  if (catSheet) ss.deleteSheet(catSheet);
+
+  Logger.log(`Migration done. rules=${rules.length}, 種類=${catList.length}, TAG=${tagList.length}. category sheet removed.`);
 }
