@@ -22,6 +22,6 @@
 ## 4. Verify
 
 - [x] 4.1 `node --check cards_transaction_bot.js` (OK) and `clasp push` the standalone project (Part A + B) — pushed.
-- [ ] 4.2 Run `migrateMetaCategoryToMerged()` once: confirm `META` has A:B rules + D/E lists, `category` sheet is gone, and the K/TAG dropdowns point to `META!D2:D` / `META!E2:E`. **(USER — destructive; run from editor and check the log line for detected K/TAG columns.)**
-- [ ] 4.3 Run `appendLast7DaysToSheet`: confirm rule matching works, Gemini fallback uses the column-D 種類 list, no errors in the log. **(USER)**
-- [ ] 4.4 Commit + push both scripts (standalone Part A+B; bound Part C).
+- [x] 4.2 Run `migrateMetaCategoryToMerged()` once: confirmed by user — `META` merged, `category` removed, K/TAG dropdowns re-pointed.
+- [x] 4.3 Run `appendLast7DaysToSheet`: confirmed by user — change works as expected.
+- [x] 4.4 Commit + push both scripts (standalone Part A+B; bound Part C). — commit 4d4317f
