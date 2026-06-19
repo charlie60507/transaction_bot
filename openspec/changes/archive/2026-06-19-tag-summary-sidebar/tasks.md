@@ -19,5 +19,5 @@
 ## 4. Deploy + verify
 
 - [x] 4.1 Push the BOUND project via a temp `.clasp.json` (`rootDir:""`, scriptId `1P4l2…`) to avoid the nested-dir quirk.
-- [ ] 4.2 Reopen the spreadsheet: `交易工具` menu shows `TAG 統計`; open it and confirm per-TAG totals (desc), 全部/當月 toggle correctness, click-through to a TAG's transactions + stats, `返回`, and empty/error states.
+- [x] 4.2 Reopen the spreadsheet: `交易工具` menu shows `TAG 統計`; open it and confirm per-TAG totals (desc), 全部/當月 toggle correctness, click-through to a TAG's transactions + stats, `返回`, and empty/error states.
 - [x] 4.3 Sync `sidebar/` back to git; commit + push.
