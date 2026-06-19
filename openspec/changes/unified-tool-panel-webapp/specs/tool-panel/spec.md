@@ -2,17 +2,17 @@
 
 ### Requirement: Modal dialog hosts the unified panel
 
-The system SHALL render the unified panel (`ToolPanel`) as a modal dialog shown inside the spreadsheet, containing both the category and TAG views. Server-side reads SHALL open the target spreadsheet by id so the same query functions work regardless of execution context.
+The system SHALL render the unified panel (`ToolPanel`) as a modal dialog shown inside the spreadsheet, containing both the category and TAG views. Because the modal runs in the spreadsheet context, server-side reads SHALL use the active spreadsheet (the narrow container scope) rather than a broad all-spreadsheets scope.
 
 #### Scenario: Panel opens as a modal dialog
 
 - **WHEN** the panel is launched
 - **THEN** `ToolPanel` is shown as a modal dialog over the spreadsheet and renders
 
-#### Scenario: Reads use openById
+#### Scenario: Reads use the active spreadsheet
 
 - **WHEN** a server query function runs
-- **THEN** it reads transactions via `openById` and returns data without error
+- **THEN** it reads transactions from the active (bound) spreadsheet and returns data without requiring a broader authorization scope
 
 ### Requirement: Two tabs — 類別 and TAG
 

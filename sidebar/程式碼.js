@@ -1,7 +1,6 @@
 // =================== ⚙️ 設定區域 ===================
 
 const CFG = {
-  SPREADSHEET_ID: '1PZfUiqaMeUHHSBi8zqEPnEgBfFXqTxKwhnQUltCb8VU',
   DATA_SHEET: 'Transactions',
   TZ: 'Asia/Taipei',
 
@@ -41,9 +40,10 @@ function showPanelLauncher() {
 //   Shared helpers
 // =======================================================================
 
-/** The bound spreadsheet, opened by id (works in Web App context, which has no active spreadsheet) */
+/** The bound spreadsheet. Uses the active spreadsheet (the modal runs in-sheet), which
+ *  needs only the narrow container scope — NOT the broad openById/all-spreadsheets scope. */
 function getSpreadsheet_() {
-  return SpreadsheetApp.openById(CFG.SPREADSHEET_ID);
+  return SpreadsheetApp.getActiveSpreadsheet();
 }
 
 /** Read Transactions data rows (row 2..last). Returns { sh, rows }. */
