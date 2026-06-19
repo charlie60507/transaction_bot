@@ -4,12 +4,14 @@ The two `交易工具` features live in separate sidebars with inconsistent UX: 
 
 ## What Changes
 
-- Serve a single unified page via a Web App `doGet` (`ToolPanel.html`) with two top tabs: 類別 and TAG.
+- Serve a single unified page (`ToolPanel.html`) as a modal dialog inside the spreadsheet, with two top tabs: 類別 and TAG.
 - Each tab uses the proven TAG flow: 全部/當月 scope toggle → per-item totals (sorted desc) → click an item → its transactions + stats → 返回.
 - **BREAKING (UX)**: the category view becomes self-contained — it no longer reads a selected Dashboard pivot cell.
-- Collapse the menu to a single `開啟面板` item that opens a launcher dialog linking to the Web App URL.
-- Switch all server reads from `getActiveSpreadsheet()` to `openById()` (a Web App `doGet` has no active spreadsheet).
+- Collapse the menu to a single `開啟面板` item that opens the panel modal directly.
+- Switch all server reads to `openById()` so the query functions work regardless of execution context.
 - Remove the superseded sidebars and their entry points.
+
+> Note: an earlier iteration of this change served the panel as a standalone Web App (`doGet`). That was reverted to a modal dialog because the deployer's multi-account browser session made the Web App `/exec` URL unreliable to open; the modal runs in-sheet under the account that already has the spreadsheet open. The change directory name retains the `-webapp` suffix for continuity.
 
 ## Capabilities
 
@@ -23,7 +25,7 @@ The two `交易工具` features live in separate sidebars with inconsistent UX: 
 
 ## Impact
 
-- **Code (bound `sidebar/程式碼.js`)**: add `CFG.SPREADSHEET_ID` + `getSpreadsheet_()`; `doGet`, `getWebAppUrl`, `showPanelLauncher`; new `getCategorySummary`/`getCategoryTransactions`; refactor `getTagSummary`/`getTagTransactions` to `openById`; remove `showDrilldownSidebar`, `getDrilldownContext_`, `showTagSummarySidebar`, `filterTransactions_`; keep `computeStats_`, `currentYearMonth_`, `getTagColIndex_`.
+- **Code (bound `sidebar/程式碼.js`)**: add `CFG.SPREADSHEET_ID` + `getSpreadsheet_()`; `showPanelLauncher` (modal); new `getCategorySummary`/`getCategoryTransactions`; refactor `getTagSummary`/`getTagTransactions` to `openById`; remove `showDrilldownSidebar`, `getDrilldownContext_`, `showTagSummarySidebar`, `filterTransactions_`; keep `computeStats_`, `currentYearMonth_`, `getTagColIndex_`.
 - **UI**: new `sidebar/ToolPanel.html`; remove `sidebar/DrilldownSidebar.html` and `sidebar/TagSummarySidebar.html`.
-- **Manifest/deploy**: `appsscript.json` gains a `webapp` block; deploy as a Web App (execute as me, access only myself) and authorize once.
+- **Manifest**: no special manifest needed (modal dialog uses the standard container-bound auth; no Web App deployment).
 - **Out of scope**: the standalone script (`cards_transaction_bot.js`) is untouched; the Dashboard pivot is no longer used by this panel.

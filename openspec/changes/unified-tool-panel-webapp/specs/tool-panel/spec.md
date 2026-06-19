@@ -1,17 +1,17 @@
 ## ADDED Requirements
 
-### Requirement: Web App serves the unified panel
+### Requirement: Modal dialog hosts the unified panel
 
-The system SHALL expose a Web App whose `doGet` returns a single HTML page (`ToolPanel`) containing both the category and TAG views. Because a Web App request has no active spreadsheet, all server-side reads SHALL open the target spreadsheet by id.
+The system SHALL render the unified panel (`ToolPanel`) as a modal dialog shown inside the spreadsheet, containing both the category and TAG views. Server-side reads SHALL open the target spreadsheet by id so the same query functions work regardless of execution context.
 
-#### Scenario: Panel served over its Web App URL
+#### Scenario: Panel opens as a modal dialog
 
-- **WHEN** the Web App URL is opened
-- **THEN** the unified panel page is returned and renders
+- **WHEN** the panel is launched
+- **THEN** `ToolPanel` is shown as a modal dialog over the spreadsheet and renders
 
-#### Scenario: Reads work without an active spreadsheet
+#### Scenario: Reads use openById
 
-- **WHEN** a server function runs in the Web App context (no active spreadsheet)
+- **WHEN** a server query function runs
 - **THEN** it reads transactions via `openById` and returns data without error
 
 ### Requirement: Two tabs — 類別 and TAG
@@ -57,9 +57,9 @@ Clicking a category or TAG row SHALL show that item's individual transactions fo
 
 ### Requirement: Menu launcher
 
-The `交易工具` menu's `開啟面板` item SHALL open a dialog containing a clickable link to the Web App URL (resolved at runtime), opening the panel in a new tab. It MUST NOT rely on an auto popup that a browser could block.
+The `交易工具` menu's single `開啟面板` item SHALL open the panel directly as a modal dialog inside the spreadsheet, with no external URL or new tab.
 
 #### Scenario: Launch from the menu
 
 - **WHEN** the user clicks `交易工具 → 開啟面板`
-- **THEN** a dialog appears with a link that opens the panel in a new browser tab
+- **THEN** the unified panel opens as a modal dialog over the spreadsheet

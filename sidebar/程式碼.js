@@ -28,36 +28,12 @@ function onOpen() {
     .addToUi();
 }
 
-/** Web App entry: serve the unified panel page */
-function doGet(e) {
-  return HtmlService.createTemplateFromFile('ToolPanel').evaluate()
-    .setTitle('交易工具')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
-}
-
-/** Web App URL of the active deployment (empty until deployed) */
-function getWebAppUrl() {
-  return ScriptApp.getService().getUrl();
-}
-
-/** Menu action: dialog with a clickable link that opens the panel in a new tab */
+/** Menu action: open the unified panel as a modal dialog inside the spreadsheet
+ *  (runs as the account that has the sheet open — no Web App URL / account routing). */
 function showPanelLauncher() {
-  const url = ScriptApp.getService().getUrl();
-  let html;
-  if (!url) {
-    html = HtmlService.createHtmlOutput(
-      '<p style="font-family:-apple-system,sans-serif;padding:16px;color:#333">' +
-      '尚未部署為網頁應用程式。請先在編輯器：部署 → 新增部署 → 網頁應用程式。</p>'
-    ).setWidth(380).setHeight(150);
-  } else {
-    html = HtmlService.createHtmlOutput(
-      '<div style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:20px;text-align:center">' +
-      '<p style="margin-bottom:16px;color:#333">在新分頁開啟交易工具面板：</p>' +
-      '<a href="' + url + '" target="_blank" rel="noopener" ' +
-      'style="display:inline-block;background:#1a73e8;color:#fff;text-decoration:none;padding:10px 22px;border-radius:8px;font-weight:600">開啟面板 ↗</a>' +
-      '</div>'
-    ).setWidth(380).setHeight(160);
-  }
+  const html = HtmlService.createTemplateFromFile('ToolPanel').evaluate()
+    .setWidth(820)
+    .setHeight(640);
   SpreadsheetApp.getUi().showModalDialog(html, '交易工具');
 }
 
