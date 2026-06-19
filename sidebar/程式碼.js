@@ -30,6 +30,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('交易工具')
     .addItem('查看明細', 'showDrilldownSidebar')
+    .addItem('TAG 統計', 'showTagSummarySidebar')
     .addToUi();
 }
 
@@ -155,4 +156,107 @@ function computeStats_(txns, year, month) {
     dailyAvg,
     largest: { amount: largest.amount, merchant: largest.merchant }
   };
+}
+
+/* =========================
+ *   TAG Summary (交易工具 → TAG 統計)
+ * ========================= */
+
+/** Open the TAG summary sidebar. Data is fetched client-side via google.script.run. */
+function showTagSummarySidebar() {
+  const tpl = HtmlService.createTemplateFromFile('TagSummarySidebar');
+  SpreadsheetApp.getUi().showSidebar(tpl.evaluate().setTitle('TAG 統計'));
+}
+
+/** 0-based index of the "TAG" header in Transactions, or -1 if absent */
+function getTagColIndex_(sh) {
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  return headers.indexOf('TAG');
+}
+
+/** Current year/month in the configured timezone */
+function currentYearMonth_() {
+  const now = new Date();
+  return {
+    year: Number(Utilities.formatDate(now, CFG.TZ, 'yyyy')),
+    month: Number(Utilities.formatDate(now, CFG.TZ, 'M'))
+  };
+}
+
+/** Per-TAG spend totals. scope: 'all' | 'month'.
+ *  Returns { scope, items:[{tag,total,count}] desc, grandTotal } or { error }. (callable from google.script.run) */
+function getTagSummary(scope) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CFG.DATA_SHEET);
+  if (!sh || sh.getLastRow() <= 1) return { scope: scope, items: [], grandTotal: 0 };
+
+  const tagIdx = getTagColIndex_(sh);
+  if (tagIdx === -1) return { error: '找不到 Transactions 的「TAG」欄位。' };
+
+  const data = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+  const useMonth = (scope === 'month');
+  const ym = useMonth ? currentYearMonth_() : null;
+
+  const map = {}; // tag -> { total, count }
+  for (const row of data) {
+    const tag = String(row[tagIdx] || '').trim();
+    if (!tag) continue;
+
+    if (useMonth) {
+      const dt = row[CFG.IDX_DATE] instanceof Date ? row[CFG.IDX_DATE] : new Date(row[CFG.IDX_DATE]);
+      if (isNaN(dt.getTime())) continue;
+      if (dt.getFullYear() !== ym.year || (dt.getMonth() + 1) !== ym.month) continue;
+    }
+
+    const amount = Number(row[CFG.IDX_AMOUNT]) || 0;
+    if (!map[tag]) map[tag] = { total: 0, count: 0 };
+    map[tag].total += amount;
+    map[tag].count += 1;
+  }
+
+  const items = Object.keys(map)
+    .map(tag => ({ tag: tag, total: map[tag].total, count: map[tag].count }))
+    .sort((a, b) => b.total - a.total);
+  const grandTotal = items.reduce((s, it) => s + it.total, 0);
+  return { scope: scope, items: items, grandTotal: grandTotal };
+}
+
+/** Transactions for one TAG. scope: 'all' | 'month'.
+ *  Returns { tag, scope, stats, transactions } or { error }. (callable from google.script.run) */
+function getTagTransactions(tag, scope) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CFG.DATA_SHEET);
+  const useMonth = (scope === 'month');
+  const ym = useMonth ? currentYearMonth_() : currentYearMonth_();
+
+  if (!sh || sh.getLastRow() <= 1) {
+    return { tag: tag, scope: scope, stats: computeStats_([], ym.year, ym.month), transactions: [] };
+  }
+
+  const tagIdx = getTagColIndex_(sh);
+  if (tagIdx === -1) return { error: '找不到 Transactions 的「TAG」欄位。' };
+
+  const data = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+  const results = [];
+  for (const row of data) {
+    if (String(row[tagIdx] || '').trim() !== tag) continue;
+
+    const dt = row[CFG.IDX_DATE] instanceof Date ? row[CFG.IDX_DATE] : new Date(row[CFG.IDX_DATE]);
+    if (isNaN(dt.getTime())) continue;
+    if (useMonth && (dt.getFullYear() !== ym.year || (dt.getMonth() + 1) !== ym.month)) continue;
+
+    results.push({
+      date: Utilities.formatDate(dt, CFG.TZ, 'MM/dd HH:mm'),
+      sortKey: dt.getTime(),
+      bank: String(row[CFG.IDX_BANK] || ''),
+      last4: String(row[CFG.IDX_LAST4] || ''),
+      amount: Number(row[CFG.IDX_AMOUNT]) || 0,
+      merchant: String(row[CFG.IDX_MERCHANT] || ''),
+      link: String(row[CFG.IDX_LINK] || '')
+    });
+  }
+
+  results.sort((a, b) => b.sortKey - a.sortKey);
+  const txns = results.map(r => { delete r.sortKey; return r; });
+  return { tag: tag, scope: scope, stats: computeStats_(txns, ym.year, ym.month), transactions: txns };
 }

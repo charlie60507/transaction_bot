@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+    background: #f5f5f5;
+    color: #333;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  /* Header (shared with drilldown) */
+  .header { background: linear-gradient(135deg, #1a73e8, #0d47a1); color: #fff; padding: 20px 16px 16px; }
+  .header-label { font-size: 12px; opacity: 0.8; margin-bottom: 2px; }
+  .header-title { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+
+  /* Stats grid */
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat-box { background: rgba(255,255,255,0.15); border-radius: 8px; padding: 8px 10px; }
+  .stat-label { font-size: 10px; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-value { font-size: 16px; font-weight: 600; }
+  .stat-box.wide { grid-column: 1 / -1; }
+
+  /* Scope toggle */
+  .toggle { display: flex; gap: 6px; margin-top: 4px; }
+  .toggle button { flex: 1; border: none; padding: 6px 0; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; background: rgba(255,255,255,0.15); color: #fff; }
+  .toggle button.active { background: #fff; color: #1a73e8; }
+
+  /* Back button */
+  .back { background: none; border: none; color: #fff; font-size: 13px; cursor: pointer; opacity: 0.9; margin-bottom: 8px; padding: 0; }
+  .back:hover { opacity: 1; }
+
+  /* TAG summary rows */
+  .list { padding: 12px; }
+  .tag-row { background: #fff; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); cursor: pointer; }
+  .tag-row:hover { background: #f0f6ff; }
+  .tag-top { display: flex; justify-content: space-between; align-items: baseline; }
+  .tag-name { font-weight: 600; font-size: 14px; }
+  .tag-total { font-weight: 700; font-size: 14px; color: #d32f2f; white-space: nowrap; }
+  .tag-meta { font-size: 11px; color: #888; margin-top: 2px; }
+  .bar { height: 4px; border-radius: 2px; background: #e3eafc; margin-top: 6px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: #1a73e8; }
+
+  /* Transaction cards (shared with drilldown) */
+  .card { background: #fff; border-radius: 10px; padding: 12px; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); display: flex; align-items: center; gap: 10px; }
+  .card:nth-child(even) { background: #fafafa; }
+  .card-body { flex: 1; min-width: 0; }
+  .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; }
+  .merchant { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+  .amount { font-weight: 700; font-size: 14px; color: #d32f2f; white-space: nowrap; }
+  .card-bottom { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #888; }
+  .badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px; color: #fff; white-space: nowrap; }
+  .badge-fubon { background: #1565c0; }
+  .badge-cathay { background: #2e7d32; }
+  .badge-other { background: #757575; }
+  .gmail-link { color: #1a73e8; text-decoration: none; font-size: 18px; flex-shrink: 0; opacity: 0.7; transition: opacity 0.15s; }
+  .gmail-link:hover { opacity: 1; }
+
+  /* States */
+  .empty-state, .error-state { text-align: center; padding: 40px 20px; color: #888; }
+  .empty-icon, .error-icon { font-size: 48px; margin-bottom: 12px; }
+  .error-state { color: #d32f2f; }
+  .error-state p { font-size: 14px; }
+  .loading { text-align: center; padding: 48px 20px; color: #888; }
+  .footer { text-align: center; padding: 12px; font-size: 11px; color: #aaa; }
+</style>
+</head>
+<body>
+<div id="app"><div class="loading">載入中…</div></div>
+<script>
+  var state = { scope: 'all' };
+  var lastItems = [];
+
+  function app() { return document.getElementById('app'); }
+  function setHtml(h) { app().innerHTML = h; }
+  function fmt(n) { return Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+  function esc(s) { var el = document.createElement('span'); el.textContent = (s == null ? '' : s); return el.innerHTML; }
+  function badgeClass(bank) {
+    bank = bank || '';
+    if (bank.indexOf('富邦') >= 0) return 'badge-fubon';
+    if (bank.indexOf('國泰') >= 0) return 'badge-cathay';
+    return 'badge-other';
+  }
+  function scopeLabel() { return state.scope === 'month' ? '當月' : '全部時間'; }
+
+  function renderError(e) {
+    var msg = (e && e.message) ? e.message : (typeof e === 'string' ? e : '發生錯誤');
+    setHtml('<div class="error-state"><div class="error-icon">&#9888;&#65039;</div><p>' + esc(msg) + '</p></div>');
+  }
+
+  function loadSummary(scope) {
+    state.scope = scope;
+    setHtml('<div class="loading">載入中…</div>');
+    google.script.run.withSuccessHandler(renderSummary).withFailureHandler(renderError).getTagSummary(scope);
+  }
+
+  function loadTag(tag) {
+    setHtml('<div class="loading">載入中…</div>');
+    google.script.run.withSuccessHandler(renderDetail).withFailureHandler(renderError).getTagTransactions(tag, state.scope);
+  }
+
+  function headerBar(title, withToggle) {
+    var h = '<div class="header">';
+    h += '<div class="header-label">TAG 統計 · ' + scopeLabel() + '</div>';
+    h += '<div class="header-title">' + esc(title) + '</div>';
+    if (withToggle) {
+      h += '<div class="toggle">';
+      h += '<button data-scope="all" class="' + (state.scope === 'all' ? 'active' : '') + '">全部</button>';
+      h += '<button data-scope="month" class="' + (state.scope === 'month' ? 'active' : '') + '">當月</button>';
+      h += '</div>';
+    }
+    h += '</div>';
+    return h;
+  }
+
+  function attachToggle() {
+    var btns = app().querySelectorAll('.toggle button');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].addEventListener('click', function () { loadSummary(this.getAttribute('data-scope')); });
+    }
+  }
+
+  function renderSummary(d) {
+    if (d && d.error) { renderError(d.error); return; }
+    lastItems = (d && d.items) ? d.items : [];
+
+    var h = headerBar('各 TAG 總額', true);
+    if (lastItems.length === 0) {
+      h += '<div class="empty-state"><div class="empty-icon">&#127991;&#65039;</div><p>這個範圍沒有任何 TAG 交易</p></div>';
+      setHtml(h);
+      attachToggle();
+      return;
+    }
+
+    var max = lastItems[0].total || 1;
+    h += '<div class="list">';
+    for (var i = 0; i < lastItems.length; i++) {
+      var it = lastItems[i];
+      var pct = Math.max(3, Math.round((it.total / max) * 100));
+      h += '<div class="tag-row" data-idx="' + i + '">';
+      h += '<div class="tag-top"><span class="tag-name">' + esc(it.tag) + '</span><span class="tag-total">$' + fmt(it.total) + '</span></div>';
+      h += '<div class="tag-meta">' + it.count + ' 筆</div>';
+      h += '<div class="bar"><i style="width:' + pct + '%"></i></div>';
+      h += '</div>';
+    }
+    h += '</div>';
+    h += '<div class="footer">共 ' + lastItems.length + ' 個 TAG · 總計 $' + fmt(d.grandTotal) + '</div>';
+    setHtml(h);
+
+    attachToggle();
+    var rows = app().querySelectorAll('.tag-row');
+    for (var j = 0; j < rows.length; j++) {
+      rows[j].addEventListener('click', function () {
+        loadTag(lastItems[Number(this.getAttribute('data-idx'))].tag);
+      });
+    }
+  }
+
+  function renderDetail(d) {
+    if (d && d.error) { renderError(d.error); return; }
+    var s = d.stats || { total: 0, count: 0, largest: null };
+
+    var h = '<div class="header">';
+    h += '<button class="back">&#8592; 返回</button>';
+    h += '<div class="header-label">TAG · ' + scopeLabel() + '</div>';
+    h += '<div class="header-title">' + esc(d.tag) + '</div>';
+    h += '<div class="stats">';
+    h += '<div class="stat-box"><div class="stat-label">總金額</div><div class="stat-value">$' + fmt(s.total) + '</div></div>';
+    h += '<div class="stat-box"><div class="stat-label">交易筆數</div><div class="stat-value">' + s.count + ' 筆</div></div>';
+    if (s.largest) {
+      h += '<div class="stat-box wide"><div class="stat-label">最大筆</div><div class="stat-value" style="font-size:13px">$' + fmt(s.largest.amount) + ' · ' + esc(s.largest.merchant) + '</div></div>';
+    }
+    h += '</div></div>';
+
+    if (!d.transactions || d.transactions.length === 0) {
+      h += '<div class="empty-state"><div class="empty-icon">&#128203;</div><p>此範圍沒有交易</p></div>';
+    } else {
+      h += '<div class="list">';
+      for (var i = 0; i < d.transactions.length; i++) {
+        var t = d.transactions[i];
+        h += '<div class="card"><div class="card-body">';
+        h += '<div class="card-top"><span class="merchant" title="' + esc(t.merchant) + '">' + esc(t.merchant || '(未知商店)') + '</span><span class="amount">NT$' + fmt(t.amount) + '</span></div>';
+        h += '<div class="card-bottom"><span class="badge ' + badgeClass(t.bank) + '">' + esc(t.bank) + '</span><span>' + esc(t.date) + '</span>';
+        if (t.last4) h += '<span>****' + esc(t.last4) + '</span>';
+        h += '</div></div>';
+        if (t.link) h += '<a class="gmail-link" href="' + t.link + '" target="_blank" title="開啟 Gmail">&#9993;&#65039;</a>';
+        h += '</div>';
+      }
+      h += '</div>';
+      h += '<div class="footer">' + d.transactions.length + ' 筆交易</div>';
+    }
+    setHtml(h);
+    var back = app().querySelector('.back');
+    if (back) back.addEventListener('click', function () { loadSummary(state.scope); });
+  }
+
+  loadSummary('all');
+</script>
+</body>
+</html>
