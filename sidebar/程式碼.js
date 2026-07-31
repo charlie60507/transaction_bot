@@ -13,6 +13,7 @@ const CFG = {
   IDX_MERCHANT: 5,
   IDX_CATEGORY_AUTO: 6,    // G: 類別 (auto-parsed from email)
   IDX_LINK: 7,
+  IDX_INOUT: 9,            // J: 收支別 ("收入"/"支出"; blank ⇒ 支出)
   IDX_CATEGORY_MANUAL: 10, // K: 種類(手動) — primary category
 };
 
@@ -27,11 +28,53 @@ function onOpen() {
     .addToUi();
 }
 
-/** Web App entry: serve the dashboard page */
+/** Web App entry: serve the dashboard page (injects real NOW in sheet TZ) */
 function doGet(e) {
-  return HtmlService.createTemplateFromFile('ToolPanel').evaluate()
+  const t = HtmlService.createTemplateFromFile('ToolPanel');
+  t.now = nowYMD_();
+  return t.evaluate()
     .setTitle('交易工具')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/** Current Y/M/D in the configured timezone, for injecting into the page. */
+function nowYMD_() {
+  const now = new Date();
+  return {
+    year:  Number(Utilities.formatDate(now, CFG.TZ, 'yyyy')),
+    month: Number(Utilities.formatDate(now, CFG.TZ, 'M')),
+    day:   Number(Utilities.formatDate(now, CFG.TZ, 'd'))
+  };
+}
+
+/** Flat array of ALL transactions for the client-side dashboard.
+ *  Fat-frontend: NO aggregation here — the v5 page does all of it. */
+function getAllTxns() {
+  const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
+  if (!sh || sh.getLastRow() <= 1) return [];
+  const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+  const tagIdx = getTagColIndex_(sh);            // -1 if no TAG header
+  const out = [];
+  for (const row of rows) {
+    const raw = row[CFG.IDX_DATE];
+    const dt = raw instanceof Date ? raw : new Date(raw);
+    if (isNaN(dt.getTime())) continue;           // skip blank / unparseable rows
+    const inout = String(row[CFG.IDX_INOUT] || '').trim();
+    out.push({
+      y: Number(Utilities.formatDate(dt, CFG.TZ, 'yyyy')),
+      m: Number(Utilities.formatDate(dt, CFG.TZ, 'M')),
+      d: Number(Utilities.formatDate(dt, CFG.TZ, 'd')),
+      type: inout === '收入' ? '收入' : '支出',
+      amount: Number(row[CFG.IDX_AMOUNT]) || 0,
+      cat: rowCategory_(row) || '未分類',
+      merchant: String(row[CFG.IDX_MERCHANT] || ''),
+      tag: tagIdx === -1 ? '' : String(row[tagIdx] || '').trim(),
+      bank: String(row[CFG.IDX_BANK] || ''),
+      last4: String(row[CFG.IDX_LAST4] || ''),
+      link: String(row[CFG.IDX_LINK] || '')
+    });
+  }
+  return out;
 }
 
 /** Web App URL of the active deployment ('' until deployed) */
@@ -152,10 +195,20 @@ function dimKeyFn_(dimension, sh) {
   return { keyFn: rowCategory_ };
 }
 
-/** Period KPIs over ALL in-scope rows (independent of category/tag). */
-function periodSummary_(rows, r) {
+/** Row-keep predicate for a dimension. category → must have a manual 種類(K);
+ *  tag → must have a TAG. Rows failing the test drop out of every stat. */
+function dimKeepFn_(dimension, k) {
+  if (dimension === 'category') {
+    return function (row) { return String(row[CFG.IDX_CATEGORY_MANUAL] || '').trim() !== ''; };
+  }
+  return function (row) { return k.keyFn(row) !== ''; };
+}
+
+/** Period KPIs over in-scope rows. `keep` (optional) filters which rows count. */
+function periodSummary_(rows, r, keep) {
   let total = 0, count = 0, largest = null, minT = null, maxT = null;
   for (const row of rows) {
+    if (keep && !keep(row)) continue;
     const dt = inScope_(row, r.useMonth, r.ym);
     if (!dt) continue;
     const amt = Number(row[CFG.IDX_AMOUNT]) || 0;
@@ -171,8 +224,9 @@ function periodSummary_(rows, r) {
   return { total: total, count: count, dailyAvg: count ? Math.round(total / days) : 0, largest: largest };
 }
 
-/** Last n months of overall spend (oldest→newest). Each: { ym:'YYYY-MM', label:'M月', total }. */
-function monthlyTrend_(rows, n) {
+/** Last n months of overall spend (oldest→newest). Each: { ym:'YYYY-MM', label:'M月', total }.
+ *  `keep` (optional) filters which rows count. */
+function monthlyTrend_(rows, n, keep) {
   const cur = currentYearMonth_();
   const months = [];
   let y = cur.year, m = cur.month;
@@ -180,6 +234,7 @@ function monthlyTrend_(rows, n) {
   const totals = {};
   months.forEach(function (mm) { totals[mm.year + '-' + mm.month] = 0; });
   for (const row of rows) {
+    if (keep && !keep(row)) continue;
     const dt = row[CFG.IDX_DATE] instanceof Date ? row[CFG.IDX_DATE] : new Date(row[CFG.IDX_DATE]);
     if (isNaN(dt.getTime())) continue;
     const key = dt.getFullYear() + '-' + (dt.getMonth() + 1);
@@ -207,9 +262,14 @@ function getOverview(dimension, scope) {
   const k = dimKeyFn_(dimension, sh);
   if (k.error) return { error: k.error };
 
+  // Rows with no value for the active dimension (empty 種類(手動) / empty TAG)
+  // are dropped from every stat (KPIs, breakdown, trend) so cards match the sum.
+  const keep = dimKeepFn_(dimension, k);
+
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
   const map = {};
   for (const row of rows) {
+    if (!keep(row)) continue;
     if (!inScope_(row, r.useMonth, r.ym)) continue;
     const key = k.keyFn(row);
     if (!key) continue;
@@ -225,8 +285,8 @@ function getOverview(dimension, scope) {
     dimension: dimension, scope: scope,
     items: items,
     grandTotal: items.reduce(function (s, it) { return s + it.total; }, 0),
-    period: periodSummary_(rows, r),
-    trend: monthlyTrend_(rows, 6)
+    period: periodSummary_(rows, r, keep),
+    trend: monthlyTrend_(rows, 6, keep)
   };
 }
 
@@ -240,9 +300,11 @@ function getTransactions(dimension, name, scope) {
   const k = dimKeyFn_(dimension, sh);
   if (k.error) return { error: k.error };
 
+  const keep = dimKeepFn_(dimension, k);
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
   const results = [];
   for (const row of rows) {
+    if (!keep(row)) continue;
     if (k.keyFn(row) !== name) continue;
     const dt = inScope_(row, r.useMonth, r.ym);
     if (!dt) continue;
