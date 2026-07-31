@@ -164,7 +164,7 @@
   // muted, cool-leaning, and deliberately AVOIDS red/green so category hues never read as spend/income
   var PALETTE = ['#5f9aa0','#6f88a8','#9a8bb0','#b39a68','#6d8f9e','#8497b8','#7b9ca6','#a99a6a'];
   var REST_COLOR = '#5a6070';
-  var NOW = { year: <?= now.year ?>, month: <?= now.month ?>, day: <?= now.day ?> };
+  var NOW = { year: +('<?= now.year ?>'), month: +('<?= now.month ?>'), day: +('<?= now.day ?>') };
   function daysInMonth(y,m){ return new Date(y,m,0).getDate(); }
 
   var PROJ_COLOR = { '重機':'#5f9aa0','房子':'#6f88a8','汽車':'#9a8bb0','旅遊':'#b39a68','進修':'#6d8f9e' };
@@ -379,7 +379,7 @@
   function boot(){
     document.getElementById('app').innerHTML = '<div class="loading">載入中…</div>';
     google.script.run
-      .withSuccessHandler(function(data){ TXNS = data || []; render(); })
+      .withSuccessHandler(function(data){ TXNS = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount; return t; }); render(); })
       .withFailureHandler(function(err){
         var msg = (err && err.message) ? err.message : String(err);
         document.getElementById('app').innerHTML =
