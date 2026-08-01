@@ -5,3 +5,6 @@ node_modules/
 dist/
 build/
 .gstack/
+
+# Personal Linear API key (never commit)
+.linear-key

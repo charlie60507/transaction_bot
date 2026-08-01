@@ -1,0 +1,27 @@
+[
+  {
+    "title": "Cross-day 待記帳 queue (edit any unrecorded txn, not just per-day)",
+    "priority": 3,
+    "description": "## Context\nThe edit-on-web feature (OpenSpec `edit-transactions-on-web`, deployed) lets you edit 類別 / 收支別 / TAG and tick 已記帳 inline, per day, by clicking a day in the spend heatmap.\n\n## Limitation to solve\nThe heatmap only makes days WITH spend clickable. A day with only income or transfers (no 支出) is unreachable, so those transactions can't be edited/recorded from the web.\n\n## Proposal\nAdd a single cross-day「全部待記帳」view listing every un-recorded transaction (any type, any date, newest first), reusing the same inline edit + 已記帳 UX (`editRow` / `updateTxn`). Recording removes it from the queue; a show-recorded toggle reveals done rows.\n\n## Notes\n- Pure frontend + existing `updateTxn` backend; no schema change.\n- Deploy to the live deployment `AKfycbyv…` (not the stale `AKfycbyK…`).\n- Acceptance: an income-only / transfer-only day's transactions are reachable and editable."
+  },
+  {
+    "title": "Verify web edit-back writes to the Sheet on real data",
+    "priority": 2,
+    "description": "Acceptance for OpenSpec `edit-transactions-on-web` (deployed @20).\n\nOn the live dashboard (`AKfycbyv…`), analysis tab → single month → click a day:\n- Change a transaction's 類別 → confirm column K updates for that row in the Sheet.\n- Change 收支別 → column J updates.\n- Mark 已記帳 → the row leaves the queue and column A ticks.\n- Toggle 顯示已記帳 → recorded rows appear with 取消記帳.\n\nReport the observed result (not just \"done\")."
+  },
+  {
+    "title": "Finalize bot→bound merge: retire the standalone Apps Script project",
+    "priority": 3,
+    "description": "Follow-up to OpenSpec `merge-bot-into-bound-project` (cutover done; the bound project runs the bot on a trigger).\n\nAfter the bound auto-record has run stably for a cycle or two:\n- Delete the standalone Apps Script project (scriptId `18WyCJz…`) in the UI.\n- Remove the repo's root `cards_transaction_bot.js` and root `.clasp.json` so only the `sidebar/` clasp config remains.\n- Optional: swap `openById(SPREADSHEET_ID)` → `getActiveSpreadsheet()` once the bound container is confirmed to be the same sheet.\n- Archive the OpenSpec change."
+  },
+  {
+    "title": "Clean up stale Web App deployments",
+    "priority": 4,
+    "description": "The bound dashboard project has several deployments. Keep only the one the user actually uses:\n- KEEP `AKfycbyvVvKPI…` (the live URL; menu + bookmark point here).\n- Retire the stale ones: `AKfycbyKqTW…` (updated by mistake across @14–@17) and the old category-view deployments (@6–@9).\n\nGoal: one canonical deployment so a deploy always reaches the user's URL."
+  },
+  {
+    "title": "Decide: remove the 本月預估 projstrip from the dashboard",
+    "priority": 4,
+    "description": "The 類別 tab still shows a 本月預估 (month-end projection) strip from the original build. The user said month-end projection isn't needed. Decide whether to remove it; if yes, drop the projstrip block in `categoryTab()` and its CSS, then redeploy to `AKfycbyv…`."
+  }
+]
