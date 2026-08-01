@@ -33,6 +33,13 @@ function getKey() {
   die('No API key. Set env LINEAR_CT_KEY or put the key in .linear-key (gitignored).');
 }
 
+function getDefaultTeam() {
+  if (process.env.LINEAR_TEAM && process.env.LINEAR_TEAM.trim()) return process.env.LINEAR_TEAM.trim();
+  const f = path.join(ROOT, '.linear-team');
+  if (fs.existsSync(f)) { const t = fs.readFileSync(f, 'utf8').trim(); if (t) return t; }
+  return 'CT';
+}
+
 async function gql(key, query, variables) {
   const res = await fetch(API, {
     method: 'POST',
@@ -47,10 +54,11 @@ async function gql(key, query, variables) {
 }
 
 function parseArgs(argv) {
-  const a = { team: 'CT', priority: undefined, labels: [] };
+  const a = { team: null, priority: undefined, labels: [] };
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
     if (t === '--whoami') a.whoami = true;
+    else if (t === '--teams') a.teams = true;
     else if (t === '--dry-run') a.dryRun = true;
     else if (t === '--title') a.title = argv[++i];
     else if (t === '--desc') a.description = argv[++i];
@@ -98,6 +106,13 @@ async function createIssue(key, team, issue, dryRun) {
 (async () => {
   const args = parseArgs(process.argv.slice(2));
   const key = getKey();
+  if (!args.team) args.team = getDefaultTeam();
+
+  if (args.teams) {
+    const d = await gql(key, 'query{ teams{ nodes{ key name } } }');
+    d.teams.nodes.forEach(t => console.log('  ' + t.key + ' — ' + t.name));
+    return;
+  }
 
   if (args.whoami) {
     const d = await gql(key, 'query{ viewer{ name email } }');
