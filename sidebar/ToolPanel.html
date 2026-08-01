@@ -195,6 +195,30 @@
   .heat-tip { display: flex; gap: var(--sp4); flex-wrap: wrap; margin-top: var(--sp3); font-size: 12px; color: var(--text-muted); }
   .heat-tip b { color: var(--text-primary); }
 
+  /* editable day list */
+  .ev-head { display: flex; align-items: center; gap: var(--sp2); margin: var(--sp3) 0 var(--sp2); flex-wrap: wrap; }
+  .ev-head .lbl { font-size: 12px; color: var(--text-muted); }
+  .ev-toggle { margin-left: auto; font-size: 12px; color: var(--accent); background: none; border: 1px solid var(--border); border-radius: var(--r-pill); padding: 3px 12px; cursor: pointer; }
+  .ev-toggle:hover { background: var(--bg-raised); }
+  .erow { padding: 9px 0; border-bottom: 1px solid var(--border); transition: opacity .15s; }
+  .erow:last-child { border-bottom: none; }
+  .erow.done { opacity: .5; }
+  .er1 { display: flex; align-items: baseline; gap: var(--sp2); }
+  .er1 .mer { font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .er1 .amt { font-weight: 600; white-space: nowrap; }
+  .er2 { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .er2 .fld { display: flex; align-items: center; gap: 4px; }
+  .er2 .fld .lb { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+  .er2 select { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; font-size: 12px; cursor: pointer; }
+  .er2 select:focus { outline: none; border-color: var(--accent); }
+  .erec { margin-left: auto; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-muted); border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .erec:hover { border-color: var(--income); color: var(--income); }
+  .erow.done .erec { border-color: var(--income); color: var(--income); }
+
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); background: var(--bg-raised); border: 1px solid var(--border); color: var(--text-primary); padding: 10px 18px; border-radius: var(--r-pill); font-size: 13px; opacity: 0; transition: all .2s; pointer-events: none; box-shadow: 0 6px 24px rgba(0,0,0,.4); z-index: 20; max-width: 90vw; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { border-color: var(--spend); color: var(--spend); }
+
   .empty { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
   .footer { text-align: center; padding: var(--sp4); font-size: 12px; color: var(--text-muted); }
   .loading, .error { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
@@ -203,6 +227,7 @@
 </head>
 <body>
 <div class="wrap"><div id="app"><div class="loading">載入中…</div></div></div>
+<div class="toast" id="toast"></div>
 <script>
   // muted, cool-leaning, and deliberately AVOIDS red/green so category hues never read as spend/income
   var PALETTE = ['#5f9aa0','#6f88a8','#9a8bb0','#b39a68','#6d8f9e','#8497b8','#7b9ca6','#a99a6a'];
@@ -214,7 +239,7 @@
 
   var TXNS = [];
 
-  var state = { tab:'category', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all', more:false };
+  var state = { tab:'category', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all', more:false, showDone:false };
   var openRow=null, openProj=null, openHeatDay=null;
 
   function resolveScope(s){ if(/^\d{4}-\d{2}$/.test(s)){ var p=s.split('-'); return {level:'month',year:+p[0],month:+p[1]}; } if(/^\d{4}$/.test(s)) return {level:'year',year:+s}; if(s==='month') return {level:'month',year:NOW.year,month:NOW.month}; if(s==='year') return {level:'year',year:NOW.year}; return {level:'all'}; }
@@ -401,6 +426,52 @@
     return out;
   }
 
+  // ---------- editable day list (per-day 待記帳 queue) ----------
+  function txnById(id){ for(var i=0;i<TXNS.length;i++) if(TXNS[i].id===id) return TXNS[i]; return null; }
+  function distinctCats(){ var s={}; TXNS.forEach(function(t){ if(t.cat) s[t.cat]=1; }); return Object.keys(s).sort(); }
+  function distinctTags(){ var s={}; TXNS.forEach(function(t){ if(t.tag) s[t.tag]=1; }); return Object.keys(s).sort(); }
+  function selOpts(list,cur,blankLabel){
+    var arr=list.slice(); if(blankLabel!=null && arr.indexOf('')<0) arr.unshift('');
+    var has=false,o=''; arr.forEach(function(v){ if(v===cur)has=true; var lbl=(v===''?(blankLabel||'（無）'):v); o+='<option value="'+esc(v)+'"'+(v===cur?' selected':'')+'>'+esc(lbl)+'</option>'; });
+    if(!has && cur){ o='<option value="'+esc(cur)+'" selected>'+esc(cur)+'</option>'+o; }
+    return o;
+  }
+  function typeColor(tp){ return tp==='收入'?'var(--income)':(tp==='轉帳'?'var(--warn)':'var(--spend)'); }
+  var _toastTmo=null;
+  function toast(msg,isErr){ var el=document.getElementById('toast'); if(!el) return; el.textContent=msg; el.className='toast show'+(isErr?' err':''); clearTimeout(_toastTmo); _toastTmo=setTimeout(function(){ el.className='toast'; },1900); }
+  // optimistic edit: update local state now, write back, revert on failure
+  function applyEdit(id,field,value){
+    var t=txnById(id); if(!t) return;
+    var prev=t[field]; t[field]=value; render();
+    var patch={}; patch[field]=value;
+    google.script.run
+      .withSuccessHandler(function(){ if(field==='posted') toast(value?'已記帳 · 從清單移除':'已取回待記帳'); })
+      .withFailureHandler(function(err){ t[field]=prev; render(); toast('寫入失敗:'+((err&&err.message)||err), true); })
+      .updateTxn(id, patch);
+  }
+  function editRow(t){
+    var tc=typeColor(t.type);
+    return '<div class="erow'+(t.posted?' done':'')+'" data-erow="'+esc(t.id)+'">'
+      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span><span class="mer">'+esc(t.merchant)+'</span><span class="amt num" style="color:'+tc+'">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+'</span></div>'
+      +'<div class="er2">'
+        +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
+        +'<div class="fld"><span class="lb">收支</span><select data-ef="type" data-id="'+esc(t.id)+'" style="color:'+tc+'">'+selOpts(['支出','收入','轉帳'],t.type)+'</select></div>'
+        +'<div class="fld"><span class="lb">TAG</span><select data-ef="tag" data-id="'+esc(t.id)+'">'+selOpts(distinctTags(),t.tag,'（無）')+'</select></div>'
+        +'<button class="erec" data-erec="'+esc(t.id)+'">'+(t.posted?'↩ 取消記帳':'✓ 已記帳')+'</button>'
+      +'</div></div>';
+  }
+  function dayEditor(y,m,sd){
+    var all=TXNS.filter(function(t){ return t.y===y&&t.m===m&&t.d===sd; });
+    var pending=all.filter(function(t){ return !t.posted; }), doneN=all.length-pending.length;
+    var spend=pending.filter(function(t){ return t.type==='支出'; }).reduce(function(s,t){ return s+t.amount; },0);
+    var visible=(state.showDone?all.slice():pending).sort(function(a,b){ return b.amount-a.amount; });
+    var h='<div class="hdetail"><div class="ev-head"><span class="lbl">'+m+' / '+sd+' 當天 · <b style="color:var(--text-primary)">'+pending.length+'</b> 筆待記帳 · 支出 <b class="num" style="color:var(--text-primary)">$'+fmt(spend)+'</b></span>'
+      +'<button class="ev-toggle" data-showdone>'+(state.showDone?'只看待記帳':'顯示已記帳 ('+doneN+')')+'</button></div>';
+    if(!visible.length){ return h+'<div class="empty" style="padding:var(--sp4) 0">🎉 這天都記帳完了</div></div>'; }
+    visible.forEach(function(t){ h+=editRow(t); });
+    return h+'</div>';
+  }
+
   // spend calendar heatmap: single-month scope only; current partial month renders future days inert
   function heatPanel(r){
     if(r.level!=='month') return '';
@@ -423,14 +494,7 @@
     var tip='<div class="heat-tip"><span>最高:<b class="num">'+(peak.d?m+'/'+peak.d+' · $'+fmt(peak.v):'—')+'</b></span><span>有消費 <b class="num">'+spentDays+'</b> 天</span><span>日均 <b class="num">$'+fmt(lastDay?total/lastDay:0)+'</b></span><span style="margin-left:auto;opacity:.85">點任一格看當天明細</span></div>';
     var leg='<div class="heatlegend"><span>少</span><span class="sw" style="background:'+blendSpend(0.18)+'"></span><span class="sw" style="background:'+blendSpend(0.5)+'"></span><span class="sw" style="background:'+blendSpend(0.9)+'"></span><span>多</span></div>';
     var det='';
-    if(openHeatDay){ var pp=openHeatDay.split('-'); if(+pp[0]===y&&+pp[1]===m){ var sd=+pp[2];
-      var list=TXNS.filter(function(t){return t.type==='支出'&&t.y===y&&t.m===m&&t.d===sd;}).sort(function(a,b){return b.amount-a.amount;});
-      var dtot=list.reduce(function(s,t){return s+t.amount;},0);
-      det='<div class="hdetail"><div class="hdet-h">'+m+' / '+sd+' 當天 · <b class="num">$'+fmt(dtot)+'</b> · '+list.length+' 筆</div>';
-      if(!list.length) det+='<div class="empty" style="padding:var(--sp3) 0">當日無支出</div>';
-      else list.forEach(function(t){ det+=txnRow(t,true); });
-      det+='</div>';
-    } }
+    if(openHeatDay){ var pp=openHeatDay.split('-'); if(+pp[0]===y&&+pp[1]===m){ det=dayEditor(y,m,+pp[2]); } }
     return grid+tip+leg+det;
   }
 
@@ -498,6 +562,9 @@
     app.querySelectorAll('.tabs button').forEach(function(b){ b.onclick=function(){ state.tab=this.getAttribute('data-tab'); openRow=null; openProj=null; openHeatDay=null; state.q=''; render(); }; });
     app.querySelectorAll('.ctl[data-scope]').forEach(function(b){ b.onclick=function(){ var s=this.getAttribute('data-scope'); state.scope=s; if(s==='year'){state.selYear=NOW.year;state.selMonth=0;} else if(s==='month'){state.selYear=NOW.year;state.selMonth=NOW.month;} openRow=null; openHeatDay=null; render(); }; });
     app.querySelectorAll('.cell[data-hday]').forEach(function(c){ c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); }; });
+    var sdBtn=app.querySelector('[data-showdone]'); if(sdBtn) sdBtn.onclick=function(){ state.showDone=!state.showDone; render(); };
+    app.querySelectorAll('select[data-ef]').forEach(function(s){ s.onchange=function(){ applyEdit(this.getAttribute('data-id'), this.getAttribute('data-ef'), this.value); }; });
+    app.querySelectorAll('[data-erec]').forEach(function(b){ b.onclick=function(){ var id=this.getAttribute('data-erec'); var t=txnById(id); if(t) applyEdit(id,'posted',!t.posted); }; });
     app.querySelectorAll('.ctl[data-pscope]').forEach(function(b){ b.onclick=function(){ state.projScope=this.getAttribute('data-pscope'); openProj=null; render(); }; });
     var mt=app.querySelector('[data-more]'); if(mt) mt.onclick=function(){ state.more=!state.more; render(); };
     var sy=document.getElementById('selYear'), sm=document.getElementById('selMonth');
@@ -512,7 +579,7 @@
   function boot(){
     document.getElementById('app').innerHTML = '<div class="loading">載入中…</div>';
     google.script.run
-      .withSuccessHandler(function(data){ TXNS = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount; return t; }); render(); })
+      .withSuccessHandler(function(data){ TXNS = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount; t.posted = (t.posted===true); t.id = String(t.id||''); return t; }); render(); })
       .withFailureHandler(function(err){
         var msg = (err && err.message) ? err.message : String(err);
         document.getElementById('app').innerHTML =

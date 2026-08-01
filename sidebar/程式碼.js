@@ -6,6 +6,7 @@ const CFG = {
   TZ: 'Asia/Taipei',
 
   // Transactions column indices (0-based)
+  IDX_POSTED: 0,           // A: 已記帳 (checkbox)
   IDX_BANK: 1,
   IDX_DATE: 2,
   IDX_LAST4: 3,
@@ -13,7 +14,8 @@ const CFG = {
   IDX_MERCHANT: 5,
   IDX_CATEGORY_AUTO: 6,    // G: 類別 (auto-parsed from email)
   IDX_LINK: 7,
-  IDX_INOUT: 9,            // J: 收支別 ("收入"/"支出"; blank ⇒ 支出)
+  IDX_MESSAGEID: 8,        // I: MessageId (stable per-row key)
+  IDX_INOUT: 9,            // J: 收支別 ("收入"/"支出"/"轉帳"; blank ⇒ 支出)
   IDX_CATEGORY_MANUAL: 10, // K: 種類(手動) — primary category
 };
 
@@ -74,10 +76,56 @@ function getAllTxns() {
       tag: tagIdx === -1 ? '' : String(row[tagIdx] || '').trim(),
       bank: String(row[CFG.IDX_BANK] || ''),
       last4: String(row[CFG.IDX_LAST4] || ''),
-      link: String(row[CFG.IDX_LINK] || '')
+      link: String(row[CFG.IDX_LINK] || ''),
+      id: String(row[CFG.IDX_MESSAGEID] || ''),
+      posted: row[CFG.IDX_POSTED] === true
     });
   }
   return out;
+}
+
+/**
+ * Write edits back to one Transactions row, located by MessageId (col I) so it
+ * is safe against the bot re-sorting rows. `patch` may contain any of:
+ *   cat    -> K (種類手動; leaves auto G untouched)
+ *   type   -> J (收支別; must be 支出/收入/轉帳)
+ *   tag    -> TAG column (by header)
+ *   posted -> A (已記帳 checkbox; boolean)
+ * Returns { ok:true }; throws a clear error the frontend surfaces.
+ */
+function updateTxn(messageId, patch) {
+  messageId = String(messageId || '');
+  if (!messageId) throw new Error('缺少 MessageId');
+  patch = patch || {};
+  const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
+  if (!sh) throw new Error('找不到 Transactions 工作表');
+  const last = sh.getLastRow();
+  if (last <= 1) throw new Error('沒有交易資料');
+
+  const ids = sh.getRange(2, CFG.IDX_MESSAGEID + 1, last - 1, 1).getValues();
+  let rowNum = -1;
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === messageId) { rowNum = i + 2; break; }
+  }
+  if (rowNum === -1) throw new Error('找不到該筆交易 (MessageId=' + messageId + ')');
+
+  if ('cat' in patch) {
+    sh.getRange(rowNum, CFG.IDX_CATEGORY_MANUAL + 1).setValue(String(patch.cat || ''));
+  }
+  if ('type' in patch) {
+    const t = String(patch.type || '');
+    if (['支出', '收入', '轉帳'].indexOf(t) === -1) throw new Error('收支別不合法: ' + t);
+    sh.getRange(rowNum, CFG.IDX_INOUT + 1).setValue(t);
+  }
+  if ('tag' in patch) {
+    const tagIdx = getTagColIndex_(sh);
+    if (tagIdx === -1) throw new Error('找不到 TAG 欄');
+    sh.getRange(rowNum, tagIdx + 1).setValue(String(patch.tag || ''));
+  }
+  if ('posted' in patch) {
+    sh.getRange(rowNum, CFG.IDX_POSTED + 1).setValue(!!patch.posted);
+  }
+  return { ok: true };
 }
 
 /** Web App URL of the user's live deployment.
