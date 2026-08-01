@@ -359,7 +359,7 @@
   function rowCard(it,i,max,exp){
     var color=PALETTE[Math.min(i,PALETTE.length-1)],isOpen=(openRow===it.name);
     var h='<div class="row-card'+(isOpen?' open':'')+'" data-row="'+esc(it.name)+'"><div class="rc-top"><span class="rc-name"><span class="dot" style="background:'+color+'"></span>'+esc(it.name)+'</span><span class="rc-end"><span class="rc-total num">$'+fmt(it.total)+'</span><span class="chev">▶</span></span></div><div class="rc-meta num">'+it.count+' 筆 · 平均 $'+fmt(it.total/it.count)+' · 占 '+(max>0?Math.round(it.total/exp.reduce(function(s,t){return s+t.amount;},0)*100):0)+'%</div>';
-    var list=exp.filter(function(t){return t.cat===it.name;}).sort(function(a,b){return b.amount-a.amount;}).slice(0,8);
+    var list=exp.filter(function(t){return t.cat===it.name;}).sort(function(a,b){return (a.y-b.y)||(a.m-b.m)||(a.d-b.d);});
     var d='<div class="drill">'; list.forEach(function(t){ d+=txnRow(t,false); }); if(!list.length) d+='<div style="color:var(--text-muted);font-size:12px">無</div>'; d+='</div>';
     return h+d+'</div>';
   }
