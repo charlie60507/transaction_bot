@@ -80,14 +80,18 @@ function getAllTxns() {
   return out;
 }
 
-/** Web App URL of the active deployment ('' until deployed) */
+/** Web App URL of the user's live deployment.
+ *  Hardcoded on purpose: ScriptApp.getService().getUrl() returns an
+ *  unpredictable/stale deployment URL when the project has multiple
+ *  deployments, which makes the menu open an invalid link (Drive's
+ *  "can't open this file"). This is the deployment the user actually uses. */
 function getWebAppUrl() {
-  return ScriptApp.getService().getUrl();
+  return 'https://script.google.com/macros/s/AKfycbyvVvKPI45Y5zooV9VbzYSN_54EWqQTqjsE6bJPTgBpfvcdJZ13YIynh3rBKdRM3bKaag/exec';
 }
 
 /** Menu action: dialog with a clickable link that opens the Web App in a new tab */
 function showPanelLauncher() {
-  const url = ScriptApp.getService().getUrl();
+  const url = getWebAppUrl();
   let html;
   if (!url) {
     html = HtmlService.createHtmlOutput(
