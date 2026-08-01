@@ -152,6 +152,49 @@
   .mbars .mb > i { width: 100%; max-width: 16px; border-radius: 2px 2px 0 0; opacity: .85; }
   .mbars .mb span { font-size: 11px; color: var(--text-muted); }
 
+  /* per-card panel */
+  .cardrow { padding: 9px 0; border-bottom: 1px solid var(--border); }
+  .cardrow:last-child { border-bottom: none; }
+  .cardrow .ctop { display: flex; align-items: baseline; gap: var(--sp2); }
+  .cardrow .cname { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: var(--sp2); min-width: 0; }
+  .cardrow .cdot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+  .cardrow .camt { margin-left: auto; font-weight: 600; white-space: nowrap; }
+  .cardrow .cpct { color: var(--text-muted); font-size: 12px; min-width: 38px; text-align: right; }
+  .cardrow .cmeta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+  /* category ranking + MoM */
+  .rank { display: flex; align-items: center; gap: var(--sp3); padding: 9px 0; border-bottom: 1px solid var(--border); }
+  .rank:last-child { border-bottom: none; }
+  .rank .rk { font-size: 12px; color: var(--text-muted); width: 16px; }
+  .rank .rdot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+  .rank .rn { flex: 1; font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rank .rbar-wrap { flex: 1.4; }
+  .rank .rbar { height: 6px; border-radius: 3px; background: var(--bg-raised); overflow: hidden; }
+  .rank .rbar > i { display: block; height: 100%; }
+  .rank .ra { font-weight: 600; min-width: 76px; text-align: right; }
+  .rank .rd { min-width: 60px; text-align: right; font-size: 12px; }
+  .delta.flat { color: var(--text-muted); }
+
+  /* spend calendar heatmap */
+  .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+  .cal .dow { font-size: 11px; color: var(--text-muted); text-align: center; padding-bottom: 2px; }
+  .cell { aspect-ratio: 1; border-radius: 5px; background: var(--bg-raised); border: 1px solid transparent;
+    display: flex; align-items: flex-start; justify-content: flex-end; padding: 3px 4px; }
+  .cell .dn { font-size: 10px; color: var(--text-muted); opacity: .7; }
+  .cell.future { opacity: .28; }
+  .cell.today { border-color: var(--net); }
+  .cell.void { background: transparent; border: none; }
+  .cell.hit { cursor: pointer; }
+  .cell.hit:hover { outline: 1px solid var(--text-muted); outline-offset: -1px; }
+  .cell.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .hdetail { margin-top: var(--sp3); border-top: 1px solid var(--border); padding-top: var(--sp3); }
+  .hdet-h { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: var(--sp2); }
+  .hdet-h b { color: var(--text-primary); font-weight: 600; }
+  .heatlegend { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); margin-top: var(--sp3); justify-content: flex-end; }
+  .heatlegend .sw { width: 14px; height: 10px; border-radius: 2px; }
+  .heat-tip { display: flex; gap: var(--sp4); flex-wrap: wrap; margin-top: var(--sp3); font-size: 12px; color: var(--text-muted); }
+  .heat-tip b { color: var(--text-primary); }
+
   .empty { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
   .footer { text-align: center; padding: var(--sp4); font-size: 12px; color: var(--text-muted); }
   .loading, .error { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
@@ -172,7 +215,7 @@
   var TXNS = [];
 
   var state = { tab:'category', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all', more:false };
-  var openRow=null, openProj=null;
+  var openRow=null, openProj=null, openHeatDay=null;
 
   function resolveScope(s){ if(/^\d{4}-\d{2}$/.test(s)){ var p=s.split('-'); return {level:'month',year:+p[0],month:+p[1]}; } if(/^\d{4}$/.test(s)) return {level:'year',year:+s}; if(s==='month') return {level:'month',year:NOW.year,month:NOW.month}; if(s==='year') return {level:'year',year:NOW.year}; return {level:'all'}; }
   function isCurMonth(r){ return r.level==='month'&&r.year===NOW.year&&r.month===NOW.month; }
@@ -321,6 +364,89 @@
     return h+d+'</div>';
   }
 
+  // blend --spend (#c46a58) toward --bg-raised (#222630) by t in 0..1 -> rgb() (avoids CSS color-mix dependency)
+  function blendSpend(t){ var a=[196,106,88], b=[34,38,48];
+    return 'rgb('+Math.round(b[0]+(a[0]-b[0])*t)+','+Math.round(b[1]+(a[1]-b[1])*t)+','+Math.round(b[2]+(a[2]-b[2])*t)+')'; }
+
+  // per-card spending: group scope expenses by bank + last-4; blank last-4 -> per-bank 未知 bucket
+  function cardPanel(expList){
+    if(!expList.length) return '<div class="empty" style="padding:var(--sp4) 0">此範圍沒有支出</div>';
+    var m={}; expList.forEach(function(t){ var bank=t.bank||'未知'; var l4=(t.last4==null||String(t.last4).trim()==='')?'未知':String(t.last4).trim();
+      var k=bank+'|'+l4; if(!m[k])m[k]={bank:bank,last4:l4,total:0,count:0}; m[k].total+=t.amount; m[k].count++; });
+    var arr=Object.keys(m).map(function(k){return m[k];}).sort(function(a,b){return b.total-a.total;});
+    var grand=arr.reduce(function(s,x){return s+x.total;},0), maxv=arr.length?arr[0].total:1, out='';
+    arr.forEach(function(c,i){ var color=PALETTE[i%PALETTE.length], pct=grand>0?Math.round(c.total/grand*100):0;
+      out+='<div class="cardrow"><div class="ctop"><span class="cname"><span class="cdot" style="background:'+color+'"></span>'+esc(c.bank)+' <span class="badge">•'+esc(c.last4)+'</span></span><span class="camt num">$'+fmt(c.total)+'</span><span class="cpct num">'+pct+'%</span></div>'
+        +'<div class="sharebar"><i style="width:'+(c.total/maxv*100).toFixed(1)+'%;background:'+color+'"></i></div>'
+        +'<div class="cmeta num">'+c.count+' 筆 · 平均 $'+fmt(c.total/c.count)+'/筆</div></div>'; });
+    return out;
+  }
+
+  // category ranking with month-over-month delta vs the same-period previous period (reuses prevScope/inUpto)
+  function rankPanel(r){
+    var expList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
+    if(!expList.length) return '<div class="empty" style="padding:var(--sp4) 0">此範圍沒有支出</div>';
+    var cur={}; expList.forEach(function(t){ cur[t.cat]=(cur[t.cat]||0)+t.amount; });
+    var pr=prevScope(r), prev={};
+    if(pr) TXNS.forEach(function(t){ if(t.type==='支出'&&inScope(t,pr)&&inUpto(t,pr,pr.upto)) prev[t.cat]=(prev[t.cat]||0)+t.amount; });
+    var arr=Object.keys(cur).map(function(k){return {name:k,cur:cur[k],prev:prev[k]||0};}).sort(function(a,b){return b.cur-a.cur;});
+    var maxv=arr.length?arr[0].cur:1, out='';
+    arr.forEach(function(it,i){ var color=PALETTE[i%PALETTE.length], d,cls;
+      if(!pr){ d='—'; cls='flat'; }
+      else if(!it.prev){ d='新'; cls='up'; }
+      else { var pctD=Math.round((it.cur-it.prev)/it.prev*100); if(pctD===0){d='持平';cls='flat';} else {cls=pctD>0?'up':'down'; d=(pctD>0?'▲':'▼')+Math.abs(pctD)+'%';} }
+      out+='<div class="rank"><span class="rk num">'+(i+1)+'</span><span class="rdot" style="background:'+color+'"></span><span class="rn">'+esc(it.name)+'</span>'
+        +'<span class="rbar-wrap"><span class="rbar"><i style="width:'+(it.cur/maxv*100).toFixed(1)+'%;background:'+color+'"></i></span></span>'
+        +'<span class="ra num">$'+fmt(it.cur)+'</span><span class="rd"><span class="delta '+cls+'">'+d+'</span></span></div>'; });
+    return out;
+  }
+
+  // spend calendar heatmap: single-month scope only; current partial month renders future days inert
+  function heatPanel(r){
+    if(r.level!=='month') return '';
+    var y=r.year, m=r.month, dim=daysInMonth(y,m);
+    var isCur=(y===NOW.year&&m===NOW.month), lastDay=isCur?Math.min(NOW.day,dim):dim;
+    var perDay={}; TXNS.forEach(function(t){ if(t.type==='支出'&&t.y===y&&t.m===m) perDay[t.d]=(perDay[t.d]||0)+t.amount; });
+    var maxDay=0; for(var dm=1;dm<=lastDay;dm++) maxDay=Math.max(maxDay,perDay[dm]||0);
+    var first=new Date(y,m-1,1).getDay(), dows=['日','一','二','三','四','五','六'];
+    var grid='<div class="cal">'; dows.forEach(function(w){ grid+='<div class="dow">'+w+'</div>'; });
+    for(var i=0;i<first;i++) grid+='<div class="cell void"></div>';
+    var peak={d:0,v:0}, spentDays=0, total=0;
+    for(var dd=1;dd<=dim;dd++){
+      var v=perDay[dd]||0, future=isCur&&dd>NOW.day, today=isCur&&dd===NOW.day;
+      if(!future){ total+=v; if(v>0) spentDays++; if(v>peak.v) peak={d:dd,v:v}; }
+      var t=maxDay>0?v/maxDay:0, bg=(future||v<=0)?'var(--bg-raised)':blendSpend(0.18+t*0.72);
+      var hit=(!future&&v>0), sel=hit&&openHeatDay===(y+'-'+m+'-'+dd);
+      grid+='<div class="cell'+(future?' future':'')+(today?' today':'')+(hit?' hit':'')+(sel?' sel':'')+'"'+(hit?' data-hday="'+y+'-'+m+'-'+dd+'"':'')+' style="background:'+bg+'" title="'+y+'/'+m+'/'+dd+(future?'':' $'+fmt(v))+'"><span class="dn num">'+dd+'</span></div>';
+    }
+    grid+='</div>';
+    var tip='<div class="heat-tip"><span>最高:<b class="num">'+(peak.d?m+'/'+peak.d+' · $'+fmt(peak.v):'—')+'</b></span><span>有消費 <b class="num">'+spentDays+'</b> 天</span><span>日均 <b class="num">$'+fmt(lastDay?total/lastDay:0)+'</b></span><span style="margin-left:auto;opacity:.85">點任一格看當天明細</span></div>';
+    var leg='<div class="heatlegend"><span>少</span><span class="sw" style="background:'+blendSpend(0.18)+'"></span><span class="sw" style="background:'+blendSpend(0.5)+'"></span><span class="sw" style="background:'+blendSpend(0.9)+'"></span><span>多</span></div>';
+    var det='';
+    if(openHeatDay){ var pp=openHeatDay.split('-'); if(+pp[0]===y&&+pp[1]===m){ var sd=+pp[2];
+      var list=TXNS.filter(function(t){return t.type==='支出'&&t.y===y&&t.m===m&&t.d===sd;}).sort(function(a,b){return b.amount-a.amount;});
+      var dtot=list.reduce(function(s,t){return s+t.amount;},0);
+      det='<div class="hdetail"><div class="hdet-h">'+m+' / '+sd+' 當天 · <b class="num">$'+fmt(dtot)+'</b> · '+list.length+' 筆</div>';
+      if(!list.length) det+='<div class="empty" style="padding:var(--sp3) 0">當日無支出</div>';
+      else list.forEach(function(t){ det+=txnRow(t,true); });
+      det+='</div>';
+    } }
+    return grid+tip+leg+det;
+  }
+
+  function analysisTab(){
+    var r=resolveScope(state.scope);
+    var expList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
+    var h='<div class="grid2">'
+      +'<div class="panel"><h3>信用卡別分析 <span class="h3note">各卡本範圍支出</span></h3>'+cardPanel(expList)+'</div>'
+      +'<div class="panel"><h3>類別排行 <span class="h3note">▲▼ 對比前期同期</span></h3>'+rankPanel(r)+'</div>'
+      +'</div>';
+    var heat=heatPanel(r);
+    if(heat) h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>消費日曆熱力圖 <span class="h3note">'+r.year+' / '+r.month+' · 每日花費濃淡</span></h3>'+heat+'</div>';
+    else h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>消費日曆熱力圖</h3><div class="empty" style="padding:var(--sp4) 0">熱力圖僅在選擇「單一月份」時顯示。目前為'+(r.level==='year'?'整年':'全部期間')+',請切到「當月」或用右上指定某月。</div></div>';
+    return h;
+  }
+
   function projectTab(){
     var yScope=state.projScope==='year';
     var pool=TXNS.filter(function(t){return t.type==='支出'&&t.tag&&(!yScope||t.y===NOW.year);});
@@ -352,28 +478,30 @@
   function monthlyBars(byMonth,color){ var keys=Object.keys(byMonth).sort().slice(-8); if(!keys.length) return ''; var max=Math.max.apply(null,keys.map(function(k){return byMonth[k];}))||1; var out='<div style="font-size:12px;color:var(--text-muted);margin-bottom:2px">每月新增</div><div class="mbars">'; keys.forEach(function(k){ var hgt=Math.round(byMonth[k]/max*46); out+='<div class="mb"><i style="height:'+Math.max(2,hgt)+'px;background:'+color+'" title="'+k+' $'+fmt(byMonth[k])+'"></i><span>'+(+k.split('-')[1])+'月</span></div>'; }); out+='</div>'; return out; }
 
   function render(){
-    var r=resolveScope(state.scope), catActive=state.tab==='category';
-    var h='<div class="head"><div class="head-top"><span class="title">交易 Dashboard</span><span class="period">'+(catActive?esc(periodLabel(r)):(state.projScope==='year'?NOW.year+' 年 · 項目累計':'全部期間 · 項目累計'))+'</span></div>'
-      +'<div class="tabs"><button data-tab="category" class="'+(catActive?'active':'')+'"><span class="tt">類別</span><span class="tsub">這段期間錢花在哪類?</span></button>'
-      +'<button data-tab="project" class="'+(!catActive?'active':'')+'"><span class="tt">項目 (TAG)</span><span class="tsub">某個目標累計花了多少?</span></button></div>';
-    if(catActive){
+    var r=resolveScope(state.scope), tab=state.tab, isProj=tab==='project';
+    var periodTxt = isProj ? (state.projScope==='year'?NOW.year+' 年 · 項目累計':'全部期間 · 項目累計') : esc(periodLabel(r));
+    function tb(id,tt,sub){ return '<button data-tab="'+id+'" class="'+(tab===id?'active':'')+'"><span class="tt">'+tt+'</span><span class="tsub">'+sub+'</span></button>'; }
+    var h='<div class="head"><div class="head-top"><span class="title">交易 Dashboard</span><span class="period">'+periodTxt+'</span></div>'
+      +'<div class="tabs">'+tb('category','類別','這段期間錢花在哪類?')+tb('project','項目 (TAG)','某個目標累計花了多少?')+tb('analysis','分析','卡別 · 熱力圖 · 排行')+'</div>';
+    if(!isProj){
       h+='<div class="controls"><span class="clabel">期間</span><button class="ctl'+(state.scope==='all'?' active':'')+'" data-scope="all">全部</button><button class="ctl'+(state.scope==='month'?' active':'')+'" data-scope="month">當月</button><button class="ctl'+(state.scope==='year'?' active':'')+'" data-scope="year">當年</button><span class="clabel" style="margin-left:6px">或指定</span><span class="sel'+(isPick()?' picked':' dim')+'"><select id="selYear">'+yearOptions()+'</select><select id="selMonth">'+monthOptions()+'</select></span></div>';
     } else {
       h+='<div class="controls"><span class="clabel">範圍</span><button class="ctl'+(state.projScope==='all'?' active':'')+'" data-pscope="all">全部累計</button><button class="ctl'+(state.projScope==='year'?' active':'')+'" data-pscope="year">本年</button><span class="hint">項目為長期累計,與期間篩選分開</span></div>';
     }
     h+='</div>';
-    h+= catActive ? categoryTab() : projectTab();
+    h+= tab==='category' ? categoryTab() : (tab==='analysis' ? analysisTab() : projectTab());
     h+='<div class="footer">即時讀取自 Transactions · 冷石板深色</div>';
     document.getElementById('app').innerHTML=h; attach();
   }
   function attach(){
     var app=document.getElementById('app');
-    app.querySelectorAll('.tabs button').forEach(function(b){ b.onclick=function(){ state.tab=this.getAttribute('data-tab'); openRow=null; openProj=null; state.q=''; render(); }; });
-    app.querySelectorAll('.ctl[data-scope]').forEach(function(b){ b.onclick=function(){ var s=this.getAttribute('data-scope'); state.scope=s; if(s==='year'){state.selYear=NOW.year;state.selMonth=0;} else if(s==='month'){state.selYear=NOW.year;state.selMonth=NOW.month;} openRow=null; render(); }; });
+    app.querySelectorAll('.tabs button').forEach(function(b){ b.onclick=function(){ state.tab=this.getAttribute('data-tab'); openRow=null; openProj=null; openHeatDay=null; state.q=''; render(); }; });
+    app.querySelectorAll('.ctl[data-scope]').forEach(function(b){ b.onclick=function(){ var s=this.getAttribute('data-scope'); state.scope=s; if(s==='year'){state.selYear=NOW.year;state.selMonth=0;} else if(s==='month'){state.selYear=NOW.year;state.selMonth=NOW.month;} openRow=null; openHeatDay=null; render(); }; });
+    app.querySelectorAll('.cell[data-hday]').forEach(function(c){ c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); }; });
     app.querySelectorAll('.ctl[data-pscope]').forEach(function(b){ b.onclick=function(){ state.projScope=this.getAttribute('data-pscope'); openProj=null; render(); }; });
     var mt=app.querySelector('[data-more]'); if(mt) mt.onclick=function(){ state.more=!state.more; render(); };
     var sy=document.getElementById('selYear'), sm=document.getElementById('selMonth');
-    function pickSel(){ state.selYear=+sy.value; state.selMonth=+sm.value; state.scope=state.selMonth===0?String(state.selYear):(state.selYear+'-'+('0'+state.selMonth).slice(-2)); openRow=null; render(); }
+    function pickSel(){ state.selYear=+sy.value; state.selMonth=+sm.value; state.scope=state.selMonth===0?String(state.selYear):(state.selYear+'-'+('0'+state.selMonth).slice(-2)); openRow=null; openHeatDay=null; render(); }
     if(sy) sy.onchange=pickSel; if(sm) sm.onchange=pickSel;
     var q=document.getElementById('q'); if(q) q.oninput=function(){ state.q=this.value; var pos=this.selectionStart; render(); var q2=document.getElementById('q'); if(q2){ q2.focus(); try{q2.setSelectionRange(pos,pos);}catch(e){} } };
     app.querySelectorAll('.row-card').forEach(function(c){ c.onclick=function(e){ if(e.target.id==='q')return; var n=this.getAttribute('data-row'); openRow=(openRow===n)?null:n; render(); }; });
