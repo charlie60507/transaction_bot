@@ -60,11 +60,16 @@ function getAllTxns() {
     const dt = raw instanceof Date ? raw : new Date(raw);
     if (isNaN(dt.getTime())) continue;           // skip blank / unparseable rows
     const inout = String(row[CFG.IDX_INOUT] || '').trim();
+    // Transfers (Cube 轉帳) are money moved between the user's own accounts —
+    // not spending or income. The bot writes category '轉帳' for them; flag as a
+    // third type so every 收入/支出 filter downstream excludes them automatically.
+    const isTransfer = String(row[CFG.IDX_CATEGORY_AUTO] || '').trim() === '轉帳' ||
+                       String(row[CFG.IDX_CATEGORY_MANUAL] || '').trim() === '轉帳';
     out.push({
       y: Number(Utilities.formatDate(dt, CFG.TZ, 'yyyy')),
       m: Number(Utilities.formatDate(dt, CFG.TZ, 'M')),
       d: Number(Utilities.formatDate(dt, CFG.TZ, 'd')),
-      type: inout === '收入' ? '收入' : '支出',
+      type: isTransfer ? '轉帳' : (inout === '收入' ? '收入' : '支出'),
       amount: Number(row[CFG.IDX_AMOUNT]) || 0,
       cat: rowCategory_(row) || '未分類',
       merchant: String(row[CFG.IDX_MERCHANT] || ''),

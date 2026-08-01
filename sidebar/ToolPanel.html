@@ -267,6 +267,11 @@
 
     h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>每月收支趨勢 <span class="h3note">'+trendMaxNote(r,subNames,subTot)+'</span></h3>'+trendChart(r,subNames,subTot)+'</div>';
 
+    var transfers = TXNS.filter(function(t){ return t.type==='轉帳'&&inScope(t,r); }).sort(function(a,b){return b.amount-a.amount;});
+    if(transfers.length){ var trTot=transfers.reduce(function(s,t){return s+t.amount;},0);
+      h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>轉帳 <span class="h3note">帳戶間搬移 · 不計入收支</span></h3>';
+      transfers.slice(0,20).forEach(function(t){ h+='<div class="lrow"><span class="badge">'+t.bank+'</span><span class="ln">'+esc(t.merchant||'轉帳')+'</span><span class="ls num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="la num">$'+fmt(t.amount)+'</span></div>'; });
+      h+='<div class="ltot"><span class="t-l">轉帳合計('+transfers.length+' 筆)</span><span class="t-v num">$'+fmt(trTot)+'</span></div></div>'; }
     h+='<button class="moretog" data-more>'+(state.more?'▲ 收合分析':'▾ 更多分析:定期訂閱 · Top 商店')+'</button>';
     if(state.more){
       h+='<div class="grid2"><div class="panel"><h3>定期訂閱 <span class="h3note">每月固定 · 年約 $'+fmt(subTot*12)+'</span></h3>'+subPanel(subs,subTot)+'</div>'
