@@ -132,6 +132,18 @@ function appendLast7DaysToSheet() {
 
           const parsed = parseFubonTransfer_(msg);
           if (!parsed) continue;
+          // One transfer produces two mails: an initiation notice and a success notice.
+          // Both parse, and the loose dedup key would collapse them to one row anyway —
+          // but only the success notice carries 存摺留言, so skip a bare initiation notice
+          // when a richer sibling exists in the same thread.
+          if (parsed.merchant === '轉帳' && th.getMessages().some(function (other) {
+                if (other.getId() === msg.getId()) return false;
+                const alt = parseFubonTransfer_(other);
+                return alt && alt.amount === parsed.amount && alt.merchant !== '轉帳';
+              })) {
+            console.log(`Skipping Fubon transfer initiation notice (richer sibling in thread): ${msg.getId()}`);
+            continue;
+          }
           const { id, dateStr, dt, last4, amount, merchant, category, link } = parsed;
           if (dateStr < ymdStart7d || dateStr > ymdToday) continue;
 
@@ -375,19 +387,33 @@ function parseFubonTransfer_(msg) {
   const dateStr = `${when[1]}/${String(when[2]).padStart(2, '0')}/${String(when[3]).padStart(2, '0')}`;
   const timeStr = normalizeTime_(when[4] || '') || '00:00:00';
 
-  // 轉出金額 TWD 23,500  — the amount actually leaving the account.
-  const amtMatch = text.match(/轉出金額\s*[:：]?\s*(?:TWD|NTD|NT\$)?\s*([\d,]+)/);
+  // The amount label differs between the two mails Fubon sends for one transfer: the
+  // initiation notice says 轉帳金額, the success notice says 轉出金額. Accept either.
+  const amtMatch = text.match(/(?:轉出金額|轉帳金額)\s*[:：]?\s*(?:TWD|NTD|NT\$)?\s*([\d,]+)/);
   const amount = amtMatch ? Number(amtMatch[1].replace(/,/g, '')) : '';
   if (!amount) return null;
 
-  // 轉入帳號 822(中國信託)-…3057 — last 4-5 digits of the PAYEE account, mirroring
-  // parseCathayTransfer_ which also keys off 轉入帳號.
-  const accMatch = text.match(/轉入帳號\s*[:：]?\s*.*?(\d{4,5})\s*$/m);
-  const last4 = accMatch ? accMatch[1] : '';
+  // 轉入帳號 822(中國信託)-00009015****3057 — last digits of the PAYEE account, mirroring
+  // parseCathayTransfer_ which also keys off 轉入帳號. The account is one space-free token,
+  // so grab that token and take its trailing digit run. Deliberately NOT anchored to
+  // end-of-line: when the de-tagged text keeps the customer-service number on the same
+  // line, an end-anchored pattern captures the phone number as the payee account.
+  const accMatch = text.match(/轉入帳號\s*[:：]?\s*([^\s]{4,40})/);
+  const last4 = accMatch ? ((accMatch[1].match(/(\d{4,5})(?!.*\d)/) || [])[1] || '') : '';
 
   // 存摺留言 is the user's own note ("楊程皓訂金") — the most meaningful description.
-  const noteMatch = text.match(/存摺留言(?:\(給對方\)|（給對方）)?\s*[:：]?\s*(.*)/);
-  const note = noteMatch ? noteMatch[1].trim() : '';
+  // The success mail carries TWO of them, 存摺留言（給自己） and 存摺留言(給對方), one after
+  // the other on the same de-tagged line. Match a specific variant first and stop at the
+  // next field label, or the capture swallows both plus whatever follows.
+  const STOP = '(?=\\s*(?:存摺留言|手續費|轉入帳號|轉出帳號|即時餘額|若您|台北富邦|$))';
+  const note = (function () {
+    const variants = ['存摺留言\\s*[（(]\\s*給對方\\s*[）)]', '存摺留言\\s*[（(]\\s*給自己\\s*[）)]', '存摺留言'];
+    for (let i = 0; i < variants.length; i++) {
+      const m = text.match(new RegExp(variants[i] + '\\s*[:：]?\\s*(.+?)' + STOP));
+      if (m && m[1].trim()) return m[1].trim();
+    }
+    return '';
+  })();
   const merchant = note || '轉帳';
 
   const dt = toDateInTZ_(dateStr, timeStr, TZ);
