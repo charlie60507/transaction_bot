@@ -163,7 +163,11 @@ function addTxn(fields) {
   row[CFG.IDX_CATEGORY_MANUAL] = cat;
   if (tagIdx !== -1) row[tagIdx] = String(fields.tag || '');
 
-  const rowNum = lastDataRow_(sh) + 1;
+  // Insert into the date-ordered position rather than appending, so the sheet stays
+  // sorted and the new row sits among its own time period.
+  const pos = insertPositionForDate_(sh, dt);
+  const rowNum = pos.row;
+  if (!pos.appending) sh.insertRowBefore(rowNum);
   sh.getRange(rowNum, 1, 1, ncol).setValues([row]);
   sh.getRange(rowNum, CFG.IDX_DATE + 1).setNumberFormat('yyyy/mm/dd hh:mm:ss');
   sh.getRange(rowNum, CFG.IDX_POSTED + 1).setDataValidation(
@@ -270,6 +274,18 @@ function rowCategory_(row) {
 
 /** 0-based index of the "TAG" header in Transactions, or -1 if absent */
 /**
+ * Timestamp of a column-C cell, or NaN when it holds no usable date. Dates normally
+ * arrive as Date objects, but a hand-typed cell can come back as a string — both must
+ * count, and both callers below must agree on what counts, or the row that bounds the
+ * data and the row that decides ordering can disagree about the same cell.
+ */
+function cellDateTime_(v) {
+  if (v instanceof Date) return v.getTime();
+  if (v === '' || v === null || v === undefined) return NaN;
+  return new Date(v).getTime();
+}
+
+/**
  * Last row that holds an actual transaction, i.e. the last row with a real date in
  * column C. Returns 1 (the header) when there is no data.
  *
@@ -284,12 +300,38 @@ function lastDataRow_(sh) {
   if (lastRow <= 1) return 1;
   const dates = sh.getRange(2, CFG.IDX_DATE + 1, lastRow - 1, 1).getValues();
   for (let i = dates.length - 1; i >= 0; i--) {
-    const v = dates[i][0];
-    if (v instanceof Date || (v !== '' && v !== null && !isNaN(new Date(v).getTime()))) {
-      return i + 2;
-    }
+    if (!isNaN(cellDateTime_(dates[i][0]))) return i + 2;
   }
   return 1;
+}
+
+/**
+ * Where a transaction dated `dt` belongs so the sheet STAYS in the order it is already
+ * in. Returns { row, appending }: when appending is false the caller must
+ * insertRowBefore(row) to make space; when true, row is one past the last data row.
+ *
+ * The direction is detected from the data (first vs last date) instead of assuming ASC,
+ * because the bot's order comes from the SORT_ORDER script property and may be DESC.
+ * An empty or single-date sheet appends, which is correct under either direction.
+ */
+function insertPositionForDate_(sh, dt) {
+  const last = lastDataRow_(sh);
+  if (last <= 1) return { row: 2, appending: true };
+
+  const times = sh.getRange(2, CFG.IDX_DATE + 1, last - 1, 1).getValues()
+    .map(r => cellDateTime_(r[0]));
+  const known = times.filter(t => !isNaN(t));
+  if (!known.length) return { row: last + 1, appending: true };
+
+  const descending = known[0] > known[known.length - 1];
+  const target = dt.getTime();
+  for (let i = 0; i < times.length; i++) {
+    const t = times[i];
+    if (isNaN(t)) continue;
+    // First existing row that should sort AFTER the new one — insert ahead of it.
+    if (descending ? t < target : t > target) return { row: i + 2, appending: false };
+  }
+  return { row: last + 1, appending: true };
 }
 
 function getTagColIndex_(sh) {
