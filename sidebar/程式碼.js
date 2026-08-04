@@ -49,6 +49,51 @@ function nowYMD_() {
   };
 }
 
+/**
+ * Stable unique identifier for one Transactions row.
+ *
+ * MessageId alone is NOT unique: a Cathay 消費彙整通知 carries several transactions and the
+ * bot stamps the SAME message id on every row it produces (measured: 389 of 1017 rows share
+ * an id, 130 groups, the largest 12 rows). Locating a row by message id therefore always hit
+ * the FIRST row of the group, so edits to any later row silently landed on the wrong
+ * transaction — 259 rows were effectively uneditable.
+ *
+ * The key composes the fields the UI never edits — message id, timestamp, amount, card last4
+ * — plus an occurrence index for rows that are identical even in those. So it survives both
+ * an edit and the bot re-sorting the sheet.
+ */
+function txnKey_(row, occurrence) {
+  const dt = row[CFG.IDX_DATE];
+  const t = dt instanceof Date ? dt.getTime() : String(dt || '');
+  return [String(row[CFG.IDX_MESSAGEID] || ''), t, String(row[CFG.IDX_AMOUNT] || ''),
+          String(row[CFG.IDX_LAST4] || ''), String(occurrence || 0)].join('|');
+}
+
+/**
+ * Row number for a key produced by txnKey_. Falls back to matching on message id alone when
+ * given a bare id, so a page loaded before this change still works instead of erroring.
+ * Returns -1 when nothing matches.
+ */
+function findRowByKey_(sh, key) {
+  const last = sh.getLastRow();
+  if (last <= 1) return -1;
+  const rows = sh.getRange(2, 1, last - 1, sh.getLastColumn()).getValues();
+  const parts = String(key).split('|');
+  if (parts.length < 5) {
+    for (let i = 0; i < rows.length; i++) {
+      if (String(rows[i][CFG.IDX_MESSAGEID]) === String(key)) return i + 2;
+    }
+    return -1;
+  }
+  const seen = {};
+  for (let i = 0; i < rows.length; i++) {
+    const base = txnKey_(rows[i], 0).split('|').slice(0, 4).join('|');
+    const n = seen[base] = (seen[base] === undefined ? 0 : seen[base] + 1);
+    if (txnKey_(rows[i], n) === String(key)) return i + 2;
+  }
+  return -1;
+}
+
 /** Flat array of ALL transactions for the client-side dashboard.
  *  Fat-frontend: NO aggregation here — the v5 page does all of it. */
 function getAllTxns() {
@@ -57,6 +102,7 @@ function getAllTxns() {
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
   const tagIdx = getTagColIndex_(sh);            // -1 if no TAG header
   const out = [];
+  const seenKey = {};
   for (const row of rows) {
     const raw = row[CFG.IDX_DATE];
     const dt = raw instanceof Date ? raw : new Date(raw);
@@ -77,7 +123,13 @@ function getAllTxns() {
       bank: String(row[CFG.IDX_BANK] || ''),
       last4: String(row[CFG.IDX_LAST4] || ''),
       link: String(row[CFG.IDX_LINK] || ''),
-      id: String(row[CFG.IDX_MESSAGEID] || ''),
+      // `id` is the composite key, not the bare MessageId — see txnKey_. It still starts
+      // with the message id, so the `manual-` prefix checks keep working unchanged.
+      id: (function () {
+        const base = txnKey_(row, 0).split('|').slice(0, 4).join('|');
+        const n = seenKey[base] = (seenKey[base] === undefined ? 0 : seenKey[base] + 1);
+        return txnKey_(row, n);
+      })(),
       posted: row[CFG.IDX_POSTED] === true
     });
   }
@@ -103,12 +155,8 @@ function updateTxn(messageId, patch) {
   const last = sh.getLastRow();
   if (last <= 1) throw new Error('沒有交易資料');
 
-  const ids = sh.getRange(2, CFG.IDX_MESSAGEID + 1, last - 1, 1).getValues();
-  let rowNum = -1;
-  for (let i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === messageId) { rowNum = i + 2; break; }
-  }
-  if (rowNum === -1) throw new Error('找不到該筆交易 (MessageId=' + messageId + ')');
+  const rowNum = findRowByKey_(sh, messageId);
+  if (rowNum === -1) throw new Error('找不到該筆交易 (key=' + messageId + ')');
 
   if ('merchant' in patch) {
     sh.getRange(rowNum, CFG.IDX_MERCHANT + 1).setValue(String(patch.merchant || ''));
@@ -182,7 +230,8 @@ function addTxn(fields) {
     y: dt.getFullYear(), m: dt.getMonth() + 1, d: dt.getDate(),
     type: type, amount: amount, cat: cat || '未分類',
     merchant: String(fields.merchant || ''), tag: String(fields.tag || ''),
-    bank: source, last4: '', link: '', id: id, posted: true
+    bank: source, last4: '', link: '',
+    id: txnKey_(row, 0), posted: true
   };
 }
 
@@ -194,11 +243,10 @@ function deleteTxn(messageId) {
   if (!sh) throw new Error('找不到 Transactions 工作表');
   const last = sh.getLastRow();
   if (last <= 1) throw new Error('沒有交易資料');
-  const ids = sh.getRange(2, CFG.IDX_MESSAGEID + 1, last - 1, 1).getValues();
-  for (let i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === messageId) { sh.deleteRow(i + 2); return { ok: true }; }
-  }
-  throw new Error('找不到該筆手動交易');
+  const rowNum = findRowByKey_(sh, messageId);
+  if (rowNum === -1) throw new Error('找不到該筆手動交易');
+  sh.deleteRow(rowNum);
+  return { ok: true };
 }
 
 /** Web App URL of the user's live deployment.
