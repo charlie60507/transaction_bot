@@ -114,6 +114,63 @@ function appendLast7DaysToSheet() {
       }
     }
 
+    /** ===== Fubon (Transfer): one record per email ===== */
+    {
+      const q = [
+        GMAIL_CFG.FUBON_TRANSFER_QUERY,
+        'after:' + fmtYMD_(start7d0),
+        'before:' + fmtYMD_(addDays_(today0, 1))
+      ].join(' ');
+      const threads = GmailApp.search(q, 0, 100);
+      for (const th of threads) {
+        for (const msg of th.getMessages()) {
+          // STRICT CHECK: If MessageID exists, skip immediately (same as Cathay transfer)
+          if (existingMessageIds.has(msg.getId())) {
+            console.log(`Skipping duplicate Fubon transfer email (MessageId exists): ${msg.getId()}`);
+            continue;
+          }
+
+          const parsed = parseFubonTransfer_(msg);
+          if (!parsed) continue;
+          const { id, dateStr, dt, last4, amount, merchant, category, link } = parsed;
+          if (dateStr < ymdStart7d || dateStr > ymdToday) continue;
+
+          console.log(`=== Subject: ${msg.getSubject()} | Date: ${msg.getDate()} | total 1 entry ===`);
+
+          const row = [
+            false,           // A recorded (checkbox)
+            '富邦',          // B bank name
+            dt,              // C transfer datetime (Date)
+            last4 || '',     // D payee account last digits
+            amount || '',    // E amount NTD (轉出金額)
+            merchant || '',  // F merchant/note (editable)
+            category || '',  // G category — '轉帳', which drives column J
+            link,            // H Gmail link
+            id               // I MessageId
+          ];
+
+          const key = makeDedupKey_({ bank: '富邦', dt, last4: row[3], amount: row[4], messageId: row[8] });
+          const looseKey = makeLooseDedupKey_({ bank: '富邦', dt, amount: row[4] });
+
+          if (!existingKeySet.has(key) && !existingLooseKeySet.has(looseKey)) {
+            existingKeySet.add(key);
+            existingLooseKeySet.add(looseKey);
+            newRows.push(row);
+            console.log(`✅ Created transaction (Fubon Transfer): ${JSON.stringify({
+              bank: '富邦',
+              payeeAccount: row[3],
+              authDate: fmtYMD_(dt),
+              authTime: Utilities.formatDate(dt, TZ, 'HH:mm:ss'),
+              amount: row[4],
+              currency: 'TWD',
+              merchant: row[5],
+              category: row[6]
+            })}`);
+          }
+        }
+      }
+    }
+
     /** ===== Cathay (Consumption): multiple records per email ===== */
     {
       const q = `label:"${GMAIL_CFG.CATHAY_LABEL}" subject:"${GMAIL_CFG.CATHAY_SUBJECT}" after:${fmtYMD_(start7d0)} before:${fmtYMD_(addDays_(today0, 1))}`;
@@ -288,6 +345,66 @@ function parseFubonEmail_(msg) {
 
   const dt = toDateInTZ_(dateStr, timeStr || '00:00:00', TZ);
   return { id, dateStr, dt, last4, amount, merchant, category, link };
+}
+
+/**
+ * Fubon: parse a 臺幣轉帳 notification email.
+ *
+ * Deliberately separate from parseFubonEmail_, which parses CONSUMPTION fields
+ * (card last4 / merchant / category) that do not exist in a transfer email. Shaped
+ * after parseCathayTransfer_ so both transfer paths return the same record and the
+ * write side stays uniform.
+ *
+ * Amount is 轉出金額 (the transferred sum). The 手續費 line is intentionally NOT
+ * recorded — one email yields one row, matching the Cathay transfer path.
+ */
+function parseFubonTransfer_(msg) {
+  const id = msg.getId();
+  const plain = msg.getPlainBody();
+  const html = msg.getBody();
+  const link = `https://mail.google.com/mail/#all/${id}`;
+  // Fubon renders these as an HTML table; fall back to plain text for either layout.
+  const text = `${plain}\n${stripTags_(html)}`;
+
+  // 交易時間 2026/07/26 17:36:36  (date required, time optional). The captured year is
+  // already Gregorian and 4-digit, so it is normalised here rather than through
+  // parseDate_ — same as parseCathayTransfer_, which also passes its capture straight
+  // through. (parseDate_ tries its ROC branch first and would read "2026" as ROC 202.)
+  const when = text.match(/交易時間\s*[:：]?\s*(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:\s+(\d{1,2}:\d{2}(?::\d{2})?))?/);
+  if (!when) return null;
+  const dateStr = `${when[1]}/${String(when[2]).padStart(2, '0')}/${String(when[3]).padStart(2, '0')}`;
+  const timeStr = normalizeTime_(when[4] || '') || '00:00:00';
+
+  // 轉出金額 TWD 23,500  — the amount actually leaving the account.
+  const amtMatch = text.match(/轉出金額\s*[:：]?\s*(?:TWD|NTD|NT\$)?\s*([\d,]+)/);
+  const amount = amtMatch ? Number(amtMatch[1].replace(/,/g, '')) : '';
+  if (!amount) return null;
+
+  // 轉入帳號 822(中國信託)-…3057 — last 4-5 digits of the PAYEE account, mirroring
+  // parseCathayTransfer_ which also keys off 轉入帳號.
+  const accMatch = text.match(/轉入帳號\s*[:：]?\s*.*?(\d{4,5})\s*$/m);
+  const last4 = accMatch ? accMatch[1] : '';
+
+  // 存摺留言 is the user's own note ("楊程皓訂金") — the most meaningful description.
+  const noteMatch = text.match(/存摺留言(?:\(給對方\)|（給對方）)?\s*[:：]?\s*(.*)/);
+  const note = noteMatch ? noteMatch[1].trim() : '';
+  const merchant = note || '轉帳';
+
+  const dt = toDateInTZ_(dateStr, timeStr, TZ);
+  return { id, dateStr, dt, last4, amount, merchant, category: '轉帳', link };
+}
+
+/** Minimal tag stripper so an HTML-only email still yields matchable label/value text. */
+function stripTags_(html) {
+  if (!html) return '';
+  return String(html)
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<br\s*\/?>|<\/(p|div|tr|td|th|li|table)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/[ \t　]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n');
 }
 
 /** Cathay: line-based state machine (multiple records + auth time) */
@@ -582,6 +699,9 @@ function loadConfig_() {
     header: parseHeader_(props.getProperty('HEADER')),
     gmailConfig: {
       FUBON_QUERY_SUBJECT: props.getProperty('FUBON_QUERY_SUBJECT') || '(subject:"即時消費通知" OR subject:"富邦信用卡消費通知" OR subject:"富邦信用卡即時消費通知")',
+      // Transfers are a SEPARATE query: their subject matches none of the consumption
+      // subjects above, and their body layout needs its own parser.
+      FUBON_TRANSFER_QUERY: props.getProperty('FUBON_TRANSFER_QUERY') || 'from:mbank@dfm.taipeifubon.com.tw subject:"臺幣轉帳"',
       CATHAY_LABEL: props.getProperty('CATHAY_LABEL') || '國泰世華消費',
       CATHAY_SUBJECT: props.getProperty('CATHAY_SUBJECT') || '消費彙整通知'
     },
