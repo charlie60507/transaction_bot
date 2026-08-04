@@ -489,7 +489,13 @@
   // optimistic edit: update local state now, write back, revert on failure
   function applyEdit(id,field,value){
     var t=txnById(id); if(!t) return;
-    var prev=t[field]; t[field]=value; render();
+    var prev=t[field]; t[field]=value;
+    // A title edit commits on blur, which on a touch device happens as part of the SAME tap
+    // that is heading for another control. Re-rendering here would replace the DOM before
+    // that tap lands, so 已記帳 pressed straight after typing was silently dropped. The input
+    // already shows the new text, so there is nothing to repaint — other views pick it up on
+    // the next natural render.
+    if (field !== 'merchant') render();
     var patch={}; patch[field]=value;
     google.script.run
       .withSuccessHandler(function(){ if(field==='posted') toast(value?'已記帳 · 從清單移除':'已取回待記帳'); })
