@@ -163,7 +163,7 @@ function addTxn(fields) {
   row[CFG.IDX_CATEGORY_MANUAL] = cat;
   if (tagIdx !== -1) row[tagIdx] = String(fields.tag || '');
 
-  const rowNum = sh.getLastRow() + 1;
+  const rowNum = lastDataRow_(sh) + 1;
   sh.getRange(rowNum, 1, 1, ncol).setValues([row]);
   sh.getRange(rowNum, CFG.IDX_DATE + 1).setNumberFormat('yyyy/mm/dd hh:mm:ss');
   sh.getRange(rowNum, CFG.IDX_POSTED + 1).setDataValidation(
@@ -269,6 +269,29 @@ function rowCategory_(row) {
 }
 
 /** 0-based index of the "TAG" header in Transactions, or -1 if absent */
+/**
+ * Last row that holds an actual transaction, i.e. the last row with a real date in
+ * column C. Returns 1 (the header) when there is no data.
+ *
+ * NOT the same as sh.getLastRow(): this sheet carries a long tail of rows whose only
+ * content is an unchecked 已記帳 checkbox in column A. A `false` is real cell content,
+ * so getLastRow() counts those rows — measured at 788 of them, putting getLastRow() at
+ * 1804 while the last transaction sat at row 1016. Appending at getLastRow()+1 therefore
+ * stranded a new row ~788 rows below the visible data, where nobody would find it.
+ */
+function lastDataRow_(sh) {
+  const lastRow = sh.getLastRow();
+  if (lastRow <= 1) return 1;
+  const dates = sh.getRange(2, CFG.IDX_DATE + 1, lastRow - 1, 1).getValues();
+  for (let i = dates.length - 1; i >= 0; i--) {
+    const v = dates[i][0];
+    if (v instanceof Date || (v !== '' && v !== null && !isNaN(new Date(v).getTime()))) {
+      return i + 2;
+    }
+  }
+  return 1;
+}
+
 function getTagColIndex_(sh) {
   const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
   return headers.indexOf('TAG');
