@@ -415,7 +415,9 @@
     var out='<div class="tgrid" style="top:18px"><span class="num">$'+fmt(max)+'</span></div><div class="tgrid" style="top:'+(18+54)+'px"><span class="num">$'+fmt(max/2)+'</span></div>';
     data.forEach(function(d){ var hi=Math.round(d.inc/max*108), he=Math.round(d.exp/max*108), hp=d.partial?Math.round((d.proj-d.exp)/max*108):0;
       var expTop=(hp>0?'0 0 0 0':'2px 2px 0 0');
-      var netc=d.net>=0?'var(--income)':'var(--spend)', nets=(d.net>=0?'+':'−')+'$'+fmt(Math.abs(d.net)/1000>=1?Math.round(Math.abs(d.net)/1000)+'k':Math.abs(d.net));
+      // fmt() is numeric-only (Math.round().toLocaleString()), so the 'k' suffix must be
+      // appended AFTER formatting — passing "196k" back into fmt() yields NaN.
+      var netc=d.net>=0?'var(--income)':'var(--spend)', an=Math.abs(d.net), nets=(d.net>=0?'+':'−')+'$'+(an/1000>=1?fmt(an/1000)+'k':fmt(an));
       out+='<div class="tcol'+(d.partial?' partial':'')+'"><div class="tbars"><i class="b-inc" style="height:'+Math.max(2,hi)+'px" title="收入 $'+fmt(d.inc)+'"></i><div class="spendstack">'+(hp>0?'<i class="b-proj" style="height:'+hp+'px" title="預估再增 $'+fmt(d.proj-d.exp)+'"></i>':'')+'<i class="b-exp" style="height:'+Math.max(2,he)+'px;border-radius:'+expTop+'" title="支出 $'+fmt(d.exp)+'"></i></div></div><div class="tlabel">'+d.label+(d.partial?' 至今':'')+'</div><div class="tnetv" style="color:'+netc+'" title="淨額 '+(d.net>=0?'+':'−')+'$'+fmt(Math.abs(d.net))+'">淨'+nets+'</div></div>'; });
     return '<div class="trend">'+out+'</div><div class="tlegend"><span><i style="background:var(--income)"></i>收入</span><span><i style="background:var(--spend)"></i>支出</span><span><i class="proj"></i>月底預估</span><span>「淨」=當月收支差</span></div>';
   }
