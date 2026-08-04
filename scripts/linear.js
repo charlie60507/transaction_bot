@@ -10,6 +10,9 @@
  *   node scripts/linear.js --title "..." [--desc "..."] [--desc-file f.md] \
  *        [--priority 0..4] [--labels "a,b"] [--team CT] [--dry-run]
  *   node scripts/linear.js --file tickets.json          # batch (array of issues)
+ *   node scripts/linear.js --list                       # list team issues + status
+ *   node scripts/linear.js --set "CT-6=Done" [--set "CT-10=In Progress"] [--dry-run]
+ *   node scripts/linear.js --comment CT-14 --body "..." | --body-file note.md [--dry-run]
  *
  * tickets.json: [{ "title": "...", "description": "...", "priority": 3,
  *                  "labels": ["enhancement"] }, ...]
@@ -54,11 +57,12 @@ async function gql(key, query, variables) {
 }
 
 function parseArgs(argv) {
-  const a = { team: null, priority: undefined, labels: [] };
+  const a = { team: null, priority: undefined, labels: [], sets: [] };
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
     if (t === '--whoami') a.whoami = true;
     else if (t === '--teams') a.teams = true;
+    else if (t === '--list') a.list = true;
     else if (t === '--dry-run') a.dryRun = true;
     else if (t === '--title') a.title = argv[++i];
     else if (t === '--desc') a.description = argv[++i];
@@ -67,6 +71,11 @@ function parseArgs(argv) {
     else if (t === '--labels') a.labels = argv[++i].split(',').map(s => s.trim()).filter(Boolean);
     else if (t === '--team') a.team = argv[++i];
     else if (t === '--file') a.file = argv[++i];
+    else if (t === '--set') a.sets.push(argv[++i]);
+    else if (t === '--get') a.get = argv[++i];
+    else if (t === '--comment') a.comment = argv[++i];
+    else if (t === '--body') a.body = argv[++i];
+    else if (t === '--body-file') a.body = fs.readFileSync(argv[++i], 'utf8');
   }
   return a;
 }
@@ -80,7 +89,7 @@ async function resolveTeam(key, teamKey) {
 
 async function resolveLabels(key, teamId, names) {
   if (!names || !names.length) return [];
-  const d = await gql(key, 'query($t:ID!){ team(id:$t){ labels{ nodes{ id name } } } }', { t: teamId });
+  const d = await gql(key, 'query($t:String!){ team(id:$t){ labels{ nodes{ id name } } } }', { t: teamId });
   const map = {};
   d.team.labels.nodes.forEach(l => { map[l.name.toLowerCase()] = l.id; });
   const ids = [];
@@ -101,6 +110,65 @@ async function createIssue(key, team, issue, dryRun) {
   const d = await gql(key, 'mutation($i:IssueCreateInput!){ issueCreate(input:$i){ success issue{ identifier url } } }', { i: input });
   if (!d.issueCreate.success) die('issueCreate failed for: ' + issue.title);
   console.log('  ✓ ' + d.issueCreate.issue.identifier + '  ' + d.issueCreate.issue.url + '  — ' + issue.title);
+}
+
+async function fetchIssues(key, teamId) {
+  const d = await gql(key, 'query($t:String!){ team(id:$t){ issues(first:100){ nodes{ id identifier title priority state{ name type } url } } } }', { t: teamId });
+  return d.team.issues.nodes.sort((a, b) => a.identifier.localeCompare(b.identifier, undefined, { numeric: true }));
+}
+
+async function fetchStates(key, teamId) {
+  const d = await gql(key, 'query($t:String!){ team(id:$t){ states{ nodes{ id name type } } } }', { t: teamId });
+  const map = {};
+  d.team.states.nodes.forEach(s => { map[s.name.toLowerCase()] = s.id; });
+  return map;
+}
+
+async function fetchOneIssue(key, teamId, identifier) {
+  // identifier like "CT-13" -> number 13
+  const num = Number(String(identifier).split('-').pop());
+  if (!num) die('Bad identifier: ' + identifier);
+  const d = await gql(key,
+    'query($t:String!,$n:Float!){ team(id:$t){ issues(filter:{number:{eq:$n}}){ nodes{ id identifier title description priority url state{ name type } assignee{ name email } labels{ nodes{ name } } } } } }',
+    { t: teamId, n: num });
+  return (d.team.issues.nodes || [])[0] || null;
+}
+
+async function setStatus(key, teamId, spec, dryRun) {
+  // spec: "CT-6=Done"
+  const eq = spec.indexOf('=');
+  if (eq === -1) die('--set expects "IDENTIFIER=State name" (e.g. "CT-6=Done"), got: ' + spec);
+  const ident = spec.slice(0, eq).trim();
+  const stateName = spec.slice(eq + 1).trim();
+  const issues = await fetchIssues(key, teamId);
+  const issue = issues.find(i => i.identifier.toLowerCase() === ident.toLowerCase());
+  if (!issue) die('Issue "' + ident + '" not found in this team.');
+  const states = await fetchStates(key, teamId);
+  const stateId = states[stateName.toLowerCase()];
+  if (!stateId) die('State "' + stateName + '" not found. Available: ' + Object.keys(states).join(', '));
+  if (issue.state.name.toLowerCase() === stateName.toLowerCase()) {
+    console.log('  = ' + issue.identifier + '  already "' + issue.state.name + '" — no change');
+    return;
+  }
+  if (dryRun) { console.log('  [dry-run] ' + issue.identifier + '  "' + issue.state.name + '" → "' + stateName + '"'); return; }
+  const d = await gql(key, 'mutation($id:String!,$s:String!){ issueUpdate(id:$id, input:{stateId:$s}){ success issue{ identifier state{ name } } } }', { id: issue.id, s: stateId });
+  if (!d.issueUpdate.success) die('issueUpdate failed for ' + ident);
+  console.log('  ✓ ' + d.issueUpdate.issue.identifier + '  → "' + d.issueUpdate.issue.state.name + '"');
+}
+
+async function addComment(key, teamId, identifier, body, dryRun) {
+  if (!body || !body.trim()) die('--comment needs a body: pass --body "..." or --body-file note.md');
+  const issue = await fetchOneIssue(key, teamId, identifier);
+  if (!issue) die('Issue "' + identifier + '" not found in this team.');
+  if (dryRun) {
+    console.log('  [dry-run] would comment on ' + issue.identifier + ' (' + body.length + ' chars)');
+    return;
+  }
+  const d = await gql(key,
+    'mutation($i:String!,$b:String!){ commentCreate(input:{issueId:$i, body:$b}){ success comment{ id url } } }',
+    { i: issue.id, b: body });
+  if (!d.commentCreate.success) die('commentCreate failed for ' + identifier);
+  console.log('  ✓ commented on ' + issue.identifier + '  ' + d.commentCreate.comment.url);
 }
 
 (async () => {
@@ -125,6 +193,40 @@ async function createIssue(key, team, issue, dryRun) {
   const team = await resolveTeam(key, args.team);
   console.log((args.dryRun ? '[dry-run] ' : '') + 'team ' + team.key + ' — ' + team.name);
 
+  if (args.get) {
+    const it = await fetchOneIssue(key, team.id, args.get);
+    if (!it) die('Issue "' + args.get + '" not found in team ' + team.key + '.');
+    const labels = (it.labels && it.labels.nodes || []).map(l => l.name);
+    console.log('identifier: ' + it.identifier);
+    console.log('title: ' + it.title);
+    console.log('state: ' + it.state.name + ' (' + it.state.type + ')');
+    console.log('priority: P' + it.priority);
+    console.log('labels: ' + (labels.join(', ') || '(none)'));
+    console.log('assignee: ' + (it.assignee ? it.assignee.name + ' <' + it.assignee.email + '>' : '(unassigned)'));
+    console.log('url: ' + it.url);
+    console.log('--- description ---');
+    console.log(it.description || '(empty)');
+    return;
+  }
+
+  if (args.list) {
+    const nodes = await fetchIssues(key, team.id);
+    nodes.forEach(i => console.log('  ' + i.identifier.padEnd(7) + '[' + i.state.name + ']  P' + i.priority + '  ' + i.title));
+    console.log('Total: ' + nodes.length + ' issue' + (nodes.length === 1 ? '' : 's') + '.');
+    return;
+  }
+
+  if (args.comment) {
+    await addComment(key, team.id, args.comment, args.body, args.dryRun);
+    return;
+  }
+
+  if (args.sets && args.sets.length) {
+    for (const spec of args.sets) await setStatus(key, team.id, spec, args.dryRun);
+    console.log('Done (' + args.sets.length + ' status change' + (args.sets.length === 1 ? '' : 's') + ').');
+    return;
+  }
+
   let issues;
   if (args.file) {
     issues = JSON.parse(fs.readFileSync(args.file, 'utf8'));
@@ -132,7 +234,7 @@ async function createIssue(key, team, issue, dryRun) {
   } else if (args.title) {
     issues = [{ title: args.title, description: args.description, priority: args.priority, labels: args.labels }];
   } else {
-    die('Nothing to do. Use --whoami, --title "...", or --file tickets.json');
+    die('Nothing to do. Use --whoami, --list, --get, --set, --comment, --title "...", or --file tickets.json');
   }
 
   for (const it of issues) {

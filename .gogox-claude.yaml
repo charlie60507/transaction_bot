@@ -1,0 +1,11 @@
+# GGC project profile for this PERSONAL project.
+# Makes /route + /ggx-work resolve ticket_system directly (no org.yaml lookup —
+# that path is only used when ticket_system is `auto`).
+#
+# IMPORTANT: this repo's tickets live in the user's PERSONAL Linear workspace
+# (team CT), NOT the company workspace. The company Linear MCP
+# (mcp__claude_ai_Linear__*) is authenticated to the COMPANY account and CANNOT
+# see these tickets. When running any GGC pipeline here, all Linear I/O MUST go
+# through `scripts/linear.js` (personal API key), never the company MCP.
+ticket_system: linear
+branch_prefix: CT
