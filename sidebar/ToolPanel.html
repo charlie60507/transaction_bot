@@ -205,6 +205,10 @@
   .erow.done { opacity: .5; }
   .er1 { display: flex; align-items: baseline; gap: var(--sp2); }
   .er1 .mer { font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .er1 .merin { flex: 1; min-width: 0; font: inherit; font-weight: 600; color: inherit; background: none; border: 1px solid transparent; border-radius: 5px; padding: 2px 5px; margin: -2px 0 -2px -5px; }
+  .er1 .merin:hover { border-color: var(--border); }
+  .er1 .merin:focus { outline: none; border-color: var(--accent); background: var(--bg-raised); }
+  .er1 .merin::placeholder { color: var(--text-muted); font-weight: 400; }
   .er1 .amt { font-weight: 600; white-space: nowrap; }
   .er2 { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
   .er2 .fld { display: flex; align-items: center; gap: 4px; }
@@ -533,7 +537,7 @@
   function editRow(t){
     var tc=typeColor(t.type);
     return '<div class="erow'+(t.posted?' done':'')+'" data-erow="'+esc(t.id)+'">'
-      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span><span class="mer">'+esc(t.merchant)+'</span><span class="amt num" style="color:'+tc+'">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+'</span></div>'
+      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span><input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false"><span class="amt num" style="color:'+tc+'">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+'</span></div>'
       +'<div class="er2">'
         +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
         +'<div class="fld"><span class="lb">收支</span><select data-ef="type" data-id="'+esc(t.id)+'" style="color:'+tc+'">'+selOpts(['支出','收入','轉帳'],t.type)+'</select></div>'
@@ -645,6 +649,10 @@
     app.querySelectorAll('.cell[data-hday]').forEach(function(c){ c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); }; });
     var sdBtn=app.querySelector('[data-showdone]'); if(sdBtn) sdBtn.onclick=function(){ state.showDone=!state.showDone; render(); };
     app.querySelectorAll('select[data-ef]').forEach(function(s){ s.onchange=function(){ applyEdit(this.getAttribute('data-id'), this.getAttribute('data-ef'), this.value); }; });
+    app.querySelectorAll('[data-emer]').forEach(function(i){
+      i.onchange=function(){ applyEdit(this.getAttribute('data-emer'),'merchant',this.value.trim()); };
+      i.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } };
+    });
     app.querySelectorAll('[data-erec]').forEach(function(b){ b.onclick=function(){ var id=this.getAttribute('data-erec'); var t=txnById(id); if(t) applyEdit(id,'posted',!t.posted); }; });
     var addB=app.querySelector('[data-add]'); if(addB) addB.onclick=openAddModal;
     app.querySelectorAll('[data-del]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); deleteTxnRow(this.getAttribute('data-del')); }; });

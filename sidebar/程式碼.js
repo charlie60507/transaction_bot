@@ -87,6 +87,7 @@ function getAllTxns() {
 /**
  * Write edits back to one Transactions row, located by MessageId (col I) so it
  * is safe against the bot re-sorting rows. `patch` may contain any of:
+ *   merchant -> F (交易內容/商店; the row title shown in the heatmap day list)
  *   cat    -> K (種類手動; leaves auto G untouched)
  *   type   -> J (收支別; must be 支出/收入/轉帳)
  *   tag    -> TAG column (by header)
@@ -109,6 +110,9 @@ function updateTxn(messageId, patch) {
   }
   if (rowNum === -1) throw new Error('找不到該筆交易 (MessageId=' + messageId + ')');
 
+  if ('merchant' in patch) {
+    sh.getRange(rowNum, CFG.IDX_MERCHANT + 1).setValue(String(patch.merchant || ''));
+  }
   if ('cat' in patch) {
     sh.getRange(rowNum, CFG.IDX_CATEGORY_MANUAL + 1).setValue(String(patch.cat || ''));
   }
