@@ -219,6 +219,30 @@
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.err { border-color: var(--spend); color: var(--spend); }
 
+  /* add-transaction button + modal */
+  .addbtn { display: inline-flex; align-items: center; gap: 5px; background: var(--accent); color: #0e1220; border: none; border-radius: var(--r-ctl); padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .addbtn:hover { filter: brightness(1.08); }
+  .txdel, .erdel { background: none; border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; width: 26px; height: 24px; cursor: pointer; flex-shrink: 0; font-size: 12px; }
+  .txdel:hover, .erdel:hover { border-color: var(--spend); color: var(--spend); }
+  .overlay { position: fixed; inset: 0; background: rgba(8,10,14,.6); display: none; align-items: flex-start; justify-content: center; padding: 6vh var(--sp4); z-index: 30; }
+  .overlay.on { display: flex; }
+  .modal { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-card); width: 100%; max-width: 460px; padding: var(--sp4); box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .modal h3 { font-size: 16px; font-weight: 600; margin-bottom: var(--sp1); }
+  .modal .msub { font-size: 12px; color: var(--text-muted); margin-bottom: var(--sp4); }
+  .mgrid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp3); }
+  .mfld { display: flex; flex-direction: column; gap: 4px; } .mfld.full { grid-column: 1/-1; }
+  .mfld label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+  .mfld label .req { color: var(--spend); }
+  .modal input, .modal select { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 8px 9px; font-size: 14px; font-family: inherit; }
+  .modal input:focus, .modal select:focus { outline: none; border-color: var(--accent); }
+  .modal input.bad { border-color: var(--spend); }
+  .minfo { grid-column: 1/-1; font-size: 12px; color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 8px 10px; }
+  .minfo b { color: var(--text-primary); }
+  .macts { display: flex; gap: var(--sp2); justify-content: flex-end; margin-top: var(--sp4); }
+  .mbtn { border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-primary); border-radius: 7px; padding: 9px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .mbtn.primary { background: var(--accent); border-color: var(--accent); color: #0e1220; }
+  .mbtn:hover { filter: brightness(1.08); }
+
   .empty { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
   .footer { text-align: center; padding: var(--sp4); font-size: 12px; color: var(--text-muted); }
   .loading, .error { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
@@ -228,6 +252,23 @@
 <body>
 <div class="wrap"><div id="app"><div class="loading">載入中…</div></div></div>
 <div class="toast" id="toast"></div>
+<div class="overlay" id="addOverlay">
+  <div class="modal">
+    <h3>新增交易</h3>
+    <div class="msub">手動補記(現金等非 email 來源) · 儲存後標為已記帳</div>
+    <div class="mgrid">
+      <div class="mfld"><label>日期 <span class="req">*</span></label><input type="date" id="a-date"></div>
+      <div class="mfld"><label>金額 <span class="req">*</span></label><input type="number" id="a-amt" placeholder="0" min="0" inputmode="numeric"></div>
+      <div class="mfld"><label>收支別 <span class="req">*</span></label><select id="a-type"><option>支出</option><option>收入</option><option>轉帳</option></select></div>
+      <div class="mfld"><label>來源</label><select id="a-source"><option>現金</option><option>悠遊卡</option><option>LINE Pay</option><option>街口支付</option><option>轉帳</option><option>其他</option></select></div>
+      <div class="mfld full"><label>商店 / 說明</label><input type="text" id="a-mer" placeholder="例：路邊攤晚餐"></div>
+      <div class="mfld"><label>類別</label><select id="a-cat"></select></div>
+      <div class="mfld"><label>TAG（專案）</label><select id="a-tag"></select></div>
+      <div class="minfo">儲存後 <b>已記帳 ✓</b> · 手動列可在明細裡刪除</div>
+    </div>
+    <div class="macts"><button class="mbtn" id="a-cancel">取消</button><button class="mbtn primary" id="a-save">新增</button></div>
+  </div>
+</div>
 <script>
   // muted, cool-leaning, and deliberately AVOIDS red/green so category hues never read as spend/income
   var PALETTE = ['#5f9aa0','#6f88a8','#9a8bb0','#b39a68','#6d8f9e','#8497b8','#7b9ca6','#a99a6a'];
@@ -357,7 +398,7 @@
     }
     return h;
   }
-  function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+(t.tag?' <span class="cat">'+esc(t.tag)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+'</span></div>'; }
+  function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+(t.tag?' <span class="cat">'+esc(t.tag)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+'</span>'+manualDelBtn(t)+'</div>'; }
   function deltaStr(cur,prev,spend,partial){
     if(!prev) return '無前期可比';
     if(Math.abs(prev)<500){ var diff=cur-prev; return 'vs 前期 '+(diff>=0?'+':'−')+'$'+fmt(Math.abs(diff)); }
@@ -449,6 +490,44 @@
       .withFailureHandler(function(err){ t[field]=prev; render(); toast('寫入失敗:'+((err&&err.message)||err), true); })
       .updateTxn(id, patch);
   }
+  // ---------- manual add / delete ----------
+  function isManual(t){ return !!(t && t.id && String(t.id).indexOf('manual-')===0); }
+  function manualDelBtn(t){ return isManual(t) ? '<button class="txdel" data-del="'+esc(t.id)+'" title="刪除(手動)">🗑</button>' : ''; }
+  function deleteTxnRow(id){
+    var t=txnById(id); if(!t) return;
+    if(!isManual(t)){ toast('只能刪除手動新增的交易', true); return; }
+    var idx=TXNS.indexOf(t); if(idx<0) return;
+    TXNS.splice(idx,1); render();
+    google.script.run
+      .withSuccessHandler(function(){ toast('已刪除'); })
+      .withFailureHandler(function(err){ TXNS.splice(idx,0,t); render(); toast('刪除失敗:'+((err&&err.message)||err), true); })
+      .deleteTxn(id);
+  }
+  function openAddModal(){
+    var ov=document.getElementById('addOverlay'); if(!ov) return;
+    document.getElementById('a-cat').innerHTML='<option value="">（未分類）</option>'+distinctCats().map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>';}).join('');
+    document.getElementById('a-tag').innerHTML='<option value="">（無）</option>'+distinctTags().map(function(g){return '<option value="'+esc(g)+'">'+esc(g)+'</option>';}).join('');
+    var di=document.getElementById('a-date'); di.value=NOW.year+'-'+('0'+NOW.month).slice(-2)+'-'+('0'+NOW.day).slice(-2);
+    document.getElementById('a-amt').value=''; document.getElementById('a-mer').value='';
+    document.getElementById('a-amt').classList.remove('bad'); di.classList.remove('bad');
+    ov.classList.add('on');
+  }
+  function closeAddModal(){ var ov=document.getElementById('addOverlay'); if(ov) ov.classList.remove('on'); }
+  function submitAdd(){
+    var di=document.getElementById('a-date'), ai=document.getElementById('a-amt');
+    var date=di.value, amt=Number(ai.value), ok=true;
+    if(!date){ di.classList.add('bad'); ok=false; } else di.classList.remove('bad');
+    if(!amt||amt<=0){ ai.classList.add('bad'); ok=false; } else ai.classList.remove('bad');
+    if(!ok){ toast('請填日期與金額', true); return; }
+    var fields={ date:date, amount:amt, type:document.getElementById('a-type').value, source:document.getElementById('a-source').value, merchant:document.getElementById('a-mer').value, cat:document.getElementById('a-cat').value, tag:document.getElementById('a-tag').value };
+    var p=date.split('-');
+    var temp={ y:+p[0], m:+p[1], d:+p[2], type:fields.type, amount:amt, cat:fields.cat||'未分類', merchant:fields.merchant, tag:fields.tag, bank:fields.source, last4:'', link:'', id:'manual-temp-'+(TXNS.length+1), posted:true };
+    TXNS.push(temp); closeAddModal(); render();
+    google.script.run
+      .withSuccessHandler(function(nt){ if(nt&&nt.id) temp.id=String(nt.id); toast('已新增 · 已記帳 ✓'); render(); })
+      .withFailureHandler(function(err){ var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1); render(); toast('新增失敗:'+((err&&err.message)||err), true); })
+      .addTxn(fields);
+  }
   function editRow(t){
     var tc=typeColor(t.type);
     return '<div class="erow'+(t.posted?' done':'')+'" data-erow="'+esc(t.id)+'">'
@@ -457,7 +536,7 @@
         +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
         +'<div class="fld"><span class="lb">收支</span><select data-ef="type" data-id="'+esc(t.id)+'" style="color:'+tc+'">'+selOpts(['支出','收入','轉帳'],t.type)+'</select></div>'
         +'<div class="fld"><span class="lb">TAG</span><select data-ef="tag" data-id="'+esc(t.id)+'">'+selOpts(distinctTags(),t.tag,'（無）')+'</select></div>'
-        +'<button class="erec" data-erec="'+esc(t.id)+'">'+(t.posted?'↩ 取消記帳':'✓ 已記帳')+'</button>'
+        +'<button class="erec" data-erec="'+esc(t.id)+'">'+(t.posted?'↩ 取消記帳':'✓ 已記帳')+'</button>'+manualDelBtn(t)
       +'</div></div>';
   }
   function dayEditor(y,m,sd){
@@ -545,7 +624,7 @@
     var r=resolveScope(state.scope), tab=state.tab, isProj=tab==='project';
     var periodTxt = isProj ? (state.projScope==='year'?NOW.year+' 年 · 項目累計':'全部期間 · 項目累計') : esc(periodLabel(r));
     function tb(id,tt,sub){ return '<button data-tab="'+id+'" class="'+(tab===id?'active':'')+'"><span class="tt">'+tt+'</span><span class="tsub">'+sub+'</span></button>'; }
-    var h='<div class="head"><div class="head-top"><span class="title">交易 Dashboard</span><span class="period">'+periodTxt+'</span></div>'
+    var h='<div class="head"><div class="head-top"><span class="title">交易 Dashboard</span><span style="display:flex;align-items:center;gap:var(--sp3)"><span class="period">'+periodTxt+'</span><button class="addbtn" data-add>＋ 新增</button></span></div>'
       +'<div class="tabs">'+tb('category','類別','這段期間錢花在哪類?')+tb('project','項目 (TAG)','某個目標累計花了多少?')+tb('analysis','分析','卡別 · 熱力圖 · 排行')+'</div>';
     if(!isProj){
       h+='<div class="controls"><span class="clabel">期間</span><button class="ctl'+(state.scope==='all'?' active':'')+'" data-scope="all">全部</button><button class="ctl'+(state.scope==='month'?' active':'')+'" data-scope="month">當月</button><button class="ctl'+(state.scope==='year'?' active':'')+'" data-scope="year">當年</button><span class="clabel" style="margin-left:6px">或指定</span><span class="sel'+(isPick()?' picked':' dim')+'"><select id="selYear">'+yearOptions()+'</select><select id="selMonth">'+monthOptions()+'</select></span></div>';
@@ -565,6 +644,8 @@
     var sdBtn=app.querySelector('[data-showdone]'); if(sdBtn) sdBtn.onclick=function(){ state.showDone=!state.showDone; render(); };
     app.querySelectorAll('select[data-ef]').forEach(function(s){ s.onchange=function(){ applyEdit(this.getAttribute('data-id'), this.getAttribute('data-ef'), this.value); }; });
     app.querySelectorAll('[data-erec]').forEach(function(b){ b.onclick=function(){ var id=this.getAttribute('data-erec'); var t=txnById(id); if(t) applyEdit(id,'posted',!t.posted); }; });
+    var addB=app.querySelector('[data-add]'); if(addB) addB.onclick=openAddModal;
+    app.querySelectorAll('[data-del]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); deleteTxnRow(this.getAttribute('data-del')); }; });
     app.querySelectorAll('.ctl[data-pscope]').forEach(function(b){ b.onclick=function(){ state.projScope=this.getAttribute('data-pscope'); openProj=null; render(); }; });
     var mt=app.querySelector('[data-more]'); if(mt) mt.onclick=function(){ state.more=!state.more; render(); };
     var sy=document.getElementById('selYear'), sm=document.getElementById('selMonth');
@@ -587,6 +668,9 @@
       })
       .getAllTxns();
   }
+  document.getElementById('a-cancel').onclick=closeAddModal;
+  document.getElementById('a-save').onclick=submitAdd;
+  document.getElementById('addOverlay').onclick=function(e){ if(e.target===this) closeAddModal(); };
   boot();
 </script>
 </body>

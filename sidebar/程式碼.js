@@ -128,6 +128,71 @@ function updateTxn(messageId, patch) {
   return { ok: true };
 }
 
+/**
+ * Append a manually-entered transaction (cash / non-email sources). Gets a
+ * synthetic `manual-<uuid>` MessageId (col I) so it can be edited/deleted like
+ * any row and never collides with the bot's dedup. 已記帳 (A) defaults to true.
+ * fields: { date:'YYYY-MM-DD', amount, type, source, merchant, cat, tag }
+ * Returns the mapped txn (same shape as getAllTxns) for optimistic UI.
+ */
+function addTxn(fields) {
+  fields = fields || {};
+  if (!fields.date) throw new Error('缺少日期');
+  const amount = Number(fields.amount);
+  if (!amount || amount <= 0) throw new Error('金額需大於 0');
+  const type = String(fields.type || '支出');
+  if (['支出', '收入', '轉帳'].indexOf(type) === -1) throw new Error('收支別不合法');
+
+  const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
+  if (!sh) throw new Error('找不到 Transactions 工作表');
+  const tagIdx = getTagColIndex_(sh);
+  const ncol = sh.getLastColumn();
+  const id = 'manual-' + Utilities.getUuid();
+  const source = String(fields.source || '現金');
+  const cat = String(fields.cat || '');
+  const dt = new Date(fields.date + 'T12:00:00');
+
+  const row = new Array(ncol).fill('');
+  row[CFG.IDX_POSTED] = true;
+  row[CFG.IDX_BANK] = source;
+  row[CFG.IDX_DATE] = dt;
+  row[CFG.IDX_AMOUNT] = amount;
+  row[CFG.IDX_MERCHANT] = String(fields.merchant || '');
+  row[CFG.IDX_MESSAGEID] = id;
+  row[CFG.IDX_INOUT] = type;
+  row[CFG.IDX_CATEGORY_MANUAL] = cat;
+  if (tagIdx !== -1) row[tagIdx] = String(fields.tag || '');
+
+  const rowNum = sh.getLastRow() + 1;
+  sh.getRange(rowNum, 1, 1, ncol).setValues([row]);
+  sh.getRange(rowNum, CFG.IDX_DATE + 1).setNumberFormat('yyyy/mm/dd hh:mm:ss');
+  sh.getRange(rowNum, CFG.IDX_POSTED + 1).setDataValidation(
+    SpreadsheetApp.newDataValidation().requireCheckbox().build());
+  sh.getRange(rowNum, CFG.IDX_POSTED + 1).setValue(true);
+
+  return {
+    y: dt.getFullYear(), m: dt.getMonth() + 1, d: dt.getDate(),
+    type: type, amount: amount, cat: cat || '未分類',
+    merchant: String(fields.merchant || ''), tag: String(fields.tag || ''),
+    bank: source, last4: '', link: '', id: id, posted: true
+  };
+}
+
+/** Delete a MANUAL row only (id starts with "manual-"), located by MessageId. */
+function deleteTxn(messageId) {
+  messageId = String(messageId || '');
+  if (messageId.indexOf('manual-') !== 0) throw new Error('只能刪除手動新增的交易');
+  const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
+  if (!sh) throw new Error('找不到 Transactions 工作表');
+  const last = sh.getLastRow();
+  if (last <= 1) throw new Error('沒有交易資料');
+  const ids = sh.getRange(2, CFG.IDX_MESSAGEID + 1, last - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === messageId) { sh.deleteRow(i + 2); return { ok: true }; }
+  }
+  throw new Error('找不到該筆手動交易');
+}
+
 /** Web App URL of the user's live deployment.
  *  Hardcoded on purpose: ScriptApp.getService().getUrl() returns an
  *  unpredictable/stale deployment URL when the project has multiple
