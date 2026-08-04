@@ -31,11 +31,33 @@ workspace, cannot see these tickets, and is **blocked at the harness level** her
 
 ## Deploy
 
-Deploy is via `clasp` to a specific Web App deployment — NOT merge-to-deploy.
-Never auto-deploy. When code is ready, show the diff + the offline verify
-(`node check_*.js` against `sidebar/ToolPanel.html`) and wait for approval, then:
+The dashboard deploys itself: pushing to `main` with changes under `sidebar/**`
+triggers `.github/workflows/deploy-dashboard.yml`, which runs the offline gate
+and then `clasp push -f` + `clasp deploy -i <pinned deployment id>`. Shipping is
+therefore ONE `git push` — do not also deploy by hand, or the deployment gets a
+duplicate version for the same commit.
 
-    cd sidebar && clasp push -f && clasp deploy -i <live-deployment-id> -d "..."
+**The gate is `node check_sidebar.js`.** Apps Script has no build step, so a
+typo'd `google.script.run` target or a stale `CFG.IDX_*` constant would surface
+only in the live dashboard. The script checks that every `.js`/`.json`/inline
+`<script>` parses, that every `google.script.run.<fn>()` resolves to a real
+server function, and that every `CFG.<KEY>` reference exists. Run it locally
+before committing (`node check_sidebar.js`, or `CHECK_VERBOSE=1` to list every
+check); a non-zero exit blocks the deploy in CI.
 
-The live deployment id (the URL the user actually opens) is recorded in the
-project memory; deploy there, not a stale deployment.
+Still true, and load-bearing:
+
+- **The deployment id is pinned in the workflow.** The project has several
+  deployments; an unpinned `clasp deploy` creates a NEW one and the URL actually
+  in use never changes. The live id is also recorded in project memory.
+- **The Apps Script credential lives in the `CLASPRC_JSON` repo secret**
+  (contents of `~/.clasprc.json`, clasp 3.x `tokens.default` shape). It is a
+  Google OAuth refresh token and this repo is PUBLIC — never echo, `cat`, or
+  otherwise print that file in a workflow. When the refresh token is revoked the
+  deploy step starts failing: re-run `clasp login`, then re-upload the secret.
+- **Manual deploy is the fallback** (CI down, or deploying without a commit):
+
+      cd sidebar && clasp push -f && clasp deploy -i <live-deployment-id> -d "..."
+
+- Changing the deploy trigger, the gate, or the pinned deployment id is a
+  policy change — ask first.
