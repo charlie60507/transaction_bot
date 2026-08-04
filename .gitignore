@@ -9,6 +9,11 @@ build/
 # Personal Linear API key (never commit)
 .linear-key
 
+# Holds this project's personal credentials (GH_TOKEN) and the company-MCP deny
+# rule. A global ignore also covers it, but that lives on one machine and this
+# repo is PUBLIC — so the rule is repeated here where it travels with the repo.
+.claude/settings.local.json
+
 # GGC pipeline runtime artifacts — /dev:verify sanitizes these from the index
 # by design, so they are per-run scratch, not repo content.
 .dev/

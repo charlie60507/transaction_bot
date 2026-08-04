@@ -17,6 +17,24 @@ workspace, cannot see these tickets, and is **blocked at the harness level** her
     set status: node scripts/linear.js --set "CT-<n>=<State>"   (states: Backlog / Todo / In Progress / In Review / Done)
     create:     node scripts/linear.js --title "..." [--desc-file f.md] [--priority 0..4] [--labels "Bug"]
 
+## GitHub — PERSONAL account only
+
+This repo is `charlie60507/transaction_bot`, on the user's **personal** GitHub. But
+`gh` on this machine is authenticated as the **company** account
+(`charlie-yang-gogox`, via a `GITHUB_TOKEN` env var), which gets **403** on this
+repo's secrets and settings. Same split as the Linear one above.
+
+The fix is already in place: `.claude/settings.local.json` sets `env.GH_TOKEN` to a
+personal PAT, and `GH_TOKEN` outranks `GITHUB_TOKEN` in `gh`'s resolution order — so
+plain `gh` commands in this project run as `charlie60507` with no `gh auth` switching
+and no effect on other repos. Confirm with `gh api user --jq .login` when in doubt.
+
+- **A 401 on every `gh` call here means the PAT expired**, not a company/personal mixup
+  — precedence is absolute, there is no fallback. Replace the value in
+  `.claude/settings.local.json`.
+- That file holds credentials and is gitignored **twice** (repo `.gitignore` and the
+  user's global ignore). Never commit it, never print `env.GH_TOKEN`.
+
 ## Running GGC pipelines here (`/ggx-work`, `/route`, `/dev:ff`)
 
 - This repo carries `.gogox-claude.yaml` (`ticket_system: linear`) so `/route`
