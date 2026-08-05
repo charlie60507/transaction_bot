@@ -248,6 +248,21 @@
   .mbtn:hover { filter: brightness(1.08); }
 
   .empty { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
+  /* 待記帳 inbox: one flat cross-day queue. Day sections reuse .erow from the per-day editor. */
+  .tabs button .tsub .cnt { display: inline-block; min-width: 16px; padding: 0 5px; margin-right: 4px; border-radius: var(--r-pill);
+    background: var(--spend); color: #17191f; font-weight: 700; font-size: 10px; text-align: center; }
+  .dsec { display: flex; align-items: center; gap: var(--sp2); flex-wrap: wrap;
+    margin: var(--sp4) 0 0; padding: 7px 0 5px; border-bottom: 1px solid var(--border); position: sticky; top: 0;
+    background: var(--bg-surface); z-index: 1; }
+  .dsec:first-of-type { margin-top: 0; }
+  .dsec .dd { font-size: 13px; font-weight: 600; }
+  .dsec .dw { font-size: 11px; color: var(--text-muted); }
+  .dsec .dage { font-size: 11px; color: var(--text-muted); }
+  .dsec .dsum { margin-left: auto; font-size: 12px; color: var(--text-muted); }
+  .dbulk { border: 1px solid var(--border); background: none; color: var(--accent); border-radius: var(--r-pill);
+    padding: 3px 11px; font-size: 11px; cursor: pointer; white-space: nowrap; }
+  .dbulk:hover { background: var(--bg-raised); border-color: var(--income); color: var(--income); }
+  .dbulk[disabled] { opacity: .4; cursor: default; }
   .footer { text-align: center; padding: var(--sp4); font-size: 12px; color: var(--text-muted); }
   .loading, .error { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
   .error { color: var(--spend); }
@@ -284,7 +299,8 @@
 
   var TXNS = [];
 
-  var state = { tab:'category', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all', more:false, showDone:false };
+  var state = { tab:'category', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all', more:false, showDone:false,
+                inboxScope:'all', inboxDone:false };
   var openRow=null, openProj=null, openHeatDay=null;
 
   function resolveScope(s){ if(/^\d{4}-\d{2}$/.test(s)){ var p=s.split('-'); return {level:'month',year:+p[0],month:+p[1]}; } if(/^\d{4}$/.test(s)) return {level:'year',year:+s}; if(s==='month') return {level:'month',year:NOW.year,month:NOW.month}; if(s==='year') return {level:'year',year:NOW.year}; return {level:'all'}; }
@@ -475,7 +491,10 @@
 
   // ---------- editable day list (per-day 待記帳 queue) ----------
   function txnById(id){ for(var i=0;i<TXNS.length;i++) if(TXNS[i].id===id) return TXNS[i]; return null; }
-  function distinctCats(){ var s={}; TXNS.forEach(function(t){ if(t.cat) s[t.cat]=1; }); return Object.keys(s).sort(); }
+  // Only the owner's own categories, never the bank vocabulary from 類別(G) — the server sends
+  // 種類(手動) alone now (see rowCategory_). 未分類 is always offered so a category can be cleared.
+  function distinctCats(){ var s={'未分類':1}; TXNS.forEach(function(t){ if(t.cat) s[t.cat]=1; }); return Object.keys(s).sort(); }
+  function realCats(){ return distinctCats().filter(function(c){ return c!=='未分類'; }); }
   function distinctTags(){ var s={}; TXNS.forEach(function(t){ if(t.tag) s[t.tag]=1; }); return Object.keys(s).sort(); }
   function selOpts(list,cur,blankLabel){
     var arr=list.slice(); if(blankLabel!=null && arr.indexOf('')<0) arr.unshift('');
@@ -496,7 +515,9 @@
     // already shows the new text, so there is nothing to repaint — other views pick it up on
     // the next natural render.
     if (field !== 'merchant') render();
-    var patch={}; patch[field]=value;
+    // 未分類 is a display value, not a sheet value: writing it would put the literal string into
+    // 種類(手動). Clearing the category writes a blank cell, which is what 未分類 means.
+    var patch={}; patch[field]=(field==='cat'&&value==='未分類')?'':value;
     google.script.run
       .withSuccessHandler(function(){ if(field==='posted') toast(value?'已記帳 · 從清單移除':'已取回待記帳'); })
       .withFailureHandler(function(err){ t[field]=prev; render(); toast('寫入失敗:'+((err&&err.message)||err), true); })
@@ -517,7 +538,7 @@
   }
   function openAddModal(){
     var ov=document.getElementById('addOverlay'); if(!ov) return;
-    document.getElementById('a-cat').innerHTML='<option value="">（未分類）</option>'+distinctCats().map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>';}).join('');
+    document.getElementById('a-cat').innerHTML='<option value="">（未分類）</option>'+realCats().map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>';}).join('');
     document.getElementById('a-tag').innerHTML='<option value="">（無）</option>'+distinctTags().map(function(g){return '<option value="'+esc(g)+'">'+esc(g)+'</option>';}).join('');
     var di=document.getElementById('a-date'); di.value=NOW.year+'-'+('0'+NOW.month).slice(-2)+'-'+('0'+NOW.day).slice(-2);
     document.getElementById('a-amt').value=''; document.getElementById('a-mer').value='';
@@ -561,6 +582,90 @@
     if(!visible.length){ return h+'<div class="empty" style="padding:var(--sp4) 0">🎉 這天都記帳完了</div></div>'; }
     visible.forEach(function(t){ h+=editRow(t); });
     return h+'</div>';
+  }
+
+  // ---------- 待記帳 inbox: every un-recorded txn, ANY date, in ONE list ----------
+  // The heatmap only makes days WITH 支出 clickable, so a day holding nothing but 收入 or
+  // 轉帳 has no way in. This view has no such gate — and it also removes the day-at-a-time
+  // clicking that clearing a multi-day backlog used to need.
+  var DOW = ['日','一','二','三','四','五','六'];
+  function pendingTxns(){ return TXNS.filter(function(t){ return !t.posted; }); }
+  function dayKeyOf(t){ return t.y+'-'+('0'+t.m).slice(-2)+'-'+('0'+t.d).slice(-2); }
+  function daysAgo(t){ return Math.round((Date.UTC(NOW.year,NOW.month-1,NOW.day)-Date.UTC(t.y,t.m-1,t.d))/86400000); }
+  function ageLabel(n){ return n<=0?'今天':(n===1?'昨天':n+' 天前'); }
+
+  // Mark a whole day recorded. Writes are sequential, not parallel: Apps Script serializes
+  // sheet writes anyway, and one at a time means a mid-way failure reverts exactly one row.
+  function bulkPost(ids){
+    var todo = ids.filter(function(id){ var t=txnById(id); return t && !t.posted; });
+    if(!todo.length) return;
+    todo.forEach(function(id){ var t=txnById(id); t.posted=true; });
+    render();
+    var failed = 0;
+    (function step(i){
+      if(i >= todo.length){
+        if(failed) { render(); toast('完成 '+(todo.length-failed)+'/'+todo.length+' · '+failed+' 筆寫入失敗', true); }
+        else toast('已記帳 '+todo.length+' 筆');
+        return;
+      }
+      google.script.run
+        .withSuccessHandler(function(){ step(i+1); })
+        .withFailureHandler(function(){ var t=txnById(todo[i]); if(t) t.posted=false; failed++; step(i+1); })
+        .updateTxn(todo[i], { posted:true });
+    })(0);
+  }
+
+  // How far back the 已記帳 rows are shown. The pending list is deliberately UNBOUNDED — it is
+  // the backlog and hiding part of it would defeat the view. Already-recorded rows are not:
+  // showing every one of them means a thousand rows × three dropdowns each, so that side is
+  // capped to the recent window, which is the only reason to look at them (undo a mis-tick).
+  var INBOX_DONE_DAYS = 14;
+  function inboxTab(){
+    var pend = pendingTxns();
+    var pool = state.inboxDone
+      ? pend.concat(TXNS.filter(function(t){ return t.posted && daysAgo(t) <= INBOX_DONE_DAYS; }))
+      : pend;
+    if(state.inboxScope === 'year') pool = pool.filter(function(t){ return t.y === NOW.year; });
+
+    var pendScoped = pool.filter(function(t){ return !t.posted; });
+    var pendSpend = pendScoped.filter(function(t){ return t.type==='支出'; }).reduce(function(s,t){ return s+t.amount; },0);
+    var oldest = pendScoped.slice().sort(function(a,b){ return dayKeyOf(a).localeCompare(dayKeyOf(b)); })[0];
+    var dayCount = Object.keys(pendScoped.reduce(function(m,t){ m[dayKeyOf(t)]=1; return m; },{})).length;
+
+    var h = '<div class="kpis k3">'
+      + kpi('待記帳筆數', fmt(pendScoped.length), '<div class="k-sub">橫跨 '+dayCount+' 天</div>', pendScoped.length?'spend':'')
+      + kpi('待記帳支出', '$'+fmt(pendSpend), '<div class="k-sub">收入/轉帳不計入</div>', 'spend')
+      + kpi('最舊一筆', oldest?ageLabel(daysAgo(oldest)):'—',
+            '<div class="k-sub">'+(oldest?oldest.y+'/'+oldest.m+'/'+oldest.d:'沒有積壓')+'</div>', '')
+      + '</div>';
+
+    h += '<div class="toolbar"><h2>待記帳佇列 <span class="th">所有日期 · 最新的在最上面 · 改完按「✓ 已記帳」就消失</span></h2></div>';
+
+    if(!pool.length){
+      return h + '<div class="empty">🎉 全部記帳完成,沒有待處理的交易。'
+        + '<br><span style="font-size:12px">新的信件進來後會自動出現在這裡。</span></div>';
+    }
+
+    // group by day, newest day first; inside a day, biggest amount first (same as the per-day editor)
+    var groups = {};
+    pool.forEach(function(t){ var k=dayKeyOf(t); (groups[k]=groups[k]||[]).push(t); });
+    var keys = Object.keys(groups).sort(function(a,b){ return b.localeCompare(a); });
+
+    h += '<div class="panel">';
+    keys.forEach(function(k){
+      var list = groups[k].sort(function(a,b){ return b.amount-a.amount; });
+      var p = k.split('-'), y=+p[0], mo=+p[1], dy=+p[2];
+      var open = list.filter(function(t){ return !t.posted; });
+      var spend = open.filter(function(t){ return t.type==='支出'; }).reduce(function(s,t){ return s+t.amount; },0);
+      var dow = DOW[new Date(y,mo-1,dy).getDay()];
+      h += '<div class="dsec"><span class="dd num">'+y+'/'+('0'+mo).slice(-2)+'/'+('0'+dy).slice(-2)+'</span>'
+        + '<span class="dw">(週'+dow+')</span><span class="dage">· '+ageLabel(daysAgo({y:y,m:mo,d:dy}))+'</span>'
+        + '<span class="dsum num">'+open.length+' 筆待記帳'+(spend?' · 支出 $'+fmt(spend):'')+'</span>'
+        + (open.length>1 ? '<button class="dbulk" data-dbulk="'+k+'">✓ 整天記帳 ('+open.length+')</button>' : '')
+        + '</div>';
+      list.forEach(function(t){ h += editRow(t); });
+    });
+    return h + '</div>';
   }
 
   // spend calendar heatmap: single-month scope only; current partial month renders future days inert
@@ -633,18 +738,26 @@
   function monthlyBars(byMonth,color){ var keys=Object.keys(byMonth).sort().slice(-8); if(!keys.length) return ''; var max=Math.max.apply(null,keys.map(function(k){return byMonth[k];}))||1; var out='<div style="font-size:12px;color:var(--text-muted);margin-bottom:2px">每月新增</div><div class="mbars">'; keys.forEach(function(k){ var hgt=Math.round(byMonth[k]/max*46); out+='<div class="mb"><i style="height:'+Math.max(2,hgt)+'px;background:'+color+'" title="'+k+' $'+fmt(byMonth[k])+'"></i><span>'+(+k.split('-')[1])+'月</span></div>'; }); out+='</div>'; return out; }
 
   function render(){
-    var r=resolveScope(state.scope), tab=state.tab, isProj=tab==='project';
-    var periodTxt = isProj ? (state.projScope==='year'?NOW.year+' 年 · 項目累計':'全部期間 · 項目累計') : esc(periodLabel(r));
+    var r=resolveScope(state.scope), tab=state.tab, isProj=tab==='project', isInbox=tab==='inbox';
+    var nPend=pendingTxns().length;
+    var periodTxt = isInbox ? (state.inboxScope==='year'?NOW.year+' 年 · 待記帳':'全部期間 · 待記帳')
+                  : isProj ? (state.projScope==='year'?NOW.year+' 年 · 項目累計':'全部期間 · 項目累計')
+                  : esc(periodLabel(r));
     function tb(id,tt,sub){ return '<button data-tab="'+id+'" class="'+(tab===id?'active':'')+'"><span class="tt">'+tt+'</span><span class="tsub">'+sub+'</span></button>'; }
+    var inboxSub = nPend ? '<span class="cnt">'+nPend+'</span>筆待處理' : '已全部記帳';
     var h='<div class="head"><div class="head-top"><span class="title">交易 Dashboard</span><span style="display:flex;align-items:center;gap:var(--sp3)"><span class="period">'+periodTxt+'</span><button class="addbtn" data-add>＋ 新增</button></span></div>'
-      +'<div class="tabs">'+tb('category','類別','這段期間錢花在哪類?')+tb('project','項目 (TAG)','某個目標累計花了多少?')+tb('analysis','分析','卡別 · 熱力圖 · 排行')+'</div>';
-    if(!isProj){
+      +'<div class="tabs">'+tb('category','類別','這段期間錢花在哪類?')+tb('project','項目 (TAG)','某個目標累計花了多少?')+tb('analysis','分析','卡別 · 熱力圖 · 排行')+tb('inbox','待記帳',inboxSub)+'</div>';
+    if(isInbox){
+      h+='<div class="controls"><span class="clabel">範圍</span><button class="ctl'+(state.inboxScope==='all'?' active':'')+'" data-iscope="all">全部</button><button class="ctl'+(state.inboxScope==='year'?' active':'')+'" data-iscope="year">本年</button>'
+        +'<button class="ev-toggle" style="margin-left:6px" data-inboxdone>'+(state.inboxDone?'只看待記帳':'一併顯示近 '+INBOX_DONE_DAYS+' 天已記帳')+'</button>'
+        +'<span class="hint">'+(state.inboxDone?'已記帳只回看 '+INBOX_DONE_DAYS+' 天(誤按時取回用)':'待記帳與期間篩選分開,積壓不會被月份藏起來')+'</span></div>';
+    } else if(!isProj){
       h+='<div class="controls"><span class="clabel">期間</span><button class="ctl'+(state.scope==='all'?' active':'')+'" data-scope="all">全部</button><button class="ctl'+(state.scope==='month'?' active':'')+'" data-scope="month">當月</button><button class="ctl'+(state.scope==='year'?' active':'')+'" data-scope="year">當年</button><span class="clabel" style="margin-left:6px">或指定</span><span class="sel'+(isPick()?' picked':' dim')+'"><select id="selYear">'+yearOptions()+'</select><select id="selMonth">'+monthOptions()+'</select></span></div>';
     } else {
       h+='<div class="controls"><span class="clabel">範圍</span><button class="ctl'+(state.projScope==='all'?' active':'')+'" data-pscope="all">全部累計</button><button class="ctl'+(state.projScope==='year'?' active':'')+'" data-pscope="year">本年</button><span class="hint">項目為長期累計,與期間篩選分開</span></div>';
     }
     h+='</div>';
-    h+= tab==='category' ? categoryTab() : (tab==='analysis' ? analysisTab() : projectTab());
+    h+= tab==='category' ? categoryTab() : (tab==='analysis' ? analysisTab() : (tab==='inbox' ? inboxTab() : projectTab()));
     h+='<div class="footer">即時讀取自 Transactions · 冷石板深色</div>';
     document.getElementById('app').innerHTML=h; attach();
   }
@@ -663,6 +776,12 @@
     var addB=app.querySelector('[data-add]'); if(addB) addB.onclick=openAddModal;
     app.querySelectorAll('[data-del]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); deleteTxnRow(this.getAttribute('data-del')); }; });
     app.querySelectorAll('.ctl[data-pscope]').forEach(function(b){ b.onclick=function(){ state.projScope=this.getAttribute('data-pscope'); openProj=null; render(); }; });
+    app.querySelectorAll('.ctl[data-iscope]').forEach(function(b){ b.onclick=function(){ state.inboxScope=this.getAttribute('data-iscope'); render(); }; });
+    var ibd=app.querySelector('[data-inboxdone]'); if(ibd) ibd.onclick=function(){ state.inboxDone=!state.inboxDone; render(); };
+    app.querySelectorAll('[data-dbulk]').forEach(function(b){ b.onclick=function(){
+      var k=this.getAttribute('data-dbulk');
+      bulkPost(pendingTxns().filter(function(t){ return dayKeyOf(t)===k; }).map(function(t){ return t.id; }));
+    }; });
     var mt=app.querySelector('[data-more]'); if(mt) mt.onclick=function(){ state.more=!state.more; render(); };
     var sy=document.getElementById('selYear'), sm=document.getElementById('selMonth');
     function pickSel(){ state.selYear=+sy.value; state.selMonth=+sm.value; state.scope=state.selMonth===0?String(state.selYear):(state.selYear+'-'+('0'+state.selMonth).slice(-2)); openRow=null; openHeatDay=null; render(); }

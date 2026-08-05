@@ -317,11 +317,23 @@ function mapTxn_(row, dt) {
   };
 }
 
-/** Category value for a row: manual (K) first, fallback auto (G). */
+/**
+ * Category value for a row: 種類(手動) (K) ONLY.
+ *
+ * 類別 (G) is NOT a category, it is raw parse output from the email, and it deliberately does
+ * not reach the display any more. Measured on 1019 live rows: 482 had both columns filled and
+ * ZERO of them agreed, because G speaks the bank's vocabulary (超市∕量販, 交通∕運輸,
+ * 家電∕３Ｃ通訊) while K speaks the owner's (超市, 交通, 個人) — two taxonomies on one axis.
+ * G's single most common value was `註一`, a footnote marker, and five of its values were bare
+ * amounts. Falling back to it meant 73 rows displayed bank vocabulary and the category picker
+ * offered 24 options where only 10 were ever chosen.
+ *
+ * Rows with no manual category now read as 未分類, which is visible and fixable in the
+ * 待記帳 queue, rather than silently mislabelled. G stays in the sheet as evidence and as the
+ * source a future auto-fill suggestion could read.
+ */
 function rowCategory_(row) {
-  const m = String(row[CFG.IDX_CATEGORY_MANUAL] || '').trim();
-  const a = String(row[CFG.IDX_CATEGORY_AUTO] || '').trim();
-  return m || a;
+  return String(row[CFG.IDX_CATEGORY_MANUAL] || '').trim();
 }
 
 /** 0-based index of the "TAG" header in Transactions, or -1 if absent */
@@ -432,12 +444,11 @@ function dimKeyFn_(dimension, sh) {
   return { keyFn: rowCategory_ };
 }
 
-/** Row-keep predicate for a dimension. category → must have a manual 種類(K);
- *  tag → must have a TAG. Rows failing the test drop out of every stat. */
+/** Row-keep predicate: the row must have a value for the active dimension, or it drops out of
+ *  every stat. This used to special-case `category` with its own read of 種類(K) because
+ *  rowCategory_ fell back to 類別(G) and the two disagreed about which rows counted. Now that
+ *  rowCategory_ is manual-only, one predicate covers both dimensions. */
 function dimKeepFn_(dimension, k) {
-  if (dimension === 'category') {
-    return function (row) { return String(row[CFG.IDX_CATEGORY_MANUAL] || '').trim() !== ''; };
-  }
   return function (row) { return k.keyFn(row) !== ''; };
 }
 
