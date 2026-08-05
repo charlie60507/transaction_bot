@@ -192,6 +192,7 @@
   .erow { padding: 9px 0; border-bottom: 1px solid var(--border); transition: opacity .15s; }
   .erow:last-child { border-bottom: none; }
   .erow.done { opacity: .5; }
+  .hdetail .erow.done { opacity: 1; }
   .er1 { display: flex; align-items: baseline; gap: var(--sp2); }
   .er1 .mer { font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .er1 .merin { flex: 1; min-width: 0; font: inherit; font-weight: 600; color: inherit; background: none; border: 1px solid transparent; border-radius: 5px; padding: 2px 5px; margin: -2px 0 -2px -5px; }
@@ -288,7 +289,7 @@
 
   var TXNS = [];
 
-  var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all', showDone:false,
+  var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all',
                 inboxScope:'all', inboxDone:false };
   var openRow=null, openProj=null, openHeatDay=null;
 
@@ -375,14 +376,8 @@
       + kpi('交易筆數', fmt(expCount+incCount), '<div class="k-sub num">平均支出 $'+fmt(avgPer)+'/筆</div>', '')
       + '</div>';
 
-    // The heatmap answers "which DAY did the money go" for the same period the KPIs total up,
-    // so it belongs directly under them rather than one tab away.
-    var heat=heatPanel(r);
-    h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>消費日曆熱力圖 <span class="h3note">'
-      + (heat ? r.year+' / '+r.month+' · 每日花費濃淡 · 點任一格編輯當天' : '') + '</span></h3>'
-      + (heat || '<div class="empty" style="padding:var(--sp4) 0">熱力圖只在選擇「單一月份」時顯示。目前為'+(r.level==='year'?'整年':'全部期間')+',請切到「當月」或用右上指定某月。</div>')
-      + '</div>';
-
+    // Totals, then WHAT the money went on, then WHICH DAY it went. Summary before detail: the
+    // split is a one-glance read of the period, the calendar is where you go to look something up.
     var map={}; expList.forEach(function(t){ if(!map[t.cat])map[t.cat]={total:0,count:0}; map[t.cat].total+=t.amount; map[t.cat].count++; });
     var items=Object.keys(map).map(function(k){return {name:k,total:map[k].total,count:map[k].count};}).sort(function(a,b){return b.total-a.total;});
 
@@ -391,7 +386,11 @@
       +'<div class="panel"><h3 class="inc">收入來源</h3>'+incomeList(TXNS.filter(function(t){return isIncome(t)&&inScope(t,r);}),incTotal)+'</div>'
       +'</div>';
 
-    h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>信用卡別分析 <span class="h3note">各卡本範圍支出</span></h3>'+cardPanel(expList)+'</div>';
+    var heat=heatPanel(r);
+    h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>消費日曆熱力圖 <span class="h3note">'
+      + (heat ? r.year+' / '+r.month+' · 每日花費濃淡 · 點任一格看當天全部交易' : '') + '</span></h3>'
+      + (heat || '<div class="empty" style="padding:var(--sp4) 0">熱力圖只在選擇「單一月份」時顯示。目前為'+(r.level==='year'?'整年':'全部期間')+',請切到「當月」或用右上指定某月。</div>')
+      + '</div>';
 
     // vs-previous-period totals per category, for the delta on each list row. Withheld entirely
     // when the scope is 全部期間: there is no previous period to compare against, and a column
@@ -422,13 +421,13 @@
     h+='<div class="grid2"><div class="panel"><h3>定期訂閱 <span class="h3note">每月固定 · 年約 $'+fmt(subTot*12)+'</span></h3>'+subPanel(subs,subTot)+'</div>'
       +'<div class="panel"><h3>Top 商店 <span class="h3note">本範圍</span></h3>'+topMerchants(expList)+'</div></div>';
 
-    var transfers = TXNS.filter(function(t){ return t.type==='轉帳'&&inScope(t,r); }).sort(function(a,b){return b.amount-a.amount;});
-    h+='<div class="panel"><h3>轉帳 <span class="h3note">帳戶間搬移 · 不計入收支</span></h3>';
-    if(!transfers.length) h+='<div class="empty" style="padding:var(--sp4) 0">此範圍沒有轉帳</div>';
-    else { var trTot=transfers.reduce(function(s,t){return s+t.amount;},0);
-      transfers.slice(0,20).forEach(function(t){ h+='<div class="lrow"><span class="badge">'+t.bank+'</span><span class="ln">'+esc(t.merchant||'轉帳')+'</span><span class="ls num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="la num">$'+fmt(t.amount)+'</span></div>'; });
-      h+='<div class="ltot"><span class="t-l">轉帳合計('+transfers.length+' 筆)</span><span class="t-v num">$'+fmt(trTot)+'</span></div>'; }
-    return h+'</div>';
+    // 信用卡別 sits here rather than on 分析: which card was used is not part of reading a month,
+    // it is a slow-moving habit, and it was crowding the page the owner actually reads.
+    h+='<div class="panel"><h3>信用卡別分析 <span class="h3note">各卡本範圍支出</span></h3>'+cardPanel(expList)+'</div>';
+
+    // The 轉帳 panel is deliberately absent. Transfers are already excluded from 支出/收入, so
+    // listing them added a section that changed no number and answered no question the owner had.
+    return h;
   }
   function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+(t.tag?' <span class="cat">'+esc(t.tag)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+'</span>'+manualDelBtn(t)+'</div>'; }
   function deltaStr(cur,prev,spend,partial){
@@ -584,15 +583,24 @@
         +'<button class="erec" data-erec="'+esc(t.id)+'">'+(t.posted?'↩ 取消記帳':'✓ 已記帳')+'</button>'+manualDelBtn(t)
       +'</div></div>';
   }
+  /**
+   * Everything spent on one day, no 已記帳 filter.
+   *
+   * This used to show only the un-recorded rows with a toggle to reveal the rest, because it was
+   * the ONLY place a transaction could be recorded. The 待記帳 tab owns that job now, so filtering
+   * here only hid the answer to the question the heatmap actually asks — what did this day cost.
+   * Rows stay editable (that is where an inline title fix belongs), but nothing is withheld and
+   * recorded rows are not dimmed, since by now almost every row is recorded.
+   */
   function dayEditor(y,m,sd){
-    var all=TXNS.filter(function(t){ return t.y===y&&t.m===m&&t.d===sd; });
-    var pending=all.filter(function(t){ return !t.posted; }), doneN=all.length-pending.length;
-    var spend=pending.filter(function(t){ return t.type==='支出'; }).reduce(function(s,t){ return s+t.amount; },0);
-    var visible=(state.showDone?all.slice():pending).sort(function(a,b){ return b.amount-a.amount; });
-    var h='<div class="hdetail"><div class="ev-head"><span class="lbl">'+m+' / '+sd+' 當天 · <b style="color:var(--text-primary)">'+pending.length+'</b> 筆待記帳 · 支出 <b class="num" style="color:var(--text-primary)">$'+fmt(spend)+'</b></span>'
-      +'<button class="ev-toggle" data-showdone>'+(state.showDone?'只看待記帳':'顯示已記帳 ('+doneN+')')+'</button></div>';
-    if(!visible.length){ return h+'<div class="empty" style="padding:var(--sp4) 0">🎉 這天都記帳完了</div></div>'; }
-    visible.forEach(function(t){ h+=editRow(t); });
+    var all=TXNS.filter(function(t){ return t.y===y&&t.m===m&&t.d===sd; })
+                .sort(function(a,b){ return b.amount-a.amount; });
+    var pendN=all.filter(function(t){ return !t.posted; }).length;
+    var spend=all.filter(function(t){ return t.type==='支出'; }).reduce(function(s,t){ return s+t.amount; },0);
+    var h='<div class="hdetail"><div class="ev-head"><span class="lbl">'+m+' / '+sd+' 當天 · <b style="color:var(--text-primary)">'+all.length+'</b> 筆 · 支出 <b class="num" style="color:var(--text-primary)">$'+fmt(spend)+'</b>'
+      +(pendN?' · 其中 <b style="color:var(--spend)">'+pendN+'</b> 筆待記帳':'')+'</span></div>';
+    if(!all.length){ return h+'<div class="empty" style="padding:var(--sp4) 0">這天沒有交易</div></div>'; }
+    all.forEach(function(t){ h+=editRow(t); });
     return h+'</div>';
   }
 
@@ -765,7 +773,6 @@
     app.querySelectorAll('.tabs button').forEach(function(b){ b.onclick=function(){ state.tab=this.getAttribute('data-tab'); openRow=null; openProj=null; openHeatDay=null; state.q=''; render(); }; });
     app.querySelectorAll('.ctl[data-scope]').forEach(function(b){ b.onclick=function(){ var s=this.getAttribute('data-scope'); state.scope=s; if(s==='year'){state.selYear=NOW.year;state.selMonth=0;} else if(s==='month'){state.selYear=NOW.year;state.selMonth=NOW.month;} openRow=null; openHeatDay=null; render(); }; });
     app.querySelectorAll('.cell[data-hday]').forEach(function(c){ c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); }; });
-    var sdBtn=app.querySelector('[data-showdone]'); if(sdBtn) sdBtn.onclick=function(){ state.showDone=!state.showDone; render(); };
     app.querySelectorAll('select[data-ef]').forEach(function(s){ s.onchange=function(){ applyEdit(this.getAttribute('data-id'), this.getAttribute('data-ef'), this.value); }; });
     app.querySelectorAll('[data-emer]').forEach(function(i){
       i.onchange=function(){ applyEdit(this.getAttribute('data-emer'),'merchant',this.value.trim()); };
