@@ -205,6 +205,10 @@
   .er2 .fld .lb { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
   .er2 select { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; font-size: 12px; cursor: pointer; }
   .er2 select:focus { outline: none; border-color: var(--accent); }
+  .er2 .tagin { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 7px; font: inherit; font-size: 12px; width: 132px; }
+  .er2 .tagin:focus { outline: none; border-color: var(--accent); }
+  .er2 .tagin::placeholder { color: var(--text-muted); font-size: 11px; }
   .erec { margin-left: auto; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-muted); border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
   .erec:hover { border-color: var(--income); color: var(--income); }
   .erow.done .erec { border-color: var(--income); color: var(--income); }
@@ -272,7 +276,7 @@
       <div class="mfld"><label>來源</label><select id="a-source"><option>現金</option><option>悠遊卡</option><option>LINE Pay</option><option>街口支付</option><option>轉帳</option><option>其他</option></select></div>
       <div class="mfld full"><label>商店 / 說明</label><input type="text" id="a-mer" placeholder="例：路邊攤晚餐"></div>
       <div class="mfld"><label>類別</label><select id="a-cat"></select></div>
-      <div class="mfld"><label>TAG（專案）</label><select id="a-tag"></select></div>
+      <div class="mfld"><label>TAG（專案）</label><input id="a-tag" list="taglist" placeholder="（無）· 可直接打新專案" spellcheck="false"></div>
       <div class="minfo">儲存後 <b>已記帳 ✓</b> · 手動列可在明細裡刪除</div>
     </div>
     <div class="macts"><button class="mbtn" id="a-cancel">取消</button><button class="mbtn primary" id="a-save">新增</button></div>
@@ -298,11 +302,9 @@
   function isPartialCur(r){ return isCurMonth(r)&&NOW.day<daysInMonth(NOW.year,NOW.month); }
   function inScope(t,r){ if(r.level==='all') return true; if(r.level==='year') return t.y===r.year; return t.y===r.year&&t.m===r.month; }
   function periodLabel(r){ if(r.level==='all') return '全部期間'; if(r.level==='year') return r.year+' 全年'+(r.year===NOW.year?'(1–'+NOW.month+' 月)':''); return r.year+' 年 '+r.month+' 月'+(isPartialCur(r)?'(至今 '+NOW.day+' 日)':''); }
-  function prevScope(r){ if(r.level==='month'){ var y=r.year,m=r.month-1; if(m<1){m=12;y--;} return {level:'month',year:y,month:m,upto:isPartialCur(r)?NOW.day:null}; } if(r.level==='year'){ return {level:'year',year:r.year-1,upto:(r.year===NOW.year?NOW.month:null)}; } return null; }
   function isIncome(t){ return t.type==='收入'&&t.cat!=='退款'; }
   function isRefund(t){ return t.type==='收入'&&t.cat==='退款'; }
-  function inUpto(t,r,upto){ return !upto || (r.level==='year'? t.m<=upto : t.d<=upto); }
-  function sumScope(pred,r,upto){ return TXNS.filter(function(t){ return pred(t)&&inScope(t,r)&&inUpto(t,r,upto); }).reduce(function(s,t){return s+t.amount;},0); }
+  function sumScope(pred,r){ return TXNS.filter(function(t){ return pred(t)&&inScope(t,r); }).reduce(function(s,t){return s+t.amount;},0); }
   function sum(a){ return a.reduce(function(s,t){return s+t.amount;},0); }
   function median(a){ if(!a.length) return 0; var s=a.slice().sort(function(x,y){return x-y;}); return s[Math.floor(s.length/2)]; }
   function fmt(n){ return Math.round(n).toLocaleString('en-US'); }
@@ -355,7 +357,13 @@
     var net=incTotal-expTotal;
     var expList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
     var incCount=TXNS.filter(function(t){return isIncome(t)&&inScope(t,r);}).length, expCount=expList.length;
-    var pr=prevScope(r), pExp=pr?(sumScope(function(t){return t.type==='支出';},pr,pr.upto)-sumScope(isRefund,pr,pr.upto)):0, pInc=pr?sumScope(isIncome,pr,pr.upto):0;
+    // Monthly baselines only mean something for a single month. A year or 全部期間 has no
+    // "typical month of the same kind" to sit against, so the comparison is withheld there —
+    // same rule the previous-period version used, for the same reason.
+    var selKey=(r.level==='month')?r.year+'-'+('0'+r.month).slice(-2):null;
+    var prog=monthProgress(r);
+    var baseExp=selKey?monthlyBaseline(function(t){return t.type==='支出';},selKey):null;
+    var baseInc=selKey?monthlyBaseline(isIncome,selKey):null;
 
     var subs=recurring(), subTot=subs.reduce(function(s,x){return s+x.amt;},0), subNames={}; subs.forEach(function(x){ subNames[x.name]=1; });
     var dim=daysInMonth(r.year,r.month), proj=isCurMonth(r)?projectMonth(expList,Math.min(NOW.day,dim),dim,subNames,subTot)-refunds:null;
@@ -364,12 +372,12 @@
     if(partial && incTotal>0 && proj!=null){ saveRate=Math.round(projNet/incTotal*100); saveLbl='預估儲蓄率'; saveNote='<div class="k-sub2">基於預估月底支出</div>'; }
     else { saveRate=incTotal>0?Math.round(net/incTotal*100):null; saveLbl='儲蓄率'; }
 
-    var expSub='<div class="k-sub">'+deltaStr(expTotal,pExp,true,partial)+'</div>'+(refunds>0?'<div class="k-sub2 num">已折抵退款 −$'+fmt(refunds)+'</div>':'');
+    var expSub='<div class="k-sub">'+avgDeltaStr(expTotal,baseExp,true,prog)+'</div>'+(refunds>0?'<div class="k-sub2 num">已折抵退款 −$'+fmt(refunds)+'</div>':'');
     var avgPer=expCount?Math.round(grossExp/expCount):0;
 
     var h='<div class="kpis">'
       + kpi('總支出','$'+fmt(expTotal), expSub, 'spend')
-      + kpi('總收入','$'+fmt(incTotal), '<div class="k-sub">'+deltaStr(incTotal,pInc,false,partial)+'</div>', 'income')
+      + kpi('總收入','$'+fmt(incTotal), '<div class="k-sub">'+avgDeltaStr(incTotal,baseInc,false,prog)+'</div>', 'income')
       + kpi('結餘',(net>=0?'+':'−')+'$'+fmt(Math.abs(net)),
           '<div class="k-sub">'+saveLbl+' '+(saveRate!=null?saveRate+'%':'—')+'</div>'+(saveRate!=null?'<div class="meter"><i style="width:'+Math.max(0,Math.min(100,saveRate))+'%;background:'+meterColor(saveRate)+'"></i></div>':'')+saveNote,
           net>=0?'pos':'neg')
@@ -392,20 +400,18 @@
       + (heat || '<div class="empty" style="padding:var(--sp4) 0">熱力圖只在選擇「單一月份」時顯示。目前為'+(r.level==='year'?'整年':'全部期間')+',請切到「當月」或用右上指定某月。</div>')
       + '</div>';
 
-    // vs-previous-period totals per category, for the delta on each list row. Withheld entirely
-    // when the scope is 全部期間: there is no previous period to compare against, and a column
-    // of em-dashes is worse than no column.
-    var prevCat=null;
-    if(pr){ prevCat={}; TXNS.forEach(function(t){ if(t.type==='支出'&&inScope(t,pr)&&inUpto(t,pr,pr.upto)) prevCat[t.cat]=(prevCat[t.cat]||0)+t.amount; }); }
+    // Per-category monthly means for the chip on each list row. Null outside month scope, which
+    // drops the whole column rather than filling it with em-dashes.
+    var catBase=selKey?catBaselines(selKey):null;
 
-    h+='<div class="toolbar"><h2>'+(state.q?'搜尋結果':'支出明細 · 依類別 <span class="th">金額 · 占比 · 對比前期 · 點開看交易</span>')+'</h2><input class="search" id="q" placeholder="搜尋商店…" value="'+esc(state.q)+'"></div>';
+    h+='<div class="toolbar"><h2>'+(state.q?'搜尋結果':'支出明細 · 依類別 <span class="th">金額 · 占比 · 對比常態月 · 點開看交易</span>')+'</h2><input class="search" id="q" placeholder="搜尋商店…" value="'+esc(state.q)+'"></div>';
     if(state.q){
       var hits=expList.filter(function(t){return t.merchant.toLowerCase().indexOf(state.q.toLowerCase())>=0;}).sort(function(a,b){return b.amount-a.amount;});
       if(!hits.length) h+='<div class="empty">找不到「'+esc(state.q)+'」的交易</div>';
       else { h+='<div class="panel"><div class="rc-meta num" style="margin-bottom:var(--sp2)">'+hits.length+' 筆 · 合計 $'+fmt(sum(hits))+'</div>'; hits.slice(0,40).forEach(function(t){ h+=txnRow(t,true); }); h+='</div>'; }
     } else {
       if(!items.length) h+='<div class="empty">此範圍沒有支出</div>';
-      else { var max=items[0].total; items.forEach(function(it,i){ h+=rowCard(it,i,max,expList,prevCat); }); }
+      else { var max=items[0].total; items.forEach(function(it,i){ h+=rowCard(it,i,max,expList,catBase,prog); }); }
     }
     return h;
   }
@@ -430,12 +436,93 @@
     return h;
   }
   function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+(t.tag?' <span class="cat">'+esc(t.tag)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+'</span>'+manualDelBtn(t)+'</div>'; }
-  function deltaStr(cur,prev,spend,partial){
-    if(!prev) return '無前期可比';
-    if(Math.abs(prev)<500){ var diff=cur-prev; return 'vs 前期 '+(diff>=0?'+':'−')+'$'+fmt(Math.abs(diff)); }
-    var d=Math.round((cur-prev)/prev*100), suf=partial?' <span style="opacity:.7">(同期)</span>':'';
-    if(d===0) return 'vs 前期 持平'+suf; var up=d>0; var cls=spend?(up?'up':'down'):(up?'down':'up');
-    return 'vs 前期 <span class="delta '+cls+'">'+(up?'▲':'▼')+Math.abs(d)+'%</span>'+suf;
+  // ---------- monthly baseline: "how does this month compare to a typical month" ----------
+  // Replaces the previous-period comparison. Comparing July to June answers a different, noisier
+  // question — one unusual month poisons the next month's reading. A monthly mean says how far
+  // this month sits from normal, which is what the number is being read for.
+  //
+  // Baseline months are every month that HAS data, minus two exclusions: the month being looked
+  // at (it cannot be its own baseline) and the current month whenever it is still running, since
+  // a part-month total is not a representative month. A month with data but zero in some category
+  // still counts as a zero for that category — that is what an average over months means.
+  function monthKeysWithData(){
+    var s={}; TXNS.forEach(function(t){ if(t.y&&t.m) s[t.y+'-'+('0'+t.m).slice(-2)]=1; });
+    return Object.keys(s).sort();
+  }
+  function curPartialKey(){
+    return NOW.day<daysInMonth(NOW.year,NOW.month) ? NOW.year+'-'+('0'+NOW.month).slice(-2) : null;
+  }
+  function baselineKeys(selKey){
+    var skip={}; skip[selKey]=1; var cp=curPartialKey(); if(cp) skip[cp]=1;
+    return monthKeysWithData().filter(function(k){ return !skip[k]; });
+  }
+  /**
+   * The baseline is the MEDIAN monthly total, not the mean.
+   *
+   * Measured on the real 11 completed months: mean total spend is $121,037, median is $74,580 —
+   * the mean sits 62% higher and only 3 of the 11 months clear it, so a mean baseline would label
+   * two thirds of normal months "below average". One month (2026-01, $414,102) does that all by
+   * itself. Per category it is worse: 旅遊's mean is 540% above its median, 家居's 343%. Median is
+   * what "a typical month" means when a few months are extreme, which is the question being asked.
+   *
+   * Sparse categories fall back to the mean: a category appearing in fewer than half the months
+   * has a median of 0, and dividing by it would flag it as brand new every single time. The
+   * tooltip says which basis was used, so the number is never silently one or the other.
+   * (To use the mean everywhere instead, return `avg` from pickBasis_.)
+   */
+  function median_(sorted){
+    if(!sorted.length) return 0;
+    var n=sorted.length;
+    return n%2 ? sorted[(n-1)/2] : (sorted[n/2-1]+sorted[n/2])/2;
+  }
+  function pickBasis_(vals){
+    var sorted=vals.slice().sort(function(a,b){ return a-b; });
+    var med=median_(sorted);
+    var avg=vals.reduce(function(s,v){ return s+v; },0)/(vals.length||1);
+    return med>0 ? { ref: med, basis: '月常態' } : { ref: avg, basis: '月平均(偶發類別)' };
+  }
+  /** Monthly baseline for the rows `pred` accepts, over the months that count. */
+  function monthlyBaseline(pred,selKey){
+    var keys=baselineKeys(selKey); if(!keys.length) return null;
+    var tot={}; keys.forEach(function(k){ tot[k]=0; });
+    TXNS.forEach(function(t){ var k=t.y+'-'+('0'+t.m).slice(-2); if(k in tot && pred(t)) tot[k]+=t.amount; });
+    var b=pickBasis_(keys.map(function(k){ return tot[k]; }));
+    b.months=keys.length;
+    return b;
+  }
+  /** Same, per category, in one pass over the rows. */
+  function catBaselines(selKey){
+    var keys=baselineKeys(selKey); if(!keys.length) return null;
+    var idx={}; keys.forEach(function(k,i){ idx[k]=i; });
+    var per={};   // cat -> array of monthly totals, one slot per baseline month
+    TXNS.forEach(function(t){
+      if(t.type!=='支出') return;
+      var i=idx[t.y+'-'+('0'+t.m).slice(-2)]; if(i===undefined) return;
+      if(!per[t.cat]){ per[t.cat]=[]; for(var j=0;j<keys.length;j++) per[t.cat].push(0); }
+      per[t.cat][i]+=t.amount;
+    });
+    var out={}; Object.keys(per).forEach(function(c){ out[c]=pickBasis_(per[c]); });
+    return { byCat: out, months: keys.length };
+  }
+  /** Fraction of the selected month elapsed, so a part-month total is compared to a part-month
+   *  baseline instead of always reading as "way below average". 1 for any completed month. */
+  function monthProgress(r){
+    if(!isPartialCur(r)) return 1;
+    return NOW.day/daysInMonth(r.year,r.month);
+  }
+
+  function baseTip(base,ref,prog){
+    return base.basis+' $'+fmt(ref)+'('+base.months+' 個月'+(prog<1?' · 已依進度折算':'')+')';
+  }
+  function avgDeltaStr(cur,base,spend,prog){
+    if(base==null||!base.ref) return '無常態可比';
+    var ref=base.ref*prog;
+    var lbl='vs '+base.basis.split('(')[0]+(prog<1?' (依進度折算)':'');
+    if(ref<500){ var diff=cur-ref; return lbl+' '+(diff>=0?'+':'−')+'$'+fmt(Math.abs(diff)); }
+    var d=Math.round((cur-ref)/ref*100);
+    if(d===0) return lbl+' 持平';
+    var up=d>0, cls=spend?(up?'up':'down'):(up?'down':'up');
+    return lbl+' <span class="delta '+cls+'" title="'+baseTip(base,ref,prog)+'">'+(up?'▲':'▼')+Math.abs(d)+'%</span>';
   }
   function incomeList(list,incTotal){ if(!list.length) return '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">此範圍沒有收入</div>'; var imap={}; list.forEach(function(t){ imap[t.cat]=(imap[t.cat]||0)+t.amount; }); var items=Object.keys(imap).map(function(k){return {name:k,total:imap[k]};}).sort(function(a,b){return b.total-a.total;}); var out=''; items.forEach(function(it){ var pct=incTotal>0?it.total/incTotal*100:0; out+='<div style="padding:6px 0;border-bottom:1px solid var(--border)"><div class="lrow" style="padding:0;border:none"><span class="ln">'+esc(it.name)+'</span><span class="la inc num">$'+fmt(it.total)+'</span></div><div class="sharebar"><i style="width:'+pct.toFixed(0)+'%"></i></div></div>'; }); out+='<div class="ltot"><span class="t-l">收入合計</span><span class="t-v num" style="color:var(--income)">$'+fmt(incTotal)+'</span></div>'; return out; }
   function monthsBack(n){ var arr=[],y=NOW.year,mm=NOW.month; for(var i=0;i<n;i++){ arr.unshift({y:y,m:mm}); mm--; if(mm<1){mm=12;y--;} } return arr; }
@@ -455,22 +542,23 @@
   function recurring(){ var m={}; TXNS.filter(function(t){return t.type==='支出';}).forEach(function(t){ var k=t.y+'-'+('0'+t.m).slice(-2); if(!m[t.merchant])m[t.merchant]={}; m[t.merchant][k]=(m[t.merchant][k]||0)+t.amount; }); var recent=monthsBack(6).map(function(o){return o.y+'-'+('0'+o.m).slice(-2);}); var last2=recent.slice(-2); var out=[]; Object.keys(m).forEach(function(name){ var present=recent.filter(function(k){return m[name][k]!=null;}); if(present.length<4) return; if(!last2.some(function(k){return m[name][k]!=null;})) return; var amts=present.map(function(k){return m[name][k];}); var med=median(amts); if(amts.every(function(a){return Math.abs(a-med)<=med*0.12;})) out.push({name:name,amt:med}); }); return out.sort(function(a,b){return b.amt-a.amt;}); }
   function subPanel(subs,tot){ if(!subs.length) return '<div style="color:var(--text-muted);font-size:12px">未偵測到定期扣款</div>'; var out=''; subs.forEach(function(x){ out+='<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls">每月</span><span class="la num">$'+fmt(x.amt)+'</span></div>'; }); out+='<div class="ltot"><span class="t-l">每月合計</span><span class="t-v num">$'+fmt(tot)+'</span></div>'; return out; }
   function topMerchants(exp){ var m={}; exp.forEach(function(t){ if(!m[t.merchant])m[t.merchant]={total:0,count:0}; m[t.merchant].total+=t.amount; m[t.merchant].count++; }); var arr=Object.keys(m).map(function(k){return {name:k,total:m[k].total,count:m[k].count};}).sort(function(a,b){return b.total-a.total;}).slice(0,6); if(!arr.length) return '<div style="color:var(--text-muted);font-size:12px">無資料</div>'; var out=''; arr.forEach(function(x){ out+='<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls num">'+x.count+' 筆</span><span class="la num">$'+fmt(x.total)+'</span></div>'; }); return out; }
-  /** vs-previous-period chip for one category. `prevCat` null ⇒ no comparable period, render
-   *  nothing at all rather than an em-dash. */
-  function catDelta(name,cur,prevCat){
-    if(!prevCat) return '';
-    var p=prevCat[name]||0;
-    if(!p) return '<span class="delta up" title="前期沒有這一類">新</span>';
-    var d=Math.round((cur-p)/p*100);
-    if(d===0) return '<span class="delta flat" title="與前期同期持平">持平</span>';
-    return '<span class="delta '+(d>0?'up':'down')+'" title="前期同期 $'+fmt(p)+'">'+(d>0?'▲':'▼')+Math.abs(d)+'%</span>';
+  /** vs-monthly-mean chip for one category. `catBase` null ⇒ nothing comparable, render nothing
+   *  at all rather than an em-dash. `prog` scales the baseline for a month still in progress. */
+  function catDelta(name,cur,catBase,prog){
+    if(!catBase) return '';
+    var b=catBase.byCat[name];
+    if(!b||!b.ref) return '<span class="delta up" title="其他月份沒有這一類">新</span>';
+    var ref=b.ref*prog, tip=baseTip({basis:b.basis,months:catBase.months},ref,prog);
+    var d=Math.round((cur-ref)/ref*100);
+    if(d===0) return '<span class="delta flat" title="'+tip+'">持平</span>';
+    return '<span class="delta '+(d>0?'up':'down')+'" title="'+tip+'">'+(d>0?'▲':'▼')+Math.abs(d)+'%</span>';
   }
-  function rowCard(it,i,max,exp,prevCat){
+  function rowCard(it,i,max,exp,catBase,prog){
     var color=PALETTE[Math.min(i,PALETTE.length-1)],isOpen=(openRow===it.name);
     var grand=exp.reduce(function(s,t){return s+t.amount;},0);
     var pct=grand>0?Math.round(it.total/grand*100):0;
     var h='<div class="row-card'+(isOpen?' open':'')+'" data-row="'+esc(it.name)+'"><div class="rc-top"><span class="rc-name"><span class="dot" style="background:'+color+'"></span>'+esc(it.name)+'</span>'
-      +'<span class="rc-end">'+catDelta(it.name,it.total,prevCat)+'<span class="rc-total num">$'+fmt(it.total)+'</span><span class="chev">▶</span></span></div>'
+      +'<span class="rc-end">'+catDelta(it.name,it.total,catBase,prog)+'<span class="rc-total num">$'+fmt(it.total)+'</span><span class="chev">▶</span></span></div>'
       +'<div class="rc-bar"><i style="width:'+(max>0?(it.total/max*100).toFixed(1):0)+'%;background:'+color+'"></i></div>'
       +'<div class="rc-meta num">'+it.count+' 筆 · 平均 $'+fmt(it.total/it.count)+' · 占 '+pct+'%</div>';
     var list=exp.filter(function(t){return t.cat===it.name;}).sort(function(a,b){return (a.y-b.y)||(a.m-b.m)||(a.d-b.d);});
@@ -525,7 +613,12 @@
     // that tap lands, so 已記帳 pressed straight after typing was silently dropped. The input
     // already shows the new text, so there is nothing to repaint — other views pick it up on
     // the next natural render.
-    if (field !== 'merchant') render();
+    // A free-text field commits on blur, which on a touch device is part of the SAME tap that is
+    // already heading for another control; re-rendering here replaces the DOM before that tap
+    // lands, which is how 已記帳 pressed straight after typing used to be dropped (CT-16). The
+    // input already shows the new value, so there is nothing to repaint. Applies to every
+    // free-text field — merchant and now tag, which became an input so new projects can be typed.
+    if (field !== 'merchant' && field !== 'tag') render();
     // 未分類 is a display value, not a sheet value: writing it would put the literal string into
     // 種類(手動). Clearing the category writes a blank cell, which is what 未分類 means.
     var patch={}; patch[field]=(field==='cat'&&value==='未分類')?'':value;
@@ -550,7 +643,7 @@
   function openAddModal(){
     var ov=document.getElementById('addOverlay'); if(!ov) return;
     document.getElementById('a-cat').innerHTML='<option value="">（未分類）</option>'+realCats().map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>';}).join('');
-    document.getElementById('a-tag').innerHTML='<option value="">（無）</option>'+distinctTags().map(function(g){return '<option value="'+esc(g)+'">'+esc(g)+'</option>';}).join('');
+    document.getElementById('a-tag').value='';
     var di=document.getElementById('a-date'); di.value=NOW.year+'-'+('0'+NOW.month).slice(-2)+'-'+('0'+NOW.day).slice(-2);
     document.getElementById('a-amt').value=''; document.getElementById('a-mer').value='';
     document.getElementById('a-amt').classList.remove('bad'); di.classList.remove('bad');
@@ -563,7 +656,7 @@
     if(!date){ di.classList.add('bad'); ok=false; } else di.classList.remove('bad');
     if(!amt||amt<=0){ ai.classList.add('bad'); ok=false; } else ai.classList.remove('bad');
     if(!ok){ toast('請填日期與金額', true); return; }
-    var fields={ date:date, amount:amt, type:document.getElementById('a-type').value, source:document.getElementById('a-source').value, merchant:document.getElementById('a-mer').value, cat:document.getElementById('a-cat').value, tag:document.getElementById('a-tag').value };
+    var fields={ date:date, amount:amt, type:document.getElementById('a-type').value, source:document.getElementById('a-source').value, merchant:document.getElementById('a-mer').value, cat:document.getElementById('a-cat').value, tag:document.getElementById('a-tag').value.trim() };
     var p=date.split('-');
     var temp={ y:+p[0], m:+p[1], d:+p[2], type:fields.type, amount:amt, cat:fields.cat||'未分類', merchant:fields.merchant, tag:fields.tag, bank:fields.source, last4:'', link:'', id:'manual-temp-'+(TXNS.length+1), posted:true };
     TXNS.push(temp); closeAddModal(); render();
@@ -579,8 +672,12 @@
       +'<div class="er2">'
         +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
         +'<div class="fld"><span class="lb">收支</span><select data-ef="type" data-id="'+esc(t.id)+'" style="color:'+tc+'">'+selOpts(['支出','收入','轉帳'],t.type)+'</select></div>'
-        +'<div class="fld"><span class="lb">TAG</span><select data-ef="tag" data-id="'+esc(t.id)+'">'+selOpts(distinctTags(),t.tag,'（無）')+'</select></div>'
-        +'<button class="erec" data-erec="'+esc(t.id)+'">'+(t.posted?'↩ 取消記帳':'✓ 已記帳')+'</button>'+manualDelBtn(t)
+        // TAG is a type-or-pick field, not a closed list: a project only exists once a
+        // transaction carries it, so if the picker can only offer values already in the sheet
+        // there is no way to start a new one from the web at all. 類別 stays a closed <select>
+        // on purpose — that taxonomy was just cleaned up and should not fragment.
+        +'<div class="fld"><span class="lb">TAG</span><input class="tagin" list="taglist" data-ef="tag" data-id="'+esc(t.id)+'" value="'+esc(t.tag)+'" placeholder="（無）· 可直接打新專案" spellcheck="false"></div>'
+        +'<button class="erec" data-erec="'+esc(t.id)+'">'+(t.posted?'↩ 取消記帳':'✓ 記帳')+'</button>'+manualDelBtn(t)
       +'</div></div>';
   }
   /**
@@ -765,6 +862,7 @@
     }
     h+='</div>';
     h+= tab==='analysis' ? periodTab() : (tab==='trend' ? trendTab() : (tab==='inbox' ? inboxTab() : projectTab()));
+    h+='<datalist id="taglist">'+distinctTags().map(function(g){ return '<option value="'+esc(g)+'"></option>'; }).join('')+'</datalist>';
     h+='<div class="footer">即時讀取自 Transactions · 冷石板深色</div>';
     document.getElementById('app').innerHTML=h; attach();
   }
@@ -773,7 +871,10 @@
     app.querySelectorAll('.tabs button').forEach(function(b){ b.onclick=function(){ state.tab=this.getAttribute('data-tab'); openRow=null; openProj=null; openHeatDay=null; state.q=''; render(); }; });
     app.querySelectorAll('.ctl[data-scope]').forEach(function(b){ b.onclick=function(){ var s=this.getAttribute('data-scope'); state.scope=s; if(s==='year'){state.selYear=NOW.year;state.selMonth=0;} else if(s==='month'){state.selYear=NOW.year;state.selMonth=NOW.month;} openRow=null; openHeatDay=null; render(); }; });
     app.querySelectorAll('.cell[data-hday]').forEach(function(c){ c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); }; });
-    app.querySelectorAll('select[data-ef]').forEach(function(s){ s.onchange=function(){ applyEdit(this.getAttribute('data-id'), this.getAttribute('data-ef'), this.value); }; });
+    app.querySelectorAll('[data-ef]').forEach(function(el){
+      el.onchange=function(){ applyEdit(this.getAttribute('data-id'), this.getAttribute('data-ef'), this.value.trim()); };
+      if(el.tagName==='INPUT'){ el.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } }; }
+    });
     app.querySelectorAll('[data-emer]').forEach(function(i){
       i.onchange=function(){ applyEdit(this.getAttribute('data-emer'),'merchant',this.value.trim()); };
       i.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } };
