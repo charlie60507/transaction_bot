@@ -60,11 +60,6 @@
   .meter > i { display: block; height: 100%; border-radius: 2px; }
   @media (max-width: 640px) { .kpis, .kpis.k3 { grid-template-columns: repeat(2, 1fr); } }
 
-  .projstrip { display: flex; align-items: center; gap: var(--sp4); flex-wrap: wrap; background: var(--bg-raised); border: 1px solid var(--border);
-    border-radius: var(--r-card); padding: var(--sp3) var(--sp4); margin-bottom: var(--sp4); }
-  .projstrip .pl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }
-  .projstrip .pv { font-size: 15px; font-weight: 600; }
-  .projstrip .pn { font-size: 11px; color: var(--text-muted); margin-left: auto; }
 
   .grid2 { display: grid; grid-template-columns: 1.15fr 1fr; gap: var(--sp3); margin-bottom: var(--sp4); }
   @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
@@ -110,9 +105,6 @@
   .tlegend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
   .tlegend i.proj { background: repeating-linear-gradient(-45deg, var(--spend) 0 2px, transparent 2px 4px); }
 
-  .moretog { width: 100%; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-muted); border-radius: var(--r-card);
-    padding: 9px; font-size: 12px; cursor: pointer; margin-bottom: var(--sp4); }
-  .moretog:hover { background: var(--bg-raised); }
 
   .toolbar { display: flex; gap: var(--sp2); align-items: center; margin: var(--sp2) 0 var(--sp3); }
   .toolbar h2 { font-size: 14px; font-weight: 600; margin-right: auto; }
@@ -133,6 +125,9 @@
   .row-card.open .chev, .pcard.open .chev { transform: rotate(90deg); }
   .rc-total, .pc-total { font-weight: 600; font-size: 15px; color: var(--text-primary); white-space: nowrap; }
   .rc-meta { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+  .rc-bar { height: 5px; border-radius: 3px; background: var(--bg-raised); overflow: hidden; margin: 6px 0 4px; }
+  .rc-bar > i { display: block; height: 100%; }
+  .rc-bar + .rc-meta { margin-top: 0; }
   .drill { margin-top: var(--sp3); border-top: 1px solid var(--border); padding-top: var(--sp2); display: none; }
   .row-card.open .drill, .pcard.open .pdrill { display: block; }
   .txn { display: flex; align-items: center; gap: var(--sp2); font-size: 12px; padding: 5px 0; }
@@ -162,24 +157,18 @@
   .cardrow .cpct { color: var(--text-muted); font-size: 12px; min-width: 38px; text-align: right; }
   .cardrow .cmeta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
-  /* category ranking + MoM */
-  .rank { display: flex; align-items: center; gap: var(--sp3); padding: 9px 0; border-bottom: 1px solid var(--border); }
-  .rank:last-child { border-bottom: none; }
-  .rank .rk { font-size: 12px; color: var(--text-muted); width: 16px; }
-  .rank .rdot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
-  .rank .rn { flex: 1; font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .rank .rbar-wrap { flex: 1.4; }
-  .rank .rbar { height: 6px; border-radius: 3px; background: var(--bg-raised); overflow: hidden; }
-  .rank .rbar > i { display: block; height: 100%; }
-  .rank .ra { font-weight: 600; min-width: 76px; text-align: right; }
-  .rank .rd { min-width: 60px; text-align: right; font-size: 12px; }
   .delta.flat { color: var(--text-muted); }
 
   /* spend calendar heatmap */
   .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
   .cal .dow { font-size: 11px; color: var(--text-muted); text-align: center; padding-bottom: 2px; }
-  .cell { aspect-ratio: 1; border-radius: 5px; background: var(--bg-raised); border: 1px solid transparent;
+  /* Square cells were fine when the heatmap owned its own tab. Sharing a page with the KPIs and
+     the per-category detail, a 7×140px grid became a wall the reader had to scroll past, so the
+     cells are capped: wide enough to stay readable, short enough that a whole month plus the day
+     editor fits above the fold. */
+  .cell { aspect-ratio: 1.7; max-height: 62px; border-radius: 5px; background: var(--bg-raised); border: 1px solid transparent;
     display: flex; align-items: flex-start; justify-content: flex-end; padding: 3px 4px; }
+  @media (max-width: 520px) { .cell { aspect-ratio: 1.15; max-height: none; } }
   .cell .dn { font-size: 10px; color: var(--text-muted); opacity: .7; }
   .cell.future { opacity: .28; }
   .cell.today { border-color: var(--net); }
@@ -299,7 +288,7 @@
 
   var TXNS = [];
 
-  var state = { tab:'category', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all', more:false, showDone:false,
+  var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all', showDone:false,
                 inboxScope:'all', inboxDone:false };
   var openRow=null, openProj=null, openHeatDay=null;
 
@@ -349,7 +338,14 @@
   function lg(color,name,total,grand){ var pct=grand>0?Math.round(total/grand*100):0; return '<div class="lg"><span class="sw" style="background:'+color+'"></span><span class="lg-name">'+esc(name)+'</span><span class="lg-amt num">$'+fmt(total)+'</span><span class="lg-pct num">'+pct+'%</span></div>'; }
   function kpi(label,valHtml,subHtml,cls){ return '<div class="kpi"><div class="k-label">'+label+'</div><div class="k-value num '+(cls||'')+'">'+valHtml+'</div>'+(subHtml||'')+'</div>'; }
 
-  function categoryTab(){
+  // ---------- 分析: everything about the ONE selected period ----------
+  // Categories used to be answered twice: this tab's rowCard list gave amount + share +
+  // drilldown, and a separate 排行 panel on another tab gave the vs-previous-period ▲▼ for the
+  // same grouping of the same rows. Seeing "飲食 spent this much, and that is 18% more than
+  // last month, and here are the transactions" meant switching tabs. The delta now lives on
+  // the list row and 排行 is gone. Everything focused on a single period — totals, the day
+  // heatmap, the split, the per-category detail — sits here together.
+  function periodTab(){
     var r=resolveScope(state.scope), partial=isPartialCur(r);
     var grossExp=sumScope(function(t){return t.type==='支出';},r);
     var refunds=sumScope(isRefund,r);
@@ -379,12 +375,13 @@
       + kpi('交易筆數', fmt(expCount+incCount), '<div class="k-sub num">平均支出 $'+fmt(avgPer)+'/筆</div>', '')
       + '</div>';
 
-    if(proj!=null){
-      h+='<div class="projstrip"><span class="pl">本月預估</span>'
-       +'<span class="pv">月底支出 <span class="num" style="color:var(--spend)">$'+fmt(proj)+'</span></span>'
-       +'<span class="pv">預估結餘 <span class="num" style="color:'+(projNet>=0?'var(--income)':'var(--spend)')+'">'+(projNet>=0?'+':'−')+'$'+fmt(Math.abs(projNet))+'</span></span>'
-       +'<span class="pn">已過 '+NOW.day+'/'+dim+' 天 · 大額一次性與訂閱未納入日均外推</span></div>';
-    }
+    // The heatmap answers "which DAY did the money go" for the same period the KPIs total up,
+    // so it belongs directly under them rather than one tab away.
+    var heat=heatPanel(r);
+    h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>消費日曆熱力圖 <span class="h3note">'
+      + (heat ? r.year+' / '+r.month+' · 每日花費濃淡 · 點任一格編輯當天' : '') + '</span></h3>'
+      + (heat || '<div class="empty" style="padding:var(--sp4) 0">熱力圖只在選擇「單一月份」時顯示。目前為'+(r.level==='year'?'整年':'全部期間')+',請切到「當月」或用右上指定某月。</div>')
+      + '</div>';
 
     var map={}; expList.forEach(function(t){ if(!map[t.cat])map[t.cat]={total:0,count:0}; map[t.cat].total+=t.amount; map[t.cat].count++; });
     var items=Object.keys(map).map(function(k){return {name:k,total:map[k].total,count:map[k].count};}).sort(function(a,b){return b.total-a.total;});
@@ -394,29 +391,44 @@
       +'<div class="panel"><h3 class="inc">收入來源</h3>'+incomeList(TXNS.filter(function(t){return isIncome(t)&&inScope(t,r);}),incTotal)+'</div>'
       +'</div>';
 
-    h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>每月收支趨勢 <span class="h3note">'+trendMaxNote(r,subNames,subTot)+'</span></h3>'+trendChart(r,subNames,subTot)+'</div>';
+    h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>信用卡別分析 <span class="h3note">各卡本範圍支出</span></h3>'+cardPanel(expList)+'</div>';
 
-    var transfers = TXNS.filter(function(t){ return t.type==='轉帳'&&inScope(t,r); }).sort(function(a,b){return b.amount-a.amount;});
-    if(transfers.length){ var trTot=transfers.reduce(function(s,t){return s+t.amount;},0);
-      h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>轉帳 <span class="h3note">帳戶間搬移 · 不計入收支</span></h3>';
-      transfers.slice(0,20).forEach(function(t){ h+='<div class="lrow"><span class="badge">'+t.bank+'</span><span class="ln">'+esc(t.merchant||'轉帳')+'</span><span class="ls num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="la num">$'+fmt(t.amount)+'</span></div>'; });
-      h+='<div class="ltot"><span class="t-l">轉帳合計('+transfers.length+' 筆)</span><span class="t-v num">$'+fmt(trTot)+'</span></div></div>'; }
-    h+='<button class="moretog" data-more>'+(state.more?'▲ 收合分析':'▾ 更多分析:定期訂閱 · Top 商店')+'</button>';
-    if(state.more){
-      h+='<div class="grid2"><div class="panel"><h3>定期訂閱 <span class="h3note">每月固定 · 年約 $'+fmt(subTot*12)+'</span></h3>'+subPanel(subs,subTot)+'</div>'
-        +'<div class="panel"><h3>Top 商店 <span class="h3note">本範圍</span></h3>'+topMerchants(expList)+'</div></div>';
-    }
+    // vs-previous-period totals per category, for the delta on each list row. Withheld entirely
+    // when the scope is 全部期間: there is no previous period to compare against, and a column
+    // of em-dashes is worse than no column.
+    var prevCat=null;
+    if(pr){ prevCat={}; TXNS.forEach(function(t){ if(t.type==='支出'&&inScope(t,pr)&&inUpto(t,pr,pr.upto)) prevCat[t.cat]=(prevCat[t.cat]||0)+t.amount; }); }
 
-    h+='<div class="toolbar"><h2>'+(state.q?'搜尋結果':'支出明細 · 依類別 <span class="th">點類別看該類交易</span>')+'</h2><input class="search" id="q" placeholder="搜尋商店…" value="'+esc(state.q)+'"></div>';
+    h+='<div class="toolbar"><h2>'+(state.q?'搜尋結果':'支出明細 · 依類別 <span class="th">金額 · 占比 · 對比前期 · 點開看交易</span>')+'</h2><input class="search" id="q" placeholder="搜尋商店…" value="'+esc(state.q)+'"></div>';
     if(state.q){
       var hits=expList.filter(function(t){return t.merchant.toLowerCase().indexOf(state.q.toLowerCase())>=0;}).sort(function(a,b){return b.amount-a.amount;});
       if(!hits.length) h+='<div class="empty">找不到「'+esc(state.q)+'」的交易</div>';
       else { h+='<div class="panel"><div class="rc-meta num" style="margin-bottom:var(--sp2)">'+hits.length+' 筆 · 合計 $'+fmt(sum(hits))+'</div>'; hits.slice(0,40).forEach(function(t){ h+=txnRow(t,true); }); h+='</div>'; }
     } else {
       if(!items.length) h+='<div class="empty">此範圍沒有支出</div>';
-      else { var max=items[0].total; items.forEach(function(it,i){ h+=rowCard(it,i,max,expList); }); }
+      else { var max=items[0].total; items.forEach(function(it,i){ h+=rowCard(it,i,max,expList,prevCat); }); }
     }
     return h;
+  }
+
+  // ---------- 趨勢: only what needs MORE THAN ONE period to mean anything ----------
+  function trendTab(){
+    var r=resolveScope(state.scope);
+    var expList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
+    var subs=recurring(), subTot=subs.reduce(function(s,x){return s+x.amt;},0), subNames={}; subs.forEach(function(x){ subNames[x.name]=1; });
+
+    var h='<div class="panel" style="margin-bottom:var(--sp4)"><h3>每月收支趨勢 <span class="h3note">'+trendMaxNote(r,subNames,subTot)+'</span></h3>'+trendChart(r,subNames,subTot)+'</div>';
+
+    h+='<div class="grid2"><div class="panel"><h3>定期訂閱 <span class="h3note">每月固定 · 年約 $'+fmt(subTot*12)+'</span></h3>'+subPanel(subs,subTot)+'</div>'
+      +'<div class="panel"><h3>Top 商店 <span class="h3note">本範圍</span></h3>'+topMerchants(expList)+'</div></div>';
+
+    var transfers = TXNS.filter(function(t){ return t.type==='轉帳'&&inScope(t,r); }).sort(function(a,b){return b.amount-a.amount;});
+    h+='<div class="panel"><h3>轉帳 <span class="h3note">帳戶間搬移 · 不計入收支</span></h3>';
+    if(!transfers.length) h+='<div class="empty" style="padding:var(--sp4) 0">此範圍沒有轉帳</div>';
+    else { var trTot=transfers.reduce(function(s,t){return s+t.amount;},0);
+      transfers.slice(0,20).forEach(function(t){ h+='<div class="lrow"><span class="badge">'+t.bank+'</span><span class="ln">'+esc(t.merchant||'轉帳')+'</span><span class="ls num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="la num">$'+fmt(t.amount)+'</span></div>'; });
+      h+='<div class="ltot"><span class="t-l">轉帳合計('+transfers.length+' 筆)</span><span class="t-v num">$'+fmt(trTot)+'</span></div>'; }
+    return h+'</div>';
   }
   function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+(t.tag?' <span class="cat">'+esc(t.tag)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+'</span>'+manualDelBtn(t)+'</div>'; }
   function deltaStr(cur,prev,spend,partial){
@@ -444,9 +456,24 @@
   function recurring(){ var m={}; TXNS.filter(function(t){return t.type==='支出';}).forEach(function(t){ var k=t.y+'-'+('0'+t.m).slice(-2); if(!m[t.merchant])m[t.merchant]={}; m[t.merchant][k]=(m[t.merchant][k]||0)+t.amount; }); var recent=monthsBack(6).map(function(o){return o.y+'-'+('0'+o.m).slice(-2);}); var last2=recent.slice(-2); var out=[]; Object.keys(m).forEach(function(name){ var present=recent.filter(function(k){return m[name][k]!=null;}); if(present.length<4) return; if(!last2.some(function(k){return m[name][k]!=null;})) return; var amts=present.map(function(k){return m[name][k];}); var med=median(amts); if(amts.every(function(a){return Math.abs(a-med)<=med*0.12;})) out.push({name:name,amt:med}); }); return out.sort(function(a,b){return b.amt-a.amt;}); }
   function subPanel(subs,tot){ if(!subs.length) return '<div style="color:var(--text-muted);font-size:12px">未偵測到定期扣款</div>'; var out=''; subs.forEach(function(x){ out+='<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls">每月</span><span class="la num">$'+fmt(x.amt)+'</span></div>'; }); out+='<div class="ltot"><span class="t-l">每月合計</span><span class="t-v num">$'+fmt(tot)+'</span></div>'; return out; }
   function topMerchants(exp){ var m={}; exp.forEach(function(t){ if(!m[t.merchant])m[t.merchant]={total:0,count:0}; m[t.merchant].total+=t.amount; m[t.merchant].count++; }); var arr=Object.keys(m).map(function(k){return {name:k,total:m[k].total,count:m[k].count};}).sort(function(a,b){return b.total-a.total;}).slice(0,6); if(!arr.length) return '<div style="color:var(--text-muted);font-size:12px">無資料</div>'; var out=''; arr.forEach(function(x){ out+='<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls num">'+x.count+' 筆</span><span class="la num">$'+fmt(x.total)+'</span></div>'; }); return out; }
-  function rowCard(it,i,max,exp){
+  /** vs-previous-period chip for one category. `prevCat` null ⇒ no comparable period, render
+   *  nothing at all rather than an em-dash. */
+  function catDelta(name,cur,prevCat){
+    if(!prevCat) return '';
+    var p=prevCat[name]||0;
+    if(!p) return '<span class="delta up" title="前期沒有這一類">新</span>';
+    var d=Math.round((cur-p)/p*100);
+    if(d===0) return '<span class="delta flat" title="與前期同期持平">持平</span>';
+    return '<span class="delta '+(d>0?'up':'down')+'" title="前期同期 $'+fmt(p)+'">'+(d>0?'▲':'▼')+Math.abs(d)+'%</span>';
+  }
+  function rowCard(it,i,max,exp,prevCat){
     var color=PALETTE[Math.min(i,PALETTE.length-1)],isOpen=(openRow===it.name);
-    var h='<div class="row-card'+(isOpen?' open':'')+'" data-row="'+esc(it.name)+'"><div class="rc-top"><span class="rc-name"><span class="dot" style="background:'+color+'"></span>'+esc(it.name)+'</span><span class="rc-end"><span class="rc-total num">$'+fmt(it.total)+'</span><span class="chev">▶</span></span></div><div class="rc-meta num">'+it.count+' 筆 · 平均 $'+fmt(it.total/it.count)+' · 占 '+(max>0?Math.round(it.total/exp.reduce(function(s,t){return s+t.amount;},0)*100):0)+'%</div>';
+    var grand=exp.reduce(function(s,t){return s+t.amount;},0);
+    var pct=grand>0?Math.round(it.total/grand*100):0;
+    var h='<div class="row-card'+(isOpen?' open':'')+'" data-row="'+esc(it.name)+'"><div class="rc-top"><span class="rc-name"><span class="dot" style="background:'+color+'"></span>'+esc(it.name)+'</span>'
+      +'<span class="rc-end">'+catDelta(it.name,it.total,prevCat)+'<span class="rc-total num">$'+fmt(it.total)+'</span><span class="chev">▶</span></span></div>'
+      +'<div class="rc-bar"><i style="width:'+(max>0?(it.total/max*100).toFixed(1):0)+'%;background:'+color+'"></i></div>'
+      +'<div class="rc-meta num">'+it.count+' 筆 · 平均 $'+fmt(it.total/it.count)+' · 占 '+pct+'%</div>';
     var list=exp.filter(function(t){return t.cat===it.name;}).sort(function(a,b){return (a.y-b.y)||(a.m-b.m)||(a.d-b.d);});
     var d='<div class="drill">'; list.forEach(function(t){ d+=txnRow(t,false); }); if(!list.length) d+='<div style="color:var(--text-muted);font-size:12px">無</div>'; d+='</div>';
     return h+d+'</div>';
@@ -470,24 +497,9 @@
     return out;
   }
 
-  // category ranking with month-over-month delta vs the same-period previous period (reuses prevScope/inUpto)
-  function rankPanel(r){
-    var expList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
-    if(!expList.length) return '<div class="empty" style="padding:var(--sp4) 0">此範圍沒有支出</div>';
-    var cur={}; expList.forEach(function(t){ cur[t.cat]=(cur[t.cat]||0)+t.amount; });
-    var pr=prevScope(r), prev={};
-    if(pr) TXNS.forEach(function(t){ if(t.type==='支出'&&inScope(t,pr)&&inUpto(t,pr,pr.upto)) prev[t.cat]=(prev[t.cat]||0)+t.amount; });
-    var arr=Object.keys(cur).map(function(k){return {name:k,cur:cur[k],prev:prev[k]||0};}).sort(function(a,b){return b.cur-a.cur;});
-    var maxv=arr.length?arr[0].cur:1, out='';
-    arr.forEach(function(it,i){ var color=PALETTE[i%PALETTE.length], d,cls;
-      if(!pr){ d='—'; cls='flat'; }
-      else if(!it.prev){ d='新'; cls='up'; }
-      else { var pctD=Math.round((it.cur-it.prev)/it.prev*100); if(pctD===0){d='持平';cls='flat';} else {cls=pctD>0?'up':'down'; d=(pctD>0?'▲':'▼')+Math.abs(pctD)+'%';} }
-      out+='<div class="rank"><span class="rk num">'+(i+1)+'</span><span class="rdot" style="background:'+color+'"></span><span class="rn">'+esc(it.name)+'</span>'
-        +'<span class="rbar-wrap"><span class="rbar"><i style="width:'+(it.cur/maxv*100).toFixed(1)+'%;background:'+color+'"></i></span></span>'
-        +'<span class="ra num">$'+fmt(it.cur)+'</span><span class="rd"><span class="delta '+cls+'">'+d+'</span></span></div>'; });
-    return out;
-  }
+  // 類別排行 lived here: the same expList grouped by the same t.cat, drawn as a second ranked
+  // list purely to carry the vs-previous-period ▲▼. That delta now sits on the rowCard it
+  // describes, so the panel and its .rank styles are gone rather than duplicated.
 
   // ---------- editable day list (per-day 待記帳 queue) ----------
   function txnById(id){ for(var i=0;i<TXNS.length;i++) if(TXNS[i].id===id) return TXNS[i]; return null; }
@@ -694,19 +706,6 @@
     return grid+tip+leg+det;
   }
 
-  function analysisTab(){
-    var r=resolveScope(state.scope);
-    var expList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
-    var h='<div class="grid2">'
-      +'<div class="panel"><h3>信用卡別分析 <span class="h3note">各卡本範圍支出</span></h3>'+cardPanel(expList)+'</div>'
-      +'<div class="panel"><h3>類別排行 <span class="h3note">▲▼ 對比前期同期</span></h3>'+rankPanel(r)+'</div>'
-      +'</div>';
-    var heat=heatPanel(r);
-    if(heat) h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>消費日曆熱力圖 <span class="h3note">'+r.year+' / '+r.month+' · 每日花費濃淡</span></h3>'+heat+'</div>';
-    else h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>消費日曆熱力圖</h3><div class="empty" style="padding:var(--sp4) 0">熱力圖僅在選擇「單一月份」時顯示。目前為'+(r.level==='year'?'整年':'全部期間')+',請切到「當月」或用右上指定某月。</div></div>';
-    return h;
-  }
-
   function projectTab(){
     var yScope=state.projScope==='year';
     var pool=TXNS.filter(function(t){return t.type==='支出'&&t.tag&&(!yScope||t.y===NOW.year);});
@@ -746,7 +745,7 @@
     function tb(id,tt,sub){ return '<button data-tab="'+id+'" class="'+(tab===id?'active':'')+'"><span class="tt">'+tt+'</span><span class="tsub">'+sub+'</span></button>'; }
     var inboxSub = nPend ? '<span class="cnt">'+nPend+'</span>筆待處理' : '已全部記帳';
     var h='<div class="head"><div class="head-top"><span class="title">交易 Dashboard</span><span style="display:flex;align-items:center;gap:var(--sp3)"><span class="period">'+periodTxt+'</span><button class="addbtn" data-add>＋ 新增</button></span></div>'
-      +'<div class="tabs">'+tb('category','類別','這段期間錢花在哪類?')+tb('project','項目 (TAG)','某個目標累計花了多少?')+tb('analysis','分析','卡別 · 熱力圖 · 排行')+tb('inbox','待記帳',inboxSub)+'</div>';
+      +'<div class="tabs">'+tb('analysis','分析','這段期間花在哪、哪天花的?')+tb('trend','趨勢','幾個月下來的變化?')+tb('project','項目 (TAG)','某個目標累計花了多少?')+tb('inbox','待記帳',inboxSub)+'</div>';
     if(isInbox){
       h+='<div class="controls"><span class="clabel">範圍</span><button class="ctl'+(state.inboxScope==='all'?' active':'')+'" data-iscope="all">全部</button><button class="ctl'+(state.inboxScope==='year'?' active':'')+'" data-iscope="year">本年</button>'
         +'<button class="ev-toggle" style="margin-left:6px" data-inboxdone>'+(state.inboxDone?'只看待記帳':'一併顯示近 '+INBOX_DONE_DAYS+' 天已記帳')+'</button>'
@@ -757,7 +756,7 @@
       h+='<div class="controls"><span class="clabel">範圍</span><button class="ctl'+(state.projScope==='all'?' active':'')+'" data-pscope="all">全部累計</button><button class="ctl'+(state.projScope==='year'?' active':'')+'" data-pscope="year">本年</button><span class="hint">項目為長期累計,與期間篩選分開</span></div>';
     }
     h+='</div>';
-    h+= tab==='category' ? categoryTab() : (tab==='analysis' ? analysisTab() : (tab==='inbox' ? inboxTab() : projectTab()));
+    h+= tab==='analysis' ? periodTab() : (tab==='trend' ? trendTab() : (tab==='inbox' ? inboxTab() : projectTab()));
     h+='<div class="footer">即時讀取自 Transactions · 冷石板深色</div>';
     document.getElementById('app').innerHTML=h; attach();
   }
@@ -782,7 +781,6 @@
       var k=this.getAttribute('data-dbulk');
       bulkPost(pendingTxns().filter(function(t){ return dayKeyOf(t)===k; }).map(function(t){ return t.id; }));
     }; });
-    var mt=app.querySelector('[data-more]'); if(mt) mt.onclick=function(){ state.more=!state.more; render(); };
     var sy=document.getElementById('selYear'), sm=document.getElementById('selMonth');
     function pickSel(){ state.selYear=+sy.value; state.selMonth=+sm.value; state.scope=state.selMonth===0?String(state.selYear):(state.selYear+'-'+('0'+state.selMonth).slice(-2)); openRow=null; openHeatDay=null; render(); }
     if(sy) sy.onchange=pickSel; if(sm) sm.onchange=pickSel;
