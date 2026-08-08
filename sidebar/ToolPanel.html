@@ -210,6 +210,28 @@
   .er2 .tagin:focus { outline: none; border-color: var(--accent); }
   .er2 .tagin::placeholder { color: var(--text-muted); font-size: 11px; }
   .erec { margin-left: auto; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-muted); border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+
+  /* 我的消費 split. An unsplit row must look exactly as it did before this feature existed,
+     so .amtbtn is a button that renders as plain text — the only tell is a hover underline. */
+  .amtbtn { font: inherit; font-weight: 600; background: none; border: none; padding: 0;
+    cursor: pointer; white-space: nowrap; border-bottom: 1px dashed transparent; }
+  .amtbtn:hover { border-bottom-color: var(--text-muted); }
+  .amtbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+  .orig { font-size: 11px; font-weight: 400; color: var(--warn); margin-left: 6px; }
+  .adv { color: var(--warn); }
+  .split { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp2); margin-top: 7px;
+    padding: var(--sp3); background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-ctl); }
+  .split .slb { font-size: 12px; }
+  .split .sin { width: 108px; font: inherit; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums;
+    background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; }
+  .split .sin:focus { outline: none; border-color: var(--accent); }
+  .split .shint { font-size: 12px; color: var(--text-muted); }
+  .split .sbtn { border: 1px solid var(--border); background: var(--bg-surface); color: var(--text-muted);
+    border-radius: 7px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .split .sbtn.ok { margin-left: auto; border-color: var(--accent); color: var(--accent); }
+  .split .sbtn:hover { color: var(--text-primary); }
+  .split .sbtn.ok:hover { background: var(--accent); color: #17191f; }
+  .split .snote { flex-basis: 100%; font-size: 11px; color: var(--warn); }
   .erec:hover { border-color: var(--income); color: var(--income); }
   .erow.done .erec { border-color: var(--income); color: var(--income); }
 
@@ -295,7 +317,19 @@
 
   var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all',
                 inboxScope:'all', inboxDone:false };
-  var openRow=null, openProj=null, openHeatDay=null;
+  var openRow=null, openProj=null, openHeatDay=null, openSplit=null;
+
+  // ---------- 我的消費 (advanced-money split) ----------
+  // t.amount is ALREADY my consumption — the server nets it in getAllTxns, so every
+  // aggregation on this page sums the right number without knowing this feature exists.
+  // t.charged is the real card amount, t.mine the raw declaration (null ⇒ not split).
+  function isSplitTxn(t){ return t && t.mine!=null; }
+  function chargedOf(t){ return (t && t.charged!=null) ? t.charged : (t?t.amount:0); }
+  // Positive only: the reverse case (someone fronted part of MY share) makes this negative,
+  // and a "代墊 −$2,000 未計入" note would be nonsense. Those rows just carry no note.
+  function advOf(t){ return isSplitTxn(t) ? Math.max(0, chargedOf(t)-t.amount) : 0; }
+  function advIn(list){ return list.reduce(function(s,t){ return s+advOf(t); },0); }
+  function splitMark(t){ return isSplitTxn(t) ? '<span class="orig num">刷 '+fmt(chargedOf(t))+'</span>' : ''; }
 
   function resolveScope(s){ if(/^\d{4}-\d{2}$/.test(s)){ var p=s.split('-'); return {level:'month',year:+p[0],month:+p[1]}; } if(/^\d{4}$/.test(s)) return {level:'year',year:+s}; if(s==='month') return {level:'month',year:NOW.year,month:NOW.month}; if(s==='year') return {level:'year',year:NOW.year}; return {level:'all'}; }
   function isCurMonth(r){ return r.level==='month'&&r.year===NOW.year&&r.month===NOW.month; }
@@ -372,7 +406,9 @@
     if(partial && incTotal>0 && proj!=null){ saveRate=Math.round(projNet/incTotal*100); saveLbl='預估儲蓄率'; saveNote='<div class="k-sub2">基於預估月底支出</div>'; }
     else { saveRate=incTotal>0?Math.round(net/incTotal*100):null; saveLbl='儲蓄率'; }
 
-    var expSub='<div class="k-sub">'+avgDeltaStr(expTotal,baseExp,true,prog)+'</div>'+(refunds>0?'<div class="k-sub2 num">已折抵退款 −$'+fmt(refunds)+'</div>':'');
+    var advTotal=advIn(expList);
+    var expSub='<div class="k-sub">'+avgDeltaStr(expTotal,baseExp,true,prog)+'</div>'+(refunds>0?'<div class="k-sub2 num">已折抵退款 −$'+fmt(refunds)+'</div>':'')
+      +(advTotal>0?'<div class="k-sub2 num adv">刷卡 $'+fmt(grossExp+advTotal)+' · 代墊 $'+fmt(advTotal)+' 不計入</div>':'');
     var avgPer=expCount?Math.round(grossExp/expCount):0;
 
     var h='<div class="kpis">'
@@ -435,7 +471,7 @@
     // listing them added a section that changed no number and answered no question the owner had.
     return h;
   }
-  function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+(t.tag?' <span class="cat">'+esc(t.tag)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+'</span>'+manualDelBtn(t)+'</div>'; }
+  function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+(t.tag?' <span class="cat">'+esc(t.tag)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+splitMark(t)+'</span>'+manualDelBtn(t)+'</div>'; }
   // ---------- monthly baseline: "how does this month compare to a typical month" ----------
   // Replaces the previous-period comparison. Comparing July to June answers a different, noisier
   // question — one unusual month poisons the next month's reading. A monthly mean says how far
@@ -557,11 +593,13 @@
     var color=PALETTE[Math.min(i,PALETTE.length-1)],isOpen=(openRow===it.name);
     var grand=exp.reduce(function(s,t){return s+t.amount;},0);
     var pct=grand>0?Math.round(it.total/grand*100):0;
+    var list=exp.filter(function(t){return t.cat===it.name;}).sort(function(a,b){return (a.y-b.y)||(a.m-b.m)||(a.d-b.d);});
+    var advCat=advIn(list);
     var h='<div class="row-card'+(isOpen?' open':'')+'" data-row="'+esc(it.name)+'"><div class="rc-top"><span class="rc-name"><span class="dot" style="background:'+color+'"></span>'+esc(it.name)+'</span>'
       +'<span class="rc-end">'+catDelta(it.name,it.total,catBase,prog)+'<span class="rc-total num">$'+fmt(it.total)+'</span><span class="chev">▶</span></span></div>'
       +'<div class="rc-bar"><i style="width:'+(max>0?(it.total/max*100).toFixed(1):0)+'%;background:'+color+'"></i></div>'
-      +'<div class="rc-meta num">'+it.count+' 筆 · 平均 $'+fmt(it.total/it.count)+' · 占 '+pct+'%</div>';
-    var list=exp.filter(function(t){return t.cat===it.name;}).sort(function(a,b){return (a.y-b.y)||(a.m-b.m)||(a.d-b.d);});
+      +'<div class="rc-meta num">'+it.count+' 筆 · 平均 $'+fmt(it.total/it.count)+' · 占 '+pct+'%'
+      +(advCat>0?' · <span class="adv">代墊 $'+fmt(advCat)+' 未計入</span>':'')+'</div>';
     var d='<div class="drill">'; list.forEach(function(t){ d+=txnRow(t,false); }); if(!list.length) d+='<div style="color:var(--text-muted);font-size:12px">無</div>'; d+='</div>';
     return h+d+'</div>';
   }
@@ -665,10 +703,61 @@
       .withFailureHandler(function(err){ var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1); render(); toast('新增失敗:'+((err&&err.message)||err), true); })
       .addTxn(fields);
   }
+  /**
+   * The inline split editor, rendered under .er1 only for the row being edited.
+   *
+   * Asks for MY CONSUMPTION, not "how much did you advance" — the former is the number
+   * already in your head at the till, the latter is arithmetic. Deliberately has no upper
+   * bound: usually the card was charged more than I consumed (I fronted for others), but the
+   * reverse happens too and then my consumption exceeds my own charge. Over-the-charge gets
+   * a note, not a rejection.
+   */
+  function splitBox(t){
+    var chg=chargedOf(t);
+    return '<div class="split">'
+      +'<span class="slb">這筆有多少是我自己的？</span>'
+      +'<input class="sin num" type="number" inputmode="decimal" min="0" step="1" value="'+(isSplitTxn(t)?t.mine:'')+'" placeholder="'+fmt(chg)+'" data-sin="'+esc(t.id)+'" aria-label="這筆有多少是我自己的">'
+      +'<span class="shint num">刷卡 '+fmt(chg)+'</span>'
+      +'<button type="button" class="sbtn ok" data-sok="'+esc(t.id)+'">確定</button>'
+      +'<button type="button" class="sbtn" data-scancel="1">取消</button>'
+      +'<span class="snote" data-snote="'+esc(t.id)+'" hidden></span>'
+      +'</div>';
+  }
+
+  /**
+   * Commit a split. Updates BOTH local fields — `mine` (the raw declaration) and `amount`
+   * (my consumption, which every aggregation on this page sums) — the same way the server
+   * normalises in getAllTxns, so an optimistic render agrees with the next reload.
+   *
+   * Blank clears the split; declaring exactly the charge is stored as blank too, because
+   * "all of it was mine" is what a blank cell already means.
+   */
+  function applySplit(id, raw){
+    var t=txnById(id); if(!t) return;
+    var chg=chargedOf(t), prevMine=t.mine, prevAmt=t.amount;
+    var v = (raw==='') ? null : Number(raw);
+    if(v!==null && (!isFinite(v)||v<0)){ toast('請填 0 以上的數字', true); return; }
+    if(v!==null && v===chg) v=null;
+    t.mine=v; t.amount=(v==null)?chg:v;
+    openSplit=null; render();
+    google.script.run
+      .withSuccessHandler(function(){
+        if(v==null) toast('整筆都是你的 · $'+fmt(chg));
+        else if(v>chg) toast('這筆你消費 $'+fmt(v)+'，比刷卡 $'+fmt(chg)+' 多 — 有人先幫你墊了 $'+fmt(v-chg));
+        else toast('這筆算你 $'+fmt(v)+'，代墊 $'+fmt(chg-v)+' 不計入統計');
+      })
+      .withFailureHandler(function(err){ t.mine=prevMine; t.amount=prevAmt; render(); toast('寫入失敗:'+((err&&err.message)||err), true); })
+      .updateTxn(id, { mine: (v==null?'':v) });
+  }
+
   function editRow(t){
     var tc=typeColor(t.type);
     return '<div class="erow'+(t.posted?' done':'')+'" data-erow="'+esc(t.id)+'">'
-      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span><input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false"><span class="amt num" style="color:'+tc+'">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+'</span></div>'
+      // The amount IS the split control. ~5 of ~100 rows a month are split, so a permanent
+      // input would ask a question whose answer is "no" 95% of the time; an unsplit row must
+      // stay exactly as it was. The whole affordance is a dashed underline on hover.
+      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span><input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false"><button type="button" class="amt amtbtn num" data-amt="'+esc(t.id)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button></div>'
+      +(openSplit===t.id ? splitBox(t) : '')
       +'<div class="er2">'
         +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
         +'<div class="fld"><span class="lb">收支</span><select data-ef="type" data-id="'+esc(t.id)+'" style="color:'+tc+'">'+selOpts(['支出','收入','轉帳'],t.type)+'</select></div>'
@@ -693,8 +782,11 @@
     var all=TXNS.filter(function(t){ return t.y===y&&t.m===m&&t.d===sd; })
                 .sort(function(a,b){ return b.amount-a.amount; });
     var pendN=all.filter(function(t){ return !t.posted; }).length;
-    var spend=all.filter(function(t){ return t.type==='支出'; }).reduce(function(s,t){ return s+t.amount; },0);
+    var spendList=all.filter(function(t){ return t.type==='支出'; });
+    var spend=spendList.reduce(function(s,t){ return s+t.amount; },0);
+    var advDay=advIn(spendList);
     var h='<div class="hdetail"><div class="ev-head"><span class="lbl">'+m+' / '+sd+' 當天 · <b style="color:var(--text-primary)">'+all.length+'</b> 筆 · 支出 <b class="num" style="color:var(--text-primary)">$'+fmt(spend)+'</b>'
+      +(advDay>0?' <span class="orig num">刷卡 $'+fmt(spend+advDay)+'</span>':'')
       +(pendN?' · 其中 <b style="color:var(--spend)">'+pendN+'</b> 筆待記帳':'')+'</span></div>';
     if(!all.length){ return h+'<div class="empty" style="padding:var(--sp4) 0">這天沒有交易</div></div>'; }
     all.forEach(function(t){ h+=editRow(t); });
@@ -880,6 +972,39 @@
       i.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } };
     });
     app.querySelectorAll('[data-erec]').forEach(function(b){ b.onclick=function(){ var id=this.getAttribute('data-erec'); var t=txnById(id); if(t) applyEdit(id,'posted',!t.posted); }; });
+    // 我的消費: tapping the amount toggles the split editor open. Commit is Enter or 確定 only —
+    // never blur, which on touch is part of the same tap heading for another control (CT-16).
+    // Only ONE split box is ever open (openSplit is a single id), so every lookup below is a
+    // plain '.split .sin' — no need to build a selector out of the row id, which is a composite
+    // key containing '|' and would need escaping this file has no precedent for.
+    app.querySelectorAll('[data-amt]').forEach(function(b){ b.onclick=function(e){
+      e.stopPropagation();
+      var id=this.getAttribute('data-amt'); openSplit=(openSplit===id)?null:id; render();
+      var inp=document.querySelector('.split .sin'); if(inp){ inp.focus(); inp.select(); }
+    }; });
+    app.querySelectorAll('[data-sok]').forEach(function(b){ b.onclick=function(e){
+      e.stopPropagation();
+      var box=this.parentNode, inp=box?box.querySelector('.sin'):null;
+      applySplit(this.getAttribute('data-sok'), inp?inp.value.trim():'');
+    }; });
+    app.querySelectorAll('[data-scancel]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); openSplit=null; render(); }; });
+    app.querySelectorAll('[data-sin]').forEach(function(inp){
+      inp.onclick=function(e){ e.stopPropagation(); };
+      inp.onkeydown=function(e){
+        if(e.key==='Enter'){ e.preventDefault(); applySplit(this.getAttribute('data-sin'), this.value.trim()); }
+        else if(e.key==='Escape'){ e.preventDefault(); openSplit=null; render(); }
+      };
+      // Live, non-blocking note. Consuming more than the card was charged is legitimate —
+      // someone else fronted part of my share — so it explains rather than blocks.
+      inp.oninput=function(){
+        var t=txnById(this.getAttribute('data-sin')); if(!t) return;
+        var note=this.parentNode?this.parentNode.querySelector('.snote'):null; if(!note) return;
+        var chg=chargedOf(t), v=Number(this.value.trim());
+        if(this.value.trim()!=='' && isFinite(v) && v>chg){
+          note.hidden=false; note.textContent='比刷卡金額多 $'+fmt(v-chg)+' — 有人先幫你墊了這部分，可以照樣送出';
+        } else note.hidden=true;
+      };
+    });
     var addB=app.querySelector('[data-add]'); if(addB) addB.onclick=openAddModal;
     app.querySelectorAll('[data-del]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); deleteTxnRow(this.getAttribute('data-del')); }; });
     app.querySelectorAll('.ctl[data-pscope]').forEach(function(b){ b.onclick=function(){ state.projScope=this.getAttribute('data-pscope'); openProj=null; render(); }; });
@@ -901,7 +1026,12 @@
   function boot(){
     document.getElementById('app').innerHTML = '<div class="loading">載入中…</div>';
     google.script.run
-      .withSuccessHandler(function(data){ TXNS = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount; t.posted = (t.posted===true); t.id = String(t.id||''); return t; }); render(); })
+      .withSuccessHandler(function(data){ TXNS = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount;
+        // charged/mine arrive from the server; default them so a page served before the
+        // matching server version simply behaves as it did — every row "all mine".
+        t.charged = (t.charged==null) ? t.amount : +t.charged;
+        t.mine = (t.mine==null) ? null : +t.mine;
+        t.posted = (t.posted===true); t.id = String(t.id||''); return t; }); render(); })
       .withFailureHandler(function(err){
         var msg = (err && err.message) ? err.message : String(err);
         document.getElementById('app').innerHTML =
