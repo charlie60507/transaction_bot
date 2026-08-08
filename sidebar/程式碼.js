@@ -17,6 +17,12 @@ const CFG = {
   IDX_MESSAGEID: 8,        // I: MessageId (stable per-row key)
   IDX_INOUT: 9,            // J: 收支別 ("收入"/"支出"/"轉帳"; blank ⇒ 支出)
   IDX_CATEGORY_MANUAL: 10, // K: 種類(手動) — primary category
+
+  // 我的消費: how much of the charge was actually MY consumption; blank ⇒ all of it.
+  // Located by HEADER NAME, never by a fixed index — TAG already lives somewhere past K
+  // and hardcoding a position would collide with it. Absent header ⇒ the feature is
+  // simply inert and every row reads as "all mine", i.e. exactly today's behaviour.
+  HDR_MINE: '我的消費',
 };
 
 // =======================================================================
@@ -101,6 +107,7 @@ function getAllTxns() {
   if (!sh || sh.getLastRow() <= 1) return [];
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
   const tagIdx = getTagColIndex_(sh);            // -1 if no TAG header
+  const mineIdx = getMineColIndex_(sh);          // -1 if no 我的消費 header
   const out = [];
   const seenKey = {};
   for (const row of rows) {
@@ -116,7 +123,16 @@ function getAllTxns() {
       m: Number(Utilities.formatDate(dt, CFG.TZ, 'M')),
       d: Number(Utilities.formatDate(dt, CFG.TZ, 'd')),
       type: inout === '轉帳' ? '轉帳' : (inout === '收入' ? '收入' : '支出'),
-      amount: Number(row[CFG.IDX_AMOUNT]) || 0,
+      // `amount` is MY CONSUMPTION, already netted of anything fronted for other people.
+      // Normalising here rather than in the page is deliberate: every one of the dashboard's
+      // dozen aggregation sites sums t.amount, so doing it at the source makes them all
+      // correct at once instead of relying on twelve edits none of which fail loudly.
+      // `charged` keeps the real card amount for display; `mine` is the raw cell so the
+      // editor knows whether the row is split at all (null ⇒ not split).
+      amount: rowMine_(row, mineIdx),
+      charged: Number(row[CFG.IDX_AMOUNT]) || 0,
+      mine: (mineIdx === -1 || row[mineIdx] === '' || row[mineIdx] === null || row[mineIdx] === undefined)
+        ? null : (isNaN(Number(row[mineIdx])) ? null : Number(row[mineIdx])),
       cat: rowCategory_(row) || '未分類',
       merchant: String(row[CFG.IDX_MERCHANT] || ''),
       tag: tagIdx === -1 ? '' : String(row[tagIdx] || '').trim(),
@@ -143,6 +159,7 @@ function getAllTxns() {
  *   cat    -> K (種類手動; leaves auto G untouched)
  *   type   -> J (收支別; must be 支出/收入/轉帳)
  *   tag    -> TAG column (by header)
+ *   mine   -> 我的消費 column (by header); '' or null clears it (⇒ whole charge is mine)
  *   posted -> A (已記帳 checkbox; boolean)
  * Returns { ok:true }; throws a clear error the frontend surfaces.
  */
@@ -173,6 +190,20 @@ function updateTxn(messageId, patch) {
     const tagIdx = getTagColIndex_(sh);
     if (tagIdx === -1) throw new Error('找不到 TAG 欄');
     sh.getRange(rowNum, tagIdx + 1).setValue(String(patch.tag || ''));
+  }
+  if ('mine' in patch) {
+    const mineIdx = getMineColIndex_(sh);
+    if (mineIdx === -1) throw new Error('找不到「' + CFG.HDR_MINE + '」欄');
+    const raw = patch.mine;
+    if (raw === '' || raw === null || raw === undefined) {
+      sh.getRange(rowNum, mineIdx + 1).setValue('');   // clears the split
+    } else {
+      const v = Number(raw);
+      if (isNaN(v) || v < 0) throw new Error('我的消費需為 0 以上的數字');
+      // Deliberately NOT capped at the charge: someone else fronting part of my share
+      // makes my consumption legitimately larger than what my card was charged.
+      sh.getRange(rowNum, mineIdx + 1).setValue(v);
+    }
   }
   if ('posted' in patch) {
     sh.getRange(rowNum, CFG.IDX_POSTED + 1).setValue(!!patch.posted);
@@ -228,7 +259,9 @@ function addTxn(fields) {
 
   return {
     y: dt.getFullYear(), m: dt.getMonth() + 1, d: dt.getDate(),
-    type: type, amount: amount, cat: cat || '未分類',
+    // A manually added row is never split on creation — 我的消費 is left blank, so
+    // amount === charged and `mine` is null. Split it afterwards by tapping the amount.
+    type: type, amount: amount, charged: amount, mine: null, cat: cat || '未分類',
     merchant: String(fields.merchant || ''), tag: String(fields.tag || ''),
     bank: source, last4: '', link: '',
     id: txnKey_(row, 0), posted: true
@@ -304,14 +337,16 @@ function inScope_(row, useMonth, ym) {
   return dt;
 }
 
-/** Map a Transactions row to a transaction-card object (sortKey stripped by caller). */
-function mapTxn_(row, dt) {
+/** Map a Transactions row to a transaction-card object (sortKey stripped by caller).
+ *  `amount` is my consumption, matching getAllTxns; `charged` keeps the card amount. */
+function mapTxn_(row, dt, mineIdx) {
   return {
     date: Utilities.formatDate(dt, CFG.TZ, 'MM/dd HH:mm'),
     sortKey: dt.getTime(),
     bank: String(row[CFG.IDX_BANK] || ''),
     last4: String(row[CFG.IDX_LAST4] || ''),
-    amount: Number(row[CFG.IDX_AMOUNT]) || 0,
+    amount: rowMine_(row, mineIdx === undefined ? -1 : mineIdx),
+    charged: Number(row[CFG.IDX_AMOUNT]) || 0,
     merchant: String(row[CFG.IDX_MERCHANT] || ''),
     link: String(row[CFG.IDX_LINK] || '')
   };
@@ -403,6 +438,36 @@ function getTagColIndex_(sh) {
   return headers.indexOf('TAG');
 }
 
+/** 0-based index of the 我的消費 header in Transactions, or -1 if absent */
+function getMineColIndex_(sh) {
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  return headers.indexOf(CFG.HDR_MINE);
+}
+
+/**
+ * How much of a row was MY OWN consumption — the number every statistic must sum.
+ *
+ * The card was charged 金額 (E); 我的消費 says how much of that was actually mine. A 7,000
+ * dinner where 5,000 was fronted for other people is 2,000 of my spending, and counting the
+ * full 7,000 is what this column exists to stop.
+ *
+ * The blank check MUST come before Number(): `Number('') === 0`, so reading the cell first
+ * would turn every ordinary un-split row into "none of this was mine" and zero out the
+ * entire dashboard. Blank means the whole charge is mine.
+ *
+ * Not capped at 金額 on purpose. The reverse case is real — someone else fronts part of my
+ * share up front — and then my consumption legitimately exceeds what my own card was
+ * charged. Only negatives and non-numbers fall back to the charge.
+ */
+function rowMine_(row, mineIdx) {
+  const charged = Number(row[CFG.IDX_AMOUNT]) || 0;
+  if (mineIdx === -1) return charged;
+  const cell = row[mineIdx];
+  if (cell === '' || cell === null || cell === undefined) return charged;
+  const v = Number(cell);
+  return (isNaN(v) || v < 0) ? charged : v;
+}
+
 /** Current year/month in the configured timezone */
 function currentYearMonth_() {
   const now = new Date();
@@ -452,14 +517,15 @@ function dimKeepFn_(dimension, k) {
   return function (row) { return k.keyFn(row) !== ''; };
 }
 
-/** Period KPIs over in-scope rows. `keep` (optional) filters which rows count. */
-function periodSummary_(rows, r, keep) {
+/** Period KPIs over in-scope rows. `keep` (optional) filters which rows count.
+ *  Totals are my consumption, not the card amount — see rowMine_. */
+function periodSummary_(rows, r, keep, mineIdx) {
   let total = 0, count = 0, largest = null, minT = null, maxT = null;
   for (const row of rows) {
     if (keep && !keep(row)) continue;
     const dt = inScope_(row, r.useMonth, r.ym);
     if (!dt) continue;
-    const amt = Number(row[CFG.IDX_AMOUNT]) || 0;
+    const amt = rowMine_(row, mineIdx === undefined ? -1 : mineIdx);
     total += amt; count++;
     if (!largest || amt > largest.amount) largest = { amount: amt, merchant: String(row[CFG.IDX_MERCHANT] || '') };
     const t = dt.getTime();
@@ -474,7 +540,7 @@ function periodSummary_(rows, r, keep) {
 
 /** Last n months of overall spend (oldest→newest). Each: { ym:'YYYY-MM', label:'M月', total }.
  *  `keep` (optional) filters which rows count. */
-function monthlyTrend_(rows, n, keep) {
+function monthlyTrend_(rows, n, keep, mineIdx) {
   const cur = currentYearMonth_();
   const months = [];
   let y = cur.year, m = cur.month;
@@ -486,7 +552,7 @@ function monthlyTrend_(rows, n, keep) {
     const dt = row[CFG.IDX_DATE] instanceof Date ? row[CFG.IDX_DATE] : new Date(row[CFG.IDX_DATE]);
     if (isNaN(dt.getTime())) continue;
     const key = dt.getFullYear() + '-' + (dt.getMonth() + 1);
-    if (key in totals) totals[key] += Number(row[CFG.IDX_AMOUNT]) || 0;
+    if (key in totals) totals[key] += rowMine_(row, mineIdx === undefined ? -1 : mineIdx);
   }
   return months.map(function (mm) {
     const mm2 = (mm.month < 10 ? '0' : '') + mm.month;
@@ -514,6 +580,7 @@ function getOverview(dimension, scope) {
   // are dropped from every stat (KPIs, breakdown, trend) so cards match the sum.
   const keep = dimKeepFn_(dimension, k);
 
+  const mineIdx = getMineColIndex_(sh);
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
   const map = {};
   for (const row of rows) {
@@ -522,7 +589,7 @@ function getOverview(dimension, scope) {
     const key = k.keyFn(row);
     if (!key) continue;
     if (!map[key]) map[key] = { total: 0, count: 0 };
-    map[key].total += Number(row[CFG.IDX_AMOUNT]) || 0;
+    map[key].total += rowMine_(row, mineIdx);
     map[key].count += 1;
   }
   const items = Object.keys(map)
@@ -533,8 +600,8 @@ function getOverview(dimension, scope) {
     dimension: dimension, scope: scope,
     items: items,
     grandTotal: items.reduce(function (s, it) { return s + it.total; }, 0),
-    period: periodSummary_(rows, r, keep),
-    trend: monthlyTrend_(rows, 6, keep)
+    period: periodSummary_(rows, r, keep, mineIdx),
+    trend: monthlyTrend_(rows, 6, keep, mineIdx)
   };
 }
 
@@ -549,6 +616,7 @@ function getTransactions(dimension, name, scope) {
   if (k.error) return { error: k.error };
 
   const keep = dimKeepFn_(dimension, k);
+  const mineIdx = getMineColIndex_(sh);
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
   const results = [];
   for (const row of rows) {
@@ -556,7 +624,7 @@ function getTransactions(dimension, name, scope) {
     if (k.keyFn(row) !== name) continue;
     const dt = inScope_(row, r.useMonth, r.ym);
     if (!dt) continue;
-    results.push(mapTxn_(row, dt));
+    results.push(mapTxn_(row, dt, mineIdx));
   }
   results.sort(function (a, b) { return b.sortKey - a.sortKey; });
   const txns = results.map(function (x) { delete x.sortKey; return x; });
