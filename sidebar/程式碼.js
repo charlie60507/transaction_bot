@@ -192,15 +192,7 @@ function updateTxn(messageId, patch) {
     sh.getRange(rowNum, tagIdx + 1).setValue(String(patch.tag || ''));
   }
   if ('mine' in patch) {
-    const mineIdx = getMineColIndex_(sh);
-    if (mineIdx === -1) {
-      // Say WHAT was actually in row 1. "column not found" alone sends you hunting between
-      // "I typed it wrong", "I put it on the wrong sheet" and "the code is broken", with no
-      // way to tell them apart from the dashboard.
-      const found = headerRow_(sh).map(function (h) { return '[' + String(h) + ']'; }).join('');
-      throw new Error('在「' + CFG.DATA_SHEET + '」第 1 列找不到「' + CFG.HDR_MINE
-        + '」欄。目前表頭為 ' + found + ' — 請在最右邊加一格，內容正好是 ' + CFG.HDR_MINE);
-    }
+    const mineIdx = ensureMineColIndex_(sh);
     const raw = patch.mine;
     if (raw === '' || raw === null || raw === undefined) {
       sh.getRange(rowNum, mineIdx + 1).setValue('');   // clears the split
@@ -464,6 +456,27 @@ function getMineColIndex_(sh) {
 /** Row 1 of Transactions, as written. */
 function headerRow_(sh) {
   return sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+}
+
+/**
+ * Index of the 我的消費 column, CREATING the header if it is not there yet.
+ *
+ * Asking the owner to add the header by hand was a mistake: it is a silent prerequisite that
+ * fails much later, at write time, in a completely different part of the UI. Measured cost of
+ * that design — two rounds of "寫入失敗" against a sheet whose row 1 ended at L[TAG] with no
+ * 我的消費 anywhere.
+ *
+ * Creating it is safe and purely additive: the header goes one past the last column that holds
+ * anything, so it cannot overwrite data and cannot shift the A–K positions that the fixed
+ * column indices in CFG read by position. Only the WRITE path calls this — reads stay
+ * non-mutating via getMineColIndex_, so merely opening the dashboard never changes the sheet.
+ */
+function ensureMineColIndex_(sh) {
+  const idx = getMineColIndex_(sh);
+  if (idx !== -1) return idx;
+  const col = sh.getLastColumn() + 1;
+  sh.getRange(1, col).setValue(CFG.HDR_MINE);
+  return col - 1;
 }
 
 /**
