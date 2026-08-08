@@ -122,6 +122,11 @@ function getAllTxns() {
       y: Number(Utilities.formatDate(dt, CFG.TZ, 'yyyy')),
       m: Number(Utilities.formatDate(dt, CFG.TZ, 'M')),
       d: Number(Utilities.formatDate(dt, CFG.TZ, 'd')),
+      // Preformatted 'HH:mm' rather than a timestamp: the page holds no timezone knowledge
+      // (its only clock is NOW, injected by doGet as already-localised numbers), and
+      // lexicographic order on 'HH:mm' IS chronological order with '' sorting first — which
+      // is exactly where a row with no known time belongs. See rowHM_ for what "no time" means.
+      hm: rowHM_(dt),
       type: inout === '轉帳' ? '轉帳' : (inout === '收入' ? '收入' : '支出'),
       // `amount` is MY CONSUMPTION, already netted of anything fronted for other people.
       // Normalising here rather than in the page is deliberate: every one of the dashboard's
@@ -214,12 +219,15 @@ function updateTxn(messageId, patch) {
  * Append a manually-entered transaction (cash / non-email sources). Gets a
  * synthetic `manual-<uuid>` MessageId (col I) so it can be edited/deleted like
  * any row and never collides with the bot's dedup. 已記帳 (A) defaults to true.
- * fields: { date:'YYYY-MM-DD', amount, type, source, merchant, cat, tag }
- * Returns the mapped txn (same shape as getAllTxns) for optimistic UI.
+ * fields: { date:'YYYY-MM-DD', time:'HH:mm'|'', amount, type, source, merchant, cat, tag }
+ * `time` is optional — cash is often recorded without caring what time it was. Returns the
+ * mapped txn (same shape as getAllTxns) for optimistic UI.
  */
 function addTxn(fields) {
   fields = fields || {};
   if (!fields.date) throw new Error('缺少日期');
+  const time = String(fields.time || '').trim();
+  if (time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error('時間格式需為 HH:mm');
   const amount = Number(fields.amount);
   if (!amount || amount <= 0) throw new Error('金額需大於 0');
   const type = String(fields.type || '支出');
@@ -232,7 +240,12 @@ function addTxn(fields) {
   const id = 'manual-' + Utilities.getUuid();
   const source = String(fields.source || '現金');
   const cat = String(fields.cat || '');
-  const dt = new Date(fields.date + 'T12:00:00');
+  // No time given ⇒ midnight, which the dashboard reads back as "no time" (rowHM_) and which
+  // sorts first in its day, exactly like the legacy date-only rows. This replaces a hardcoded
+  // 12:00:00, a fabricated value that wedged every manual entry into the middle of the day's
+  // chronological order. Defaulting to "now" would be worse still: cash is typically recorded
+  // hours after the fact, so "now" is a plausible-looking lie and harder to spot than a blank.
+  const dt = new Date(fields.date + 'T' + (time || '00:00') + ':00');
 
   const row = new Array(ncol).fill('');
   row[CFG.IDX_POSTED] = true;
@@ -251,13 +264,20 @@ function addTxn(fields) {
   const rowNum = pos.row;
   if (!pos.appending) sh.insertRowBefore(rowNum);
   sh.getRange(rowNum, 1, 1, ncol).setValues([row]);
-  sh.getRange(rowNum, CFG.IDX_DATE + 1).setNumberFormat('yyyy/mm/dd hh:mm:ss');
+  // The format follows the value: a date-only row must not display 00:00:00 in the sheet —
+  // that is the same lie the dashboard refuses to tell, told in the other app instead. Display
+  // only; nothing ever reads this format back to decide whether a row has a time.
+  sh.getRange(rowNum, CFG.IDX_DATE + 1)
+    .setNumberFormat(time ? 'yyyy/mm/dd hh:mm:ss' : 'yyyy/mm/dd');
   sh.getRange(rowNum, CFG.IDX_POSTED + 1).setDataValidation(
     SpreadsheetApp.newDataValidation().requireCheckbox().build());
   sh.getRange(rowNum, CFG.IDX_POSTED + 1).setValue(true);
 
   return {
     y: dt.getFullYear(), m: dt.getMonth() + 1, d: dt.getDate(),
+    // Derived exactly as getAllTxns will derive it on the next load, so the optimistic row
+    // sits in its final chronological position instead of jumping when the real row arrives.
+    hm: rowHM_(dt),
     // A manually added row is never split on creation — 我的消費 is left blank, so
     // amount === charged and `mine` is null. Split it afterwards by tapping the amount.
     type: type, amount: amount, charged: amount, mine: null, cat: cat || '未分類',
@@ -351,6 +371,27 @@ function cellDateTime_(v) {
   if (v instanceof Date) return v.getTime();
   if (v === '' || v === null || v === undefined) return NaN;
   return new Date(v).getTime();
+}
+
+/**
+ * Time of day of a column-C cell as 'HH:mm', or '' when the cell carries no time.
+ *
+ * '00:00:00' deliberately counts as NO time: a date-only cell and a midnight datetime come
+ * back as the identical Date, so no value-based test can separate them. Consulting the
+ * cell's number format instead was rejected — it is a display attribute (one careless
+ * "format cells" over column C would make every legacy date-only row claim a time), and the
+ * bot already sets 'yyyy/mm/dd hh:mm:ss' on every block it appends, including the rows whose
+ * 授權時間 it could not parse and filled with 00:00:00. So the format is neither reliable nor
+ * faithful. The accepted cost is a charge authorised at exactly 00:00 showing no time — about
+ * one row every two and a half years, and it still sorts first, which is where midnight belongs.
+ *
+ * The midnight test goes through CFG.TZ, never dt.getHours(): the script's timezone and the
+ * sheet's CFG.TZ are separate settings, so testing in one zone while formatting in the other
+ * could classify a row as timeless while it displays 08:00. One formatted read decides both.
+ */
+function rowHM_(dt) {
+  const hms = Utilities.formatDate(dt, CFG.TZ, 'HH:mm:ss');
+  return hms === '00:00:00' ? '' : hms.slice(0, 5);
 }
 
 /**
