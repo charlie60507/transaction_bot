@@ -17,13 +17,15 @@ English README describing how to run, configure, and deploy this Apps Script pro
 - Google account with access to the target Spreadsheet and Gmail
 - Apps Script API enabled (https://script.google.com/home/usersettings)
 
-### Local files (not committed)
-- `.env` (ignored): keep local copies of config values.
-- `.clasp.json`: points to your Script ID; already present in this repo.
+### Where the Apps Script project lives
+Everything pushed to Apps Script lives in `sidebar/`, and `sidebar/.clasp.json` is the
+only clasp config in the repo — so every `clasp` command below is run from `sidebar/`,
+never from the repo root. `.env` (ignored) is the place for local copies of config values.
 
 ### Configure Script Properties (recommended)
 Use the built-in helper once per project to avoid hardcoding secrets:
 ```bash
+cd sidebar
 clasp run setScriptProperties --params '[{
   "SPREADSHEET_ID":"<YOUR_SPREADSHEET_ID>",
   "TZ":"Asia/Taipei",
@@ -37,11 +39,14 @@ clasp run setScriptProperties --params '[{
 Script Properties persist across triggers; you set them once unless you change targets.
 
 ### Deploy / update
+Pushing to `main` with changes under `sidebar/**` deploys the dashboard by itself (see
+CLAUDE.md); the commands below are the manual fallback.
 ```bash
 # login (once)
 clasp login
 
-# push code to Apps Script
+# push code to Apps Script — from sidebar/, the only clasp config in the repo
+cd sidebar
 clasp push
 
 # test run

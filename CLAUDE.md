@@ -55,6 +55,17 @@ and then `clasp push -f` + `clasp deploy -i <pinned deployment id>`. Shipping is
 therefore ONE `git push` — do not also deploy by hand, or the deployment gets a
 duplicate version for the same commit.
 
+**This repo holds exactly one Apps Script project, in `sidebar/`.**
+`sidebar/.clasp.json` is the only clasp config in the tree, so `clasp` is only
+ever run from `sidebar/` and there is nowhere else to push. The root used to
+carry its own `.clasp.json` (the retired standalone project) plus a frozen copy
+of `cards_transaction_bot.js` kept as a rollback snapshot — and one `clasp push`
+from the root would have shipped that snapshot to the old project. The snapshot
+had also decayed past being one: it predated `parseFubonTransfer_` entirely, so
+restoring it would have silently undone two 富邦-transfer fixes. **Rollback for
+the bot is git history** — `git revert` the bad commit and let the normal
+push-to-deploy path run — never a second copy of the file in the tree.
+
 **The gate is `node check_sidebar.js`.** Apps Script has no build step, so a
 typo'd `google.script.run` target or a stale `CFG.IDX_*` constant would surface
 only in the live dashboard. The script checks that every `.js`/`.json`/inline
