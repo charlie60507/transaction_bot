@@ -193,7 +193,14 @@ function updateTxn(messageId, patch) {
   }
   if ('mine' in patch) {
     const mineIdx = getMineColIndex_(sh);
-    if (mineIdx === -1) throw new Error('找不到「' + CFG.HDR_MINE + '」欄');
+    if (mineIdx === -1) {
+      // Say WHAT was actually in row 1. "column not found" alone sends you hunting between
+      // "I typed it wrong", "I put it on the wrong sheet" and "the code is broken", with no
+      // way to tell them apart from the dashboard.
+      const found = headerRow_(sh).map(function (h) { return '[' + String(h) + ']'; }).join('');
+      throw new Error('在「' + CFG.DATA_SHEET + '」第 1 列找不到「' + CFG.HDR_MINE
+        + '」欄。目前表頭為 ' + found + ' — 請在最右邊加一格，內容正好是 ' + CFG.HDR_MINE);
+    }
     const raw = patch.mine;
     if (raw === '' || raw === null || raw === undefined) {
       sh.getRange(rowNum, mineIdx + 1).setValue('');   // clears the split
@@ -438,10 +445,25 @@ function getTagColIndex_(sh) {
   return headers.indexOf('TAG');
 }
 
-/** 0-based index of the 我的消費 header in Transactions, or -1 if absent */
+/**
+ * 0-based index of the 我的消費 header in Transactions, or -1 if absent.
+ *
+ * Matches on the TRIMMED cell, unlike getTagColIndex_'s exact indexOf. This header is typed by
+ * hand into the sheet rather than written by the bot, and a trailing space is invisible in the
+ * cell but makes an exact match fail — which surfaces only as a write error much later, with
+ * nothing on screen to explain it.
+ */
 function getMineColIndex_(sh) {
-  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
-  return headers.indexOf(CFG.HDR_MINE);
+  const headers = headerRow_(sh);
+  for (let i = 0; i < headers.length; i++) {
+    if (String(headers[i]).trim() === CFG.HDR_MINE) return i;
+  }
+  return -1;
+}
+
+/** Row 1 of Transactions, as written. */
+function headerRow_(sh) {
+  return sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
 }
 
 /**
