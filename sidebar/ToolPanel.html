@@ -199,6 +199,7 @@
   .er1 .merin:hover { border-color: var(--border); }
   .er1 .merin:focus { outline: none; border-color: var(--accent); background: var(--bg-raised); }
   .er1 .merin::placeholder { color: var(--text-muted); font-weight: 400; }
+  .er1 .ehm { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
   .er1 .amt { font-weight: 600; white-space: nowrap; }
   .er2 { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
   .er2 .fld { display: flex; align-items: center; gap: 4px; }
@@ -293,9 +294,13 @@
     <div class="msub">手動補記(現金等非 email 來源) · 儲存後標為已記帳</div>
     <div class="mgrid">
       <div class="mfld"><label>日期 <span class="req">*</span></label><input type="date" id="a-date"></div>
+      <!-- 時間留白 = 這筆真的不知道幾點,不是預設中午。留白會存成「只有日期」的儲存格,
+           跟 2026/06 以前的舊資料一樣,在當天排最前面也不顯示時間。 -->
+      <div class="mfld"><label>時間（選填）</label><input type="time" id="a-time"></div>
       <div class="mfld"><label>金額 <span class="req">*</span></label><input type="number" id="a-amt" placeholder="0" min="0" inputmode="numeric"></div>
       <div class="mfld"><label>收支別 <span class="req">*</span></label><select id="a-type"><option>支出</option><option>收入</option><option>轉帳</option></select></div>
-      <div class="mfld"><label>來源</label><select id="a-source"><option>現金</option><option>悠遊卡</option><option>LINE Pay</option><option>街口支付</option><option>轉帳</option><option>其他</option></select></div>
+      <!-- full: 加了時間欄之後,整列型欄位變成奇數個,來源不跨欄就會在商店/說明前面留一個空格 -->
+      <div class="mfld full"><label>來源</label><select id="a-source"><option>現金</option><option>悠遊卡</option><option>LINE Pay</option><option>街口支付</option><option>轉帳</option><option>其他</option></select></div>
       <div class="mfld full"><label>商店 / 說明</label><input type="text" id="a-mer" placeholder="例：路邊攤晚餐"></div>
       <div class="mfld"><label>類別</label><select id="a-cat"></select></div>
       <div class="mfld"><label>TAG（專案）</label><input id="a-tag" list="taglist" placeholder="（無）· 可直接打新專案" spellcheck="false"></div>
@@ -683,6 +688,8 @@
     document.getElementById('a-cat').innerHTML='<option value="">（未分類）</option>'+realCats().map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>';}).join('');
     document.getElementById('a-tag').value='';
     var di=document.getElementById('a-date'); di.value=NOW.year+'-'+('0'+NOW.month).slice(-2)+'-'+('0'+NOW.day).slice(-2);
+    // 時間每次都清空:上一筆的時間留在欄位裡,下一筆會被安靜地標上一個從沒發生過的時刻。
+    document.getElementById('a-time').value='';
     document.getElementById('a-amt').value=''; document.getElementById('a-mer').value='';
     document.getElementById('a-amt').classList.remove('bad'); di.classList.remove('bad');
     ov.classList.add('on');
@@ -694,12 +701,20 @@
     if(!date){ di.classList.add('bad'); ok=false; } else di.classList.remove('bad');
     if(!amt||amt<=0){ ai.classList.add('bad'); ok=false; } else ai.classList.remove('bad');
     if(!ok){ toast('請填日期與金額', true); return; }
-    var fields={ date:date, amount:amt, type:document.getElementById('a-type').value, source:document.getElementById('a-source').value, merchant:document.getElementById('a-mer').value, cat:document.getElementById('a-cat').value, tag:document.getElementById('a-tag').value.trim() };
+    // The time is optional and never blocks the save — an empty one is a truthful "unknown",
+    // not an error to correct.
+    var time=document.getElementById('a-time').value;
+    var fields={ date:date, time:time, amount:amt, type:document.getElementById('a-type').value, source:document.getElementById('a-source').value, merchant:document.getElementById('a-mer').value, cat:document.getElementById('a-cat').value, tag:document.getElementById('a-tag').value.trim() };
     var p=date.split('-');
-    var temp={ y:+p[0], m:+p[1], d:+p[2], type:fields.type, amount:amt, cat:fields.cat||'未分類', merchant:fields.merchant, tag:fields.tag, bank:fields.source, last4:'', link:'', id:'manual-temp-'+(TXNS.length+1), posted:true };
+    // hm on the optimistic row too, or a 19:40 entry appears first in its day and then jumps
+    // into place the moment the server's row lands.
+    var temp={ y:+p[0], m:+p[1], d:+p[2], hm:time, type:fields.type, amount:amt, cat:fields.cat||'未分類', merchant:fields.merchant, tag:fields.tag, bank:fields.source, last4:'', link:'', id:'manual-temp-'+(TXNS.length+1), posted:true };
     TXNS.push(temp); closeAddModal(); render();
+    // The success handler adopts the server's hm as well as its id: the server decides what
+    // counts as "no time" (midnight does not count), so taking its answer keeps this row
+    // identical to what the next reload will show, without restating that rule here.
     google.script.run
-      .withSuccessHandler(function(nt){ if(nt&&nt.id) temp.id=String(nt.id); toast('已新增 · 已記帳 ✓'); render(); })
+      .withSuccessHandler(function(nt){ if(nt&&nt.id) temp.id=String(nt.id); if(nt) temp.hm=(nt.hm==null)?'':String(nt.hm); toast('已新增 · 已記帳 ✓'); render(); })
       .withFailureHandler(function(err){ var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1); render(); toast('新增失敗:'+((err&&err.message)||err), true); })
       .addTxn(fields);
   }
@@ -756,7 +771,11 @@
       // The amount IS the split control. ~5 of ~100 rows a month are split, so a permanent
       // input would ask a question whose answer is "no" 95% of the time; an unsplit row must
       // stay exactly as it was. The whole affordance is a dashed underline on hover.
-      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span><input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false"><button type="button" class="amt amtbtn num" data-amt="'+esc(t.id)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button></div>'
+      // The time answers "which of this day's rows is this one" — 94% of transactions land on
+      // a day that holds more than one. Rendered only when the row actually has a time, so the
+      // pre-June rows look exactly as they do today. Shown to the minute: 富邦 gives seconds and
+      // 國泰 does not, so seconds would advertise a precision most timed rows do not have.
+      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false"><button type="button" class="amt amtbtn num" data-amt="'+esc(t.id)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button></div>'
       +(openSplit===t.id ? splitBox(t) : '')
       +'<div class="er2">'
         +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
@@ -778,9 +797,26 @@
    * Rows stay editable (that is where an inline title fix belongs), but nothing is withheld and
    * recorded rows are not dimmed, since by now almost every row is recorded.
    */
+  /**
+   * How the rows of ONE day are ordered, in both surfaces that list a day: the heatmap day
+   * editor and the 待記帳 queue. One function, two call sites — they each held their own copy
+   * of the amount sort, which is exactly how two views that must agree drift apart.
+   *
+   * Time ascending, and '' (no time) sorts first, which is where midnight belongs anyway.
+   * THE AMOUNT TIEBREAK IS LOAD-BEARING, not decoration: 82% of rows carry no time and so
+   * share one primary key, and sort is stable — without the tiebreak they would fall back to
+   * sheet order (an artefact of how the bot appends and re-sorts) and the whole pre-June
+   * history would silently lose the ordering it has today. With it, a day with no times looks
+   * exactly as it always did and only days that actually carry times reorder.
+   */
+  function byTimeThenAmount(a,b){
+    var ha=a.hm||'', hb=b.hm||'';
+    if(ha!==hb) return ha<hb?-1:1;
+    return b.amount-a.amount;
+  }
   function dayEditor(y,m,sd){
     var all=TXNS.filter(function(t){ return t.y===y&&t.m===m&&t.d===sd; })
-                .sort(function(a,b){ return b.amount-a.amount; });
+                .sort(byTimeThenAmount);
     var pendN=all.filter(function(t){ return !t.posted; }).length;
     var spendList=all.filter(function(t){ return t.type==='支出'; });
     var spend=spendList.reduce(function(s,t){ return s+t.amount; },0);
@@ -855,14 +891,14 @@
         + '<br><span style="font-size:12px">新的信件進來後會自動出現在這裡。</span></div>';
     }
 
-    // group by day, newest day first; inside a day, biggest amount first (same as the per-day editor)
+    // group by day, newest day first; inside a day, chronological (same rule as the per-day editor)
     var groups = {};
     pool.forEach(function(t){ var k=dayKeyOf(t); (groups[k]=groups[k]||[]).push(t); });
     var keys = Object.keys(groups).sort(function(a,b){ return b.localeCompare(a); });
 
     h += '<div class="panel">';
     keys.forEach(function(k){
-      var list = groups[k].sort(function(a,b){ return b.amount-a.amount; });
+      var list = groups[k].sort(byTimeThenAmount);
       var p = k.split('-'), y=+p[0], mo=+p[1], dy=+p[2];
       var open = list.filter(function(t){ return !t.posted; });
       var spend = open.filter(function(t){ return t.type==='支出'; }).reduce(function(s,t){ return s+t.amount; },0);
@@ -1031,6 +1067,10 @@
         // matching server version simply behaves as it did — every row "all mine".
         t.charged = (t.charged==null) ? t.amount : +t.charged;
         t.mine = (t.mine==null) ? null : +t.mine;
+        // Same reasoning for hm: no time on any row makes the day sort's primary key uniformly
+        // equal, so the amount tiebreak alone decides — which is exactly what this page did
+        // before times existed. No blank badge, no undefined on screen, no NaN in the comparator.
+        t.hm = (t.hm==null) ? '' : String(t.hm);
         t.posted = (t.posted===true); t.id = String(t.id||''); return t; }); render(); })
       .withFailureHandler(function(err){
         var msg = (err && err.message) ? err.message : String(err);
