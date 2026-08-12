@@ -300,7 +300,9 @@
       <div class="mfld"><label>金額 <span class="req">*</span></label><input type="number" id="a-amt" placeholder="0" min="0" inputmode="numeric"></div>
       <div class="mfld"><label>收支別 <span class="req">*</span></label><select id="a-type"><option>支出</option><option>收入</option><option>轉帳</option></select></div>
       <!-- full: 加了時間欄之後,整列型欄位變成奇數個,來源不跨欄就會在商店/說明前面留一個空格 -->
-      <div class="mfld full"><label>來源</label><select id="a-source"><option>現金</option><option>悠遊卡</option><option>LINE Pay</option><option>街口支付</option><option>轉帳</option><option>其他</option></select></div>
+      <!-- 選項全部來自交易本身(distinctBanks),markup 裡不留任何帳戶名 —— 寫死的那份有六個
+           選項,其中四個在一千多筆資料裡從沒出現過,而佔 97% 的國泰和富邦一個都選不到。 -->
+      <div class="mfld full"><label>來源</label><input id="a-source" list="banklist" placeholder="（現金）· 可直接打新帳戶" spellcheck="false"></div>
       <div class="mfld full"><label>商店 / 說明</label><input type="text" id="a-mer" placeholder="例：路邊攤晚餐"></div>
       <div class="mfld"><label>類別</label><select id="a-cat"></select></div>
       <div class="mfld"><label>TAG（專案）</label><input id="a-tag" list="taglist" placeholder="（無）· 可直接打新專案" spellcheck="false"></div>
@@ -638,6 +640,31 @@
   function distinctCats(){ var s={'未分類':1}; TXNS.forEach(function(t){ if(t.cat) s[t.cat]=1; }); return Object.keys(s).sort(); }
   function realCats(){ return distinctCats().filter(function(c){ return c!=='未分類'; }); }
   function distinctTags(){ var s={}; TXNS.forEach(function(t){ if(t.tag) s[t.tag]=1; }); return Object.keys(s).sort(); }
+  /**
+   * 來源(銀行)清單,從交易本身長出來,不寫死任何帳戶名。
+   *
+   * 可打可選而不是封閉的 <select>:新開的帳戶要等到有一筆交易帶著它才存在,而那筆很可能
+   * 只能靠手動新增 —— 跟 TAG 完全同一個死結,所以給同一個解法。
+   *
+   * 排序刻意分兩組:手動輸入過的在前(依手動次數),其餘依整體筆數。把「現金」直接寫死在
+   * 第一個也會得到今天正確的答案,但那正是這次要移除的那份虛構清單的成因 —— 耐久的是
+   * 「手動記的通常是現金,刷卡的自己會寄信進來」這個理由,不是它今天的答案。理由編碼進
+   * 排序規則,習慣改變時清單自己會跟上,沒有人需要回來改這裡。
+   */
+  function distinctBanks(){
+    var all={}, man={}, seq={}, names=[];
+    TXNS.forEach(function(t){
+      var b=t.bank; if(!b) return;
+      if(all[b]===undefined){ all[b]=0; man[b]=0; seq[b]=names.length; names.push(b); }
+      all[b]++; if(isManual(t)) man[b]++;
+    });
+    return names.sort(function(a,b){
+      if((man[a]>0)!==(man[b]>0)) return man[a]>0?-1:1;       // 手動輸入過的整組在前
+      var d=(man[a]>0) ? man[b]-man[a] : all[b]-all[a];
+      // 平手時退回第一次出現的順序:比 0 穩定,清單不會在每次 render 之間洗牌。
+      return d || seq[a]-seq[b];
+    });
+  }
   function selOpts(list,cur,blankLabel){
     var arr=list.slice(); if(blankLabel!=null && arr.indexOf('')<0) arr.unshift('');
     var has=false,o=''; arr.forEach(function(v){ if(v===cur)has=true; var lbl=(v===''?(blankLabel||'（無）'):v); o+='<option value="'+esc(v)+'"'+(v===cur?' selected':'')+'>'+esc(lbl)+'</option>'; });
@@ -690,6 +717,9 @@
     var di=document.getElementById('a-date'); di.value=NOW.year+'-'+('0'+NOW.month).slice(-2)+'-'+('0'+NOW.day).slice(-2);
     // 時間每次都清空:上一筆的時間留在欄位裡,下一筆會被安靜地標上一個從沒發生過的時刻。
     document.getElementById('a-time').value='';
+    // 預設值取自資料而不是寫在 markup 裡:寫死的預設會跟寫死的清單一樣爛掉。空表時留白,
+    // 伺服器的 addTxn 對空來源仍然會補上「現金」。
+    document.getElementById('a-source').value=distinctBanks()[0]||'';
     document.getElementById('a-amt').value=''; document.getElementById('a-mer').value='';
     document.getElementById('a-amt').classList.remove('bad'); di.classList.remove('bad');
     ov.classList.add('on');
@@ -704,7 +734,7 @@
     // The time is optional and never blocks the save — an empty one is a truthful "unknown",
     // not an error to correct.
     var time=document.getElementById('a-time').value;
-    var fields={ date:date, time:time, amount:amt, type:document.getElementById('a-type').value, source:document.getElementById('a-source').value, merchant:document.getElementById('a-mer').value, cat:document.getElementById('a-cat').value, tag:document.getElementById('a-tag').value.trim() };
+    var fields={ date:date, time:time, amount:amt, type:document.getElementById('a-type').value, source:document.getElementById('a-source').value.trim(), merchant:document.getElementById('a-mer').value, cat:document.getElementById('a-cat').value, tag:document.getElementById('a-tag').value.trim() };
     var p=date.split('-');
     // hm on the optimistic row too, or a 19:40 entry appears first in its day and then jumps
     // into place the moment the server's row lands.
@@ -991,6 +1021,7 @@
     h+='</div>';
     h+= tab==='analysis' ? periodTab() : (tab==='trend' ? trendTab() : (tab==='inbox' ? inboxTab() : projectTab()));
     h+='<datalist id="taglist">'+distinctTags().map(function(g){ return '<option value="'+esc(g)+'"></option>'; }).join('')+'</datalist>';
+    h+='<datalist id="banklist">'+distinctBanks().map(function(g){ return '<option value="'+esc(g)+'"></option>'; }).join('')+'</datalist>';
     h+='<div class="footer">即時讀取自 Transactions · 冷石板深色</div>';
     document.getElementById('app').innerHTML=h; attach();
   }
