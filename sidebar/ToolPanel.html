@@ -167,9 +167,12 @@
      cells are capped: wide enough to stay readable, short enough that a whole month plus the day
      editor fits above the fold. */
   .cell { aspect-ratio: 1.7; max-height: 62px; border-radius: 5px; background: var(--bg-raised); border: 1px solid transparent;
-    display: flex; align-items: flex-start; justify-content: flex-end; padding: 3px 4px; }
+    display: flex; align-items: flex-start; justify-content: flex-end; padding: 3px 4px; position: relative; }
   @media (max-width: 520px) { .cell { aspect-ratio: 1.15; max-height: none; } }
   .cell .dn { font-size: 10px; color: var(--text-muted); opacity: .7; }
+  /* Income/transfer-only hit: 4px muted dot. Borders already mean today/sel. */
+  .cell .mark { position: absolute; left: 50%; bottom: 5px; width: 4px; height: 4px; margin-left: -2px;
+    border-radius: 50%; background: var(--text-muted); pointer-events: none; }
   .cell.future { opacity: .28; }
   .cell.today { border-color: var(--net); }
   .cell.void { background: transparent; border: none; }
@@ -453,7 +456,7 @@
 
     var heat=heatPanel(r);
     h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>消費日曆熱力圖 <span class="h3note">'
-      + (heat ? r.year+' / '+r.month+' · 每日花費濃淡 · 點任一格看當天全部交易' : '') + '</span></h3>'
+      + (heat ? r.year+' / '+r.month+' · 每日花費濃淡 · 點有交易的日子看當天明細' : '') + '</span></h3>'
       + (heat || '<div class="empty" style="padding:var(--sp4) 0">熱力圖只在選擇「單一月份」時顯示。目前為'+(r.level==='year'?'整年':'全部期間')+',請切到「當月」或用右上指定某月。</div>')
       + '</div>';
 
@@ -909,9 +912,8 @@
   }
 
   // ---------- 待記帳 inbox: every un-recorded txn, ANY date, in ONE list ----------
-  // The heatmap only makes days WITH 支出 clickable, so a day holding nothing but 收入 or
-  // 轉帳 has no way in. This view has no such gate — and it also removes the day-at-a-time
-  // clicking that clearing a multi-day backlog used to need.
+  // The heatmap is the calendar entrance for posted rows of any 收支別. This view is the
+  // unbounded backlog — it also removes the day-at-a-time clicking a multi-day queue used to need.
   var DOW = ['日','一','二','三','四','五','六'];
   function pendingTxns(){ return TXNS.filter(function(t){ return !t.posted; }); }
   function dayKeyOf(t){ return t.y+'-'+('0'+t.m).slice(-2)+'-'+('0'+t.d).slice(-2); }
@@ -992,26 +994,45 @@
     return h + '</div>';
   }
 
+  // Classify one month of TXNS for the heatmap. Intensity stays expense-only; clickability is
+  // "any row, any 收支別, not future". Kinds: inert | spend-hit | zero-spend-hit (income/transfer-only).
+  function heatDaysForMonth(txns, y, m, now){
+    var dim=daysInMonth(y,m), isCur=(y===now.year&&m===now.month);
+    var perDay={}, hasTxn={}, hasExp={};
+    txns.forEach(function(t){
+      if(t.y!==y||t.m!==m) return;
+      hasTxn[t.d]=true;
+      if(t.type==='支出'){ hasExp[t.d]=true; perDay[t.d]=(perDay[t.d]||0)+t.amount; }
+    });
+    var days=[];
+    for(var dd=1;dd<=dim;dd++){
+      var future=isCur&&dd>now.day, v=perDay[dd]||0;
+      var kind=future||!hasTxn[dd]?'inert':(hasExp[dd]?'spend-hit':'zero-spend-hit');
+      days.push({d:dd, kind:kind, v:v, future:future});
+    }
+    return days;
+  }
   // spend calendar heatmap: single-month scope only; current partial month renders future days inert
   function heatPanel(r){
     if(r.level!=='month') return '';
     var y=r.year, m=r.month, dim=daysInMonth(y,m);
     var isCur=(y===NOW.year&&m===NOW.month), lastDay=isCur?Math.min(NOW.day,dim):dim;
-    var perDay={}; TXNS.forEach(function(t){ if(t.type==='支出'&&t.y===y&&t.m===m) perDay[t.d]=(perDay[t.d]||0)+t.amount; });
-    var maxDay=0; for(var dm=1;dm<=lastDay;dm++) maxDay=Math.max(maxDay,perDay[dm]||0);
+    var days=heatDaysForMonth(TXNS,y,m,NOW);
+    var maxDay=0; days.forEach(function(x){ if(!x.future) maxDay=Math.max(maxDay,x.v); });
     var first=new Date(y,m-1,1).getDay(), dows=['日','一','二','三','四','五','六'];
     var grid='<div class="cal">'; dows.forEach(function(w){ grid+='<div class="dow">'+w+'</div>'; });
     for(var i=0;i<first;i++) grid+='<div class="cell void"></div>';
     var peak={d:0,v:0}, spentDays=0, total=0;
-    for(var dd=1;dd<=dim;dd++){
-      var v=perDay[dd]||0, future=isCur&&dd>NOW.day, today=isCur&&dd===NOW.day;
+    days.forEach(function(x){
+      var dd=x.d, v=x.v, future=x.future, today=isCur&&dd===NOW.day;
       if(!future){ total+=v; if(v>0) spentDays++; if(v>peak.v) peak={d:dd,v:v}; }
       var t=maxDay>0?v/maxDay:0, bg=(future||v<=0)?'var(--bg-raised)':blendSpend(0.18+t*0.72);
-      var hit=(!future&&v>0), sel=hit&&openHeatDay===(y+'-'+m+'-'+dd);
-      grid+='<div class="cell'+(future?' future':'')+(today?' today':'')+(hit?' hit':'')+(sel?' sel':'')+'"'+(hit?' data-hday="'+y+'-'+m+'-'+dd+'"':'')+' style="background:'+bg+'" title="'+y+'/'+m+'/'+dd+(future?'':' $'+fmt(v))+'"><span class="dn num">'+dd+'</span></div>';
-    }
+      var hit=x.kind!=='inert', sel=hit&&openHeatDay===(y+'-'+m+'-'+dd);
+      var dot=x.kind==='zero-spend-hit';
+      grid+='<div class="cell'+(future?' future':'')+(today?' today':'')+(hit?' hit':'')+(sel?' sel':'')+'"'+(hit?' data-hday="'+y+'-'+m+'-'+dd+'"':'')+' style="background:'+bg+'" title="'+y+'/'+m+'/'+dd+(future?'':' $'+fmt(v))+'"><span class="dn num">'+dd+'</span>'+(dot?'<i class="mark"></i>':'')+'</div>';
+    });
     grid+='</div>';
-    var tip='<div class="heat-tip"><span>最高:<b class="num">'+(peak.d?m+'/'+peak.d+' · $'+fmt(peak.v):'—')+'</b></span><span>有消費 <b class="num">'+spentDays+'</b> 天</span><span>日均 <b class="num">$'+fmt(lastDay?total/lastDay:0)+'</b></span><span style="margin-left:auto;opacity:.85">點任一格看當天明細</span></div>';
+    var tip='<div class="heat-tip"><span>最高:<b class="num">'+(peak.d?m+'/'+peak.d+' · $'+fmt(peak.v):'—')+'</b></span><span>有消費 <b class="num">'+spentDays+'</b> 天</span><span>日均 <b class="num">$'+fmt(lastDay?total/lastDay:0)+'</b></span><span style="margin-left:auto;opacity:.85">點有交易的日子看當天明細</span></div>';
     var leg='<div class="heatlegend"><span>少</span><span class="sw" style="background:'+blendSpend(0.18)+'"></span><span class="sw" style="background:'+blendSpend(0.5)+'"></span><span class="sw" style="background:'+blendSpend(0.9)+'"></span><span>多</span></div>';
     var det='';
     if(openHeatDay){ var pp=openHeatDay.split('-'); if(+pp[0]===y&&+pp[1]===m){ det=dayEditor(y,m,+pp[2]); } }
