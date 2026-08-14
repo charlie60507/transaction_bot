@@ -1,7 +1,7 @@
 ## 1. Server: deleteTxn moves the row (sidebar/程式碼.js)
 
 - [x] 1.1 Add `CFG.DELETED_SHEET: 'Deleted'`. Helper `getOrCreateDeleted_(ss, src)`: return the sheet if it exists; otherwise insert it and copy `Transactions` row 1 as the header. If it exists but has fewer columns than `src`, copy the extra header cells. Verify: first call creates the tab; second call returns the same sheet.
-- [x] 1.2 Rewrite `deleteTxn`: drop the `manual-` prefix guard; locate with `findRowByKey_`; copy the full row (`getLastColumn`) onto `Deleted` then `deleteRow` from `Transactions`. Missing row still throws; copy changes "手動交易" → "交易". Verify: a non-`manual-` id is accepted; a stale id throws and does not delete a neighbour.
+- [x] 1.2 Rewrite `deleteTxn`: drop the `manual-` prefix guard; locate with `findRowByKey_`; copy the full row (`getLastColumn`) onto `Deleted` then `deleteRow` from `Transactions`. Return `{ ok, txns }` from the same call (no nested `getAllTxns`). A key already on `Deleted` succeeds; a key in neither sheet still throws. Verify: a non-`manual-` id is accepted; an unknown id throws and does not delete a neighbour; a retry after success does not throw.
 
 ## 2. Bot: Deleted counts as already seen (sidebar/cards_transaction_bot.js)
 
@@ -11,7 +11,7 @@
 
 - [x] 3.1 Add a delete confirmation overlay (reuse `.overlay` / `.modal`), showing merchant, amount, and date. Cancel and backdrop dismiss change nothing. Verify: tapping 🗑 without confirming does not call `deleteTxn`.
 - [x] 3.2 `editRow` always shows the delete button (auto and manual). Remove `manualDelBtn` from `txnRow`. Keep `isManual` for `distinctBanks`. Verify: grep `data-del` / `txdel` hits `editRow` and the overlay wiring, not `txnRow`.
-- [x] 3.3 On confirm: call `deleteTxn`; on success replace `TXNS` with a fresh `getAllTxns` and render; on failure toast and leave the list. Extract the existing boot map into a helper so boot and post-delete share it. Verify: two duplicate-group deletes in a row do not need a manual reload.
+- [x] 3.3 On confirm: call `deleteTxn({ id })`; on success adopt `res.txns` and render; on failure toast and leave the list. Do not nest `getAllTxns`. Extract the existing boot map into a helper so boot and post-delete share it. Verify: two duplicate-group deletes in a row do not need a manual reload; a successful sheet write never toasts 找不到.
 
 ## 4. Docs and gate
 

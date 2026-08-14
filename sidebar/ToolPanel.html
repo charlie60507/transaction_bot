@@ -318,7 +318,7 @@
     <h3>刪除這筆交易？</h3>
     <div class="msub">會從明細移走，bot 也不會再記回來。</div>
     <div class="minfo"><b id="d-mer"></b><div class="dmeta"><span id="d-date"></span> · <span id="d-amt" class="num"></span></div></div>
-    <div class="macts"><button class="mbtn" id="d-cancel">取消</button><button class="mbtn danger" id="d-ok">刪除</button></div>
+    <div class="macts"><button type="button" class="mbtn" id="d-cancel">取消</button><button type="button" class="mbtn danger" id="d-ok">刪除</button></div>
   </div>
 </div>
 <script>
@@ -710,13 +710,14 @@
   // ---------- manual add / delete ----------
   function isManual(t){ return !!(t && t.id && String(t.id).indexOf('manual-')===0); }
   function delBtn(t){ return '<button class="txdel" data-del="'+esc(t.id)+'" title="刪除">🗑</button>'; }
-  var pendingDelId=null;
+  var pendingDelId=null, delBusy=false;
   function openDelModal(id){
     var t=txnById(id); if(!t) return;
     pendingDelId=id;
     document.getElementById('d-mer').textContent=t.merchant||'(無說明)';
     document.getElementById('d-amt').textContent=(t.type==='收入'?'+':'')+'$'+fmt(t.amount);
     document.getElementById('d-date').textContent=t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2);
+    var ok=document.getElementById('d-ok'); if(ok) ok.disabled=false;
     document.getElementById('delOverlay').classList.add('on');
   }
   function closeDelModal(){
@@ -725,17 +726,22 @@
   }
   function deleteTxnRow(id){ openDelModal(id); }
   function confirmDelete(){
-    var id=pendingDelId; if(!id) return;
+    var id=pendingDelId; if(!id || delBusy) return;
     pendingDelId=null;
+    delBusy=true;
+    var ok=document.getElementById('d-ok'); if(ok) ok.disabled=true;
     google.script.run
-      .withSuccessHandler(function(){
-        google.script.run
-          .withSuccessHandler(function(data){ adoptTxns(data); closeDelModal(); render(); toast('已刪除'); })
-          .withFailureHandler(function(err){ closeDelModal(); toast('已刪除，但清單未重整:'+((err&&err.message)||err), true); })
-          .getAllTxns();
+      .withSuccessHandler(function(res){
+        delBusy=false;
+        if(res && res.txns) adoptTxns(res.txns);
+        closeDelModal(); render(); toast('已刪除');
       })
-      .withFailureHandler(function(err){ pendingDelId=id; toast('刪除失敗:'+((err&&err.message)||err), true); })
-      .deleteTxn(id);
+      .withFailureHandler(function(err){
+        delBusy=false; if(ok) ok.disabled=false;
+        pendingDelId=id;
+        toast('刪除失敗:'+((err&&err.message)||err), true);
+      })
+      .deleteTxn({ id: id });
   }
   function openAddModal(){
     var ov=document.getElementById('addOverlay'); if(!ov) return;
