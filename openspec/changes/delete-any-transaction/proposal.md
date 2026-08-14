@@ -8,7 +8,7 @@ Auto-recorded rows cannot be deleted from the dashboard (`deleteTxn` refuses any
 - **Deleting asks first**, reusing the existing `.overlay` pattern. Cancelling changes nothing.
 - **Deleting moves the row to a `Deleted` sheet**, then removes it from `Transactions`. `Transactions` keeps its current meaning: every row in it counts. Recovery is moving the row back.
 - **The bot treats `Deleted` as memory.** All three dedup sets (strict key, loose key, MessageId) are built from `Transactions` plus `Deleted`, so a deleted auto-row does not resurrect.
-- **After a successful delete the page re-fetches** the transaction list. Duplicate rows share a base key and are distinguished by occurrence; deleting one renumbers the rest, so splicing locally leaves stale ids.
+- **After a successful delete the page's list is replaced** with a current snapshot returned on the same call. Duplicate rows share a base key and are distinguished by occurrence; deleting one renumbers the rest, so splicing locally leaves stale ids. A second `getAllTxns` from the page is forbidden: its failure would toast an error after the row had already left `Transactions`.
 - **The manual-only delete button is removed from `txnRow`** (search, category drilldown, 項目/TAG). Delete lives where you edit.
 
 Not **BREAKING** for stored values: `Transactions` rows that stay, stay. A missing `Deleted` sheet is treated as empty, never as an error.
@@ -27,6 +27,6 @@ None. `openspec/specs/` holds `category-config`, `custom-menu`, `drilldown-sideb
 
 - `sidebar/程式碼.js`: `deleteTxn` drops the `manual-` guard; copies the full row to `Deleted` (creating the sheet with `Transactions` headers if needed); then deletes from `Transactions`.
 - `sidebar/cards_transaction_bot.js`: when building `existing` for dedup, append `Deleted` rows aligned to `HEADER.length`. A missing `Deleted` sheet is empty, not a throw.
-- `sidebar/ToolPanel.html`: unconditional delete on `editRow`; confirmation overlay; re-fetch `getAllTxns` on success; remove `manualDelBtn` from `txnRow`.
+- `sidebar/ToolPanel.html`: unconditional delete on `editRow`; confirmation overlay; adopt `deleteTxn`'s returned snapshot on success; remove `manualDelBtn` from `txnRow`.
 - `CLAUDE.md`: note that `Deleted` is load-bearing — deleting the sheet brings the ghosts back.
 - No change to `getAllTxns` shape, no new `google.script.run` target, no new column on `Transactions`. Deploy path unchanged.

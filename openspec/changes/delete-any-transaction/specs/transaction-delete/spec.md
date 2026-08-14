@@ -35,7 +35,7 @@ A delete SHALL not run until the owner confirms it in an overlay. Cancelling or 
 
 ### Requirement: Deleting moves the row to Deleted, not a flag
 
-`deleteTxn` SHALL copy the entire `Transactions` row onto a `Deleted` sheet (creating that sheet, with `Transactions` headers, if it does not exist), then remove the row from `Transactions`. It SHALL locate the row by the existing composite key. It SHALL accept any row, not only ids that start with `manual-`. A key that matches nothing SHALL fail closed without deleting a neighbour.
+`deleteTxn` SHALL copy the entire `Transactions` row onto a `Deleted` sheet (creating that sheet, with `Transactions` headers, if it does not exist), then remove the row from `Transactions`. It SHALL locate the row by the existing composite key. It SHALL accept any row, not only ids that start with `manual-`. A key that matches nothing in `Transactions` and nothing in `Deleted` SHALL fail closed without deleting a neighbour. A key that is already on `Deleted` and gone from `Transactions` SHALL succeed without modifying `Transactions` — that is a retry after success, not a miss.
 
 `Transactions` SHALL keep the meaning that every row in it counts: `getAllTxns` SHALL NOT filter on a deleted flag, and no new column is added for this purpose.
 
@@ -51,11 +51,19 @@ A delete SHALL not run until the owner confirms it in an overlay. Cancelling or 
 - **THEN** `Deleted` is created with the `Transactions` header row
 - **AND** the deleted row is appended to it
 
-#### Scenario: Stale id fails closed
+#### Scenario: Unknown id fails closed
 
-- **WHEN** `deleteTxn` is called with a key that matches no `Transactions` row
+- **WHEN** `deleteTxn` is called with a key that matches no `Transactions` row and no `Deleted` row
 - **THEN** no row is deleted
 - **AND** no other row is modified
+- **AND** the page shows an error
+
+#### Scenario: Already-deleted key is success
+
+- **WHEN** `deleteTxn` is called with a key that matches no `Transactions` row, but whose base key (MessageId|time|amount|last4) already exists on `Deleted`
+- **THEN** no `Transactions` row is modified
+- **AND** the call succeeds
+- **AND** the page does not show an error
 
 #### Scenario: Manual rows still delete
 
@@ -80,9 +88,17 @@ When building its dedup index, the bot SHALL treat rows on `Deleted` as already 
 
 ### Requirement: After a successful delete the page refreshes ids
 
-A successful `deleteTxn` SHALL be followed by a fresh `getAllTxns` that replaces the page's transaction list, so remaining rows — including other members of a duplicate group — keep ids that still match the sheet.
+A successful `deleteTxn` SHALL replace the page's transaction list with a current snapshot of `Transactions` (the same shape `getAllTxns` returns), so remaining rows — including other members of a duplicate group — keep ids that still match the sheet. That snapshot SHALL come back on the same call that performed the delete. The page SHALL NOT issue a second `getAllTxns` whose failure can toast an error after the row has already left `Transactions`.
+
+If the row has left `Transactions`, the page SHALL treat the delete as success (no error toast), even when `deleteTxn` is invoked again with the same key.
 
 #### Scenario: Two duplicate rows can both be deleted
 
 - **WHEN** two `Transactions` rows share a base key and the owner deletes one, then the other, without a manual page reload
 - **THEN** both deletes succeed
+
+#### Scenario: Sheet write and page agree
+
+- **WHEN** the owner confirms delete and the row leaves `Transactions`
+- **THEN** the page toasts success, not an error
+- **AND** the page's list no longer contains that row, without a manual reload

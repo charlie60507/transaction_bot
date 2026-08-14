@@ -80,26 +80,54 @@ function txnKey_(row, occurrence) {
 }
 
 /**
+ * Normalize a composite key as it arrives from google.script.run.
+ *
+ * The id is `messageId|timestamp|amount|last4|occurrence`. A single string
+ * argument containing `|` can arrive as an Array (one element per segment);
+ * `String(array)` then comma-joins, matching nothing and throwing 找不到.
+ * updateTxn never hits this because it already passes (id, patch) — two
+ * arguments. Reconstruct with `|` if we got an Array; unwrap `{id}` if the
+ * page sent an object.
+ */
+function asTxnKey_(key) {
+  if (Array.isArray(key)) return key.map(function (p) { return String(p); }).join('|');
+  if (key && typeof key === 'object' && key.id != null) return asTxnKey_(key.id);
+  return String(key == null ? '' : key);
+}
+
+/** Same skip getAllTxns uses: blank / unparseable dates are not transactions.
+ *  findRowByKey_ must skip them too, or occurrence numbers disagree — this sheet
+ *  has hundreds of trailing rows whose only content is an unchecked checkbox. */
+function isDisplayedTxn_(row) {
+  const raw = row[CFG.IDX_DATE];
+  const dt = raw instanceof Date ? raw : new Date(raw);
+  return !isNaN(dt.getTime());
+}
+
+/**
  * Row number for a key produced by txnKey_. Falls back to matching on message id alone when
  * given a bare id, so a page loaded before this change still works instead of erroring.
  * Returns -1 when nothing matches.
  */
 function findRowByKey_(sh, key) {
+  key = asTxnKey_(key);
   const last = sh.getLastRow();
   if (last <= 1) return -1;
   const rows = sh.getRange(2, 1, last - 1, sh.getLastColumn()).getValues();
-  const parts = String(key).split('|');
+  const parts = key.split('|');
   if (parts.length < 5) {
     for (let i = 0; i < rows.length; i++) {
-      if (String(rows[i][CFG.IDX_MESSAGEID]) === String(key)) return i + 2;
+      if (!isDisplayedTxn_(rows[i])) continue;
+      if (String(rows[i][CFG.IDX_MESSAGEID]) === key) return i + 2;
     }
     return -1;
   }
   const seen = {};
   for (let i = 0; i < rows.length; i++) {
+    if (!isDisplayedTxn_(rows[i])) continue;
     const base = txnKey_(rows[i], 0).split('|').slice(0, 4).join('|');
     const n = seen[base] = (seen[base] === undefined ? 0 : seen[base] + 1);
-    if (txnKey_(rows[i], n) === String(key)) return i + 2;
+    if (txnKey_(rows[i], n) === key) return i + 2;
   }
   return -1;
 }
@@ -173,7 +201,7 @@ function getAllTxns() {
  * Returns { ok:true }; throws a clear error the frontend surfaces.
  */
 function updateTxn(messageId, patch) {
-  messageId = String(messageId || '');
+  messageId = asTxnKey_(messageId);
   if (!messageId) throw new Error('缺少 MessageId');
   patch = patch || {};
   const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
@@ -317,23 +345,58 @@ function getOrCreateDeleted_(ss, src) {
 }
 
 /** Delete any row, located by the composite key. Moves it to Deleted first so the
- *  bot still treats the mail as already handled (the sheet is its only memory). */
+ *  bot still treats the mail as already handled (the sheet is its only memory).
+ *
+ *  Returns `{ ok, txns }` so the page does not need a nested getAllTxns. Nesting
+ *  google.script.run after a successful write was the false 找不到 toast: the
+ *  row was already gone, then a second lookup (retry or refresh) failed. */
 function deleteTxn(messageId) {
-  messageId = String(messageId || '');
-  const ss = getSpreadsheet_();
-  const sh = ss.getSheetByName(CFG.DATA_SHEET);
-  if (!sh) throw new Error('找不到 Transactions 工作表');
-  const last = sh.getLastRow();
-  if (last <= 1) throw new Error('沒有交易資料');
-  const rowNum = findRowByKey_(sh, messageId);
-  if (rowNum === -1) throw new Error('找不到該筆交易');
-  const cols = sh.getLastColumn();
-  const row = sh.getRange(rowNum, 1, 1, cols).getValues()[0];
-  const del = getOrCreateDeleted_(ss, sh);
-  const dest = Math.max(del.getLastRow() + 1, 2);
-  del.getRange(dest, 1, 1, cols).setValues([row]);
-  sh.deleteRow(rowNum);
-  return { ok: true };
+  messageId = asTxnKey_(messageId);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15 * 1000);
+  try {
+    const ss = getSpreadsheet_();
+    const sh = ss.getSheetByName(CFG.DATA_SHEET);
+    if (!sh) throw new Error('找不到 Transactions 工作表');
+    const last = sh.getLastRow();
+    if (last <= 1) throw new Error('沒有交易資料');
+    const rowNum = findRowByKey_(sh, messageId);
+    if (rowNum === -1) {
+      // Already moved (double-tap / retry after a successful write). Do not
+      // throw 找不到 — the sheet is in the state the owner asked for.
+      const del = ss.getSheetByName(CFG.DELETED_SHEET);
+      if (del && sheetHasBaseKey_(del, messageId)) {
+        SpreadsheetApp.flush();
+        return { ok: true, txns: getAllTxns() };
+      }
+      throw new Error('找不到該筆交易 (key=' + messageId + ')');
+    }
+    const cols = sh.getLastColumn();
+    const row = sh.getRange(rowNum, 1, 1, cols).getValues()[0];
+    const destSheet = getOrCreateDeleted_(ss, sh);
+    const dest = Math.max(destSheet.getLastRow() + 1, 2);
+    destSheet.getRange(dest, 1, 1, cols).setValues([row]);
+    sh.deleteRow(rowNum);
+    SpreadsheetApp.flush();
+    return { ok: true, txns: getAllTxns() };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** True if Deleted already holds a row with the same base key (id without occurrence). */
+function sheetHasBaseKey_(sh, key) {
+  if (!sh || sh.getLastRow() <= 1) return false;
+  const parts = asTxnKey_(key).split('|');
+  if (parts.length < 4) return false;
+  const want = parts.slice(0, 4).join('|');
+  const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+  for (let i = 0; i < rows.length; i++) {
+    if (!isDisplayedTxn_(rows[i])) continue;
+    const base = txnKey_(rows[i], 0).split('|').slice(0, 4).join('|');
+    if (base === want) return true;
+  }
+  return false;
 }
 
 /** Web App URL of the user's live deployment.

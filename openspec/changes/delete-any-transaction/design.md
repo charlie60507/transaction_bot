@@ -50,15 +50,19 @@ A missing `Deleted` sheet is empty, never a throw. The recording path must not s
 
 `isManual` stays: `distinctBanks()` still ranks by it.
 
-### D4 — Confirm with the existing overlay, then re-fetch
+### D4 — Confirm with the existing overlay; refresh on the same call
 
 Deletion is rare. One extra tap is nothing against deleting the wrong row on a phone. Reuse `.overlay` / `.modal`; cancelling or tapping the backdrop changes nothing.
 
-Do **not** only splice the row out of `TXNS`. `getAllTxns` numbers duplicate groups by occurrence; deleting one member stale-ids the rest, and the next delete matches nothing (`找不到`). Duplicate rows are the main thing this feature exists to delete, so a successful `deleteTxn` MUST be followed by `getAllTxns` replacing `TXNS`. Fail closed: overlay stays until the write returns; failure toasts and leaves the list as it was.
+Do **not** only splice the row out of `TXNS`. `getAllTxns` numbers duplicate groups by occurrence; deleting one member stale-ids the rest, and the next delete matches nothing (`找不到`). Duplicate rows are the main thing this feature exists to delete, so a successful `deleteTxn` MUST replace `TXNS` with a current snapshot.
 
-### D5 — `findRowByKey_` is the locate; missing row fails closed
+That snapshot is returned from `deleteTxn` itself (`{ ok, txns }`), not from a nested `getAllTxns` on the page. The nested call was the live bug: the write had already moved the row, then the second lookup failed and toasted 找不到 while the sheet was correct. Fail closed only when the write itself fails: overlay stays, list unchanged.
 
-`deleteTxn` locates with the existing composite key and returns -1 when nothing matches. A stale id therefore fails instead of hitting a neighbour. That is the invariant to protect: an edit landing on the wrong transaction has already happened (CT-16), and a delete is not recoverable from the UI.
+### D5 — `findRowByKey_` is the locate; unknown ids fail closed; already-deleted ids succeed
+
+`deleteTxn` locates with the existing composite key. A key that matches nothing in `Transactions` and nothing in `Deleted` fails closed — does not hit a neighbour. That is the invariant to protect: an edit landing on the wrong transaction has already happened (CT-16), and a delete is not recoverable from the UI.
+
+A key already on `Deleted` (same base: MessageId|time|amount|last4) and gone from `Transactions` is a retry after success, not a miss: return success and the current snapshot, do not toast 找不到.
 
 The `manual-` prefix guard is removed. Error copy drops "手動".
 
