@@ -57,6 +57,11 @@ function appendLast7DaysToSheet() {
     if (lastRow > 1) {
       existing = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
     }
+    // Deleted rows are already-handled mail. Concatenating them here covers all
+    // three dedup sets (strict, loose, MessageId) so a deleted auto-row does not
+    // resurrect. A missing sheet is empty, never a throw — the recording path
+    // must not start failing because a tab was renamed.
+    existing = existing.concat(readDeletedRows_(sh.getParent(), lastCol));
     const existingKeySet = new Set(existing.map(row => makeDedupKeyFromRow_(row)));
     const existingLooseKeySet = new Set(existing.map(row => makeLooseDedupKeyFromRow_(row)));
     // Strict MessageID check set (Column I is index 8)
@@ -522,6 +527,22 @@ function parseCathayTransfer_(msg) {
 function getOrCreateSheet_() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   return ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME);
+}
+
+/** Deleted rows aligned to HEADER.length (pad short, slice long). Missing sheet → []. */
+function readDeletedRows_(ss, width) {
+  const del = ss.getSheetByName(CFG.DELETED_SHEET);
+  if (!del || del.getLastRow() <= 1) return [];
+  const n = del.getLastRow() - 1;
+  const have = del.getLastColumn();
+  if (have < 1 || width < 1) return [];
+  const readCols = Math.min(have, width);
+  const rows = del.getRange(2, 1, n, readCols).getValues();
+  return rows.map(function (r) {
+    const out = r.slice(0, width);
+    while (out.length < width) out.push('');
+    return out;
+  });
 }
 
 function ensureHeaderAndCheckbox_(sh) {

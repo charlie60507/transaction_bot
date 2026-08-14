@@ -262,7 +262,9 @@
   .macts { display: flex; gap: var(--sp2); justify-content: flex-end; margin-top: var(--sp4); }
   .mbtn { border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-primary); border-radius: 7px; padding: 9px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
   .mbtn.primary { background: var(--accent); border-color: var(--accent); color: #0e1220; }
+  .mbtn.danger { background: var(--spend); border-color: var(--spend); color: #fff; }
   .mbtn:hover { filter: brightness(1.08); }
+  .dmeta { margin-top: 4px; font-size: 12px; color: var(--text-muted); }
 
   .empty { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
   /* 待記帳 inbox: one flat cross-day queue. Day sections reuse .erow from the per-day editor. */
@@ -306,9 +308,17 @@
       <div class="mfld full"><label>商店 / 說明</label><input type="text" id="a-mer" placeholder="例：路邊攤晚餐"></div>
       <div class="mfld"><label>類別</label><select id="a-cat"></select></div>
       <div class="mfld"><label>TAG（專案）</label><input id="a-tag" list="taglist" placeholder="（無）· 可直接打新專案" spellcheck="false"></div>
-      <div class="minfo">儲存後 <b>已記帳 ✓</b> · 手動列可在明細裡刪除</div>
+      <div class="minfo">儲存後 <b>已記帳 ✓</b> · 可在明細裡刪除</div>
     </div>
     <div class="macts"><button class="mbtn" id="a-cancel">取消</button><button class="mbtn primary" id="a-save">新增</button></div>
+  </div>
+</div>
+<div class="overlay" id="delOverlay">
+  <div class="modal">
+    <h3>刪除這筆交易？</h3>
+    <div class="msub">會從明細移走，bot 也不會再記回來。</div>
+    <div class="minfo"><b id="d-mer"></b><div class="dmeta"><span id="d-date"></span> · <span id="d-amt" class="num"></span></div></div>
+    <div class="macts"><button class="mbtn" id="d-cancel">取消</button><button class="mbtn danger" id="d-ok">刪除</button></div>
   </div>
 </div>
 <script>
@@ -478,7 +488,7 @@
     // listing them added a section that changed no number and answered no question the owner had.
     return h;
   }
-  function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+(t.tag?' <span class="cat">'+esc(t.tag)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+splitMark(t)+'</span>'+manualDelBtn(t)+'</div>'; }
+  function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+(t.tag?' <span class="cat">'+esc(t.tag)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+splitMark(t)+'</span></div>'; }
   // ---------- monthly baseline: "how does this month compare to a typical month" ----------
   // Replaces the previous-period comparison. Comparing July to June answers a different, noisier
   // question — one unusual month poisons the next month's reading. A monthly mean says how far
@@ -699,15 +709,32 @@
   }
   // ---------- manual add / delete ----------
   function isManual(t){ return !!(t && t.id && String(t.id).indexOf('manual-')===0); }
-  function manualDelBtn(t){ return isManual(t) ? '<button class="txdel" data-del="'+esc(t.id)+'" title="刪除(手動)">🗑</button>' : ''; }
-  function deleteTxnRow(id){
+  function delBtn(t){ return '<button class="txdel" data-del="'+esc(t.id)+'" title="刪除">🗑</button>'; }
+  var pendingDelId=null;
+  function openDelModal(id){
     var t=txnById(id); if(!t) return;
-    if(!isManual(t)){ toast('只能刪除手動新增的交易', true); return; }
-    var idx=TXNS.indexOf(t); if(idx<0) return;
-    TXNS.splice(idx,1); render();
+    pendingDelId=id;
+    document.getElementById('d-mer').textContent=t.merchant||'(無說明)';
+    document.getElementById('d-amt').textContent=(t.type==='收入'?'+':'')+'$'+fmt(t.amount);
+    document.getElementById('d-date').textContent=t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2);
+    document.getElementById('delOverlay').classList.add('on');
+  }
+  function closeDelModal(){
+    pendingDelId=null;
+    var ov=document.getElementById('delOverlay'); if(ov) ov.classList.remove('on');
+  }
+  function deleteTxnRow(id){ openDelModal(id); }
+  function confirmDelete(){
+    var id=pendingDelId; if(!id) return;
+    pendingDelId=null;
     google.script.run
-      .withSuccessHandler(function(){ toast('已刪除'); })
-      .withFailureHandler(function(err){ TXNS.splice(idx,0,t); render(); toast('刪除失敗:'+((err&&err.message)||err), true); })
+      .withSuccessHandler(function(){
+        google.script.run
+          .withSuccessHandler(function(data){ adoptTxns(data); closeDelModal(); render(); toast('已刪除'); })
+          .withFailureHandler(function(err){ closeDelModal(); toast('已刪除，但清單未重整:'+((err&&err.message)||err), true); })
+          .getAllTxns();
+      })
+      .withFailureHandler(function(err){ pendingDelId=id; toast('刪除失敗:'+((err&&err.message)||err), true); })
       .deleteTxn(id);
   }
   function openAddModal(){
@@ -815,7 +842,7 @@
         // there is no way to start a new one from the web at all. 類別 stays a closed <select>
         // on purpose — that taxonomy was just cleaned up and should not fragment.
         +'<div class="fld"><span class="lb">TAG</span><input class="tagin" list="taglist" data-ef="tag" data-id="'+esc(t.id)+'" value="'+esc(t.tag)+'" placeholder="（無）· 可直接打新專案" spellcheck="false"></div>'
-        +'<button class="erec" data-erec="'+esc(t.id)+'">'+(t.posted?'↩ 取消記帳':'✓ 記帳')+'</button>'+manualDelBtn(t)
+        +'<button class="erec" data-erec="'+esc(t.id)+'">'+(t.posted?'↩ 取消記帳':'✓ 記帳')+'</button>'+delBtn(t)
       +'</div></div>';
   }
   /**
@@ -1090,19 +1117,22 @@
   }
 
   // ---------- boot: fetch real data, then render ----------
+  function adoptTxns(data){
+    TXNS = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount;
+      // charged/mine arrive from the server; default them so a page served before the
+      // matching server version simply behaves as it did — every row "all mine".
+      t.charged = (t.charged==null) ? t.amount : +t.charged;
+      t.mine = (t.mine==null) ? null : +t.mine;
+      // Same reasoning for hm: no time on any row makes the day sort's primary key uniformly
+      // equal, so the amount tiebreak alone decides — which is exactly what this page did
+      // before times existed. No blank badge, no undefined on screen, no NaN in the comparator.
+      t.hm = (t.hm==null) ? '' : String(t.hm);
+      t.posted = (t.posted===true); t.id = String(t.id||''); return t; });
+  }
   function boot(){
     document.getElementById('app').innerHTML = '<div class="loading">載入中…</div>';
     google.script.run
-      .withSuccessHandler(function(data){ TXNS = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount;
-        // charged/mine arrive from the server; default them so a page served before the
-        // matching server version simply behaves as it did — every row "all mine".
-        t.charged = (t.charged==null) ? t.amount : +t.charged;
-        t.mine = (t.mine==null) ? null : +t.mine;
-        // Same reasoning for hm: no time on any row makes the day sort's primary key uniformly
-        // equal, so the amount tiebreak alone decides — which is exactly what this page did
-        // before times existed. No blank badge, no undefined on screen, no NaN in the comparator.
-        t.hm = (t.hm==null) ? '' : String(t.hm);
-        t.posted = (t.posted===true); t.id = String(t.id||''); return t; }); render(); })
+      .withSuccessHandler(function(data){ adoptTxns(data); render(); })
       .withFailureHandler(function(err){
         var msg = (err && err.message) ? err.message : String(err);
         document.getElementById('app').innerHTML =
@@ -1113,6 +1143,9 @@
   document.getElementById('a-cancel').onclick=closeAddModal;
   document.getElementById('a-save').onclick=submitAdd;
   document.getElementById('addOverlay').onclick=function(e){ if(e.target===this) closeAddModal(); };
+  document.getElementById('d-cancel').onclick=closeDelModal;
+  document.getElementById('d-ok').onclick=confirmDelete;
+  document.getElementById('delOverlay').onclick=function(e){ if(e.target===this) closeDelModal(); };
   boot();
 </script>
 </body>

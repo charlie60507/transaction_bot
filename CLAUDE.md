@@ -66,6 +66,14 @@ restoring it would have silently undone two 富邦-transfer fixes. **Rollback fo
 the bot is git history** — `git revert` the bad commit and let the normal
 push-to-deploy path run — never a second copy of the file in the tree.
 
+**The `Deleted` sheet is load-bearing, not an archive.** Dashboard delete
+copies the whole `Transactions` row there and then removes it; the bot
+concatenates `Deleted` into its dedup index so a deleted auto-row does not
+come back on the next 7-day scan. Deleting the tab (or renaming it) treats
+it as empty — the run still completes, and anything still inside that window
+resurrects. Recovery is moving the row back onto `Transactions`. Do not drop
+the sheet to "clean up".
+
 **The gate is `node check_sidebar.js`.** Apps Script has no build step, so a
 typo'd `google.script.run` target or a stale `CFG.IDX_*` constant would surface
 only in the live dashboard. The script checks that every `.js`/`.json`/inline
