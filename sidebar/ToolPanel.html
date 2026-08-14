@@ -44,7 +44,7 @@
   .sel select { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--r-ctl);
     padding: 5px 8px; font-size: 12px; font-weight: 500; cursor: pointer; }
   .sel.picked select { border-color: var(--accent); }
-  .hint { font-size: 11px; color: var(--text-muted); margin-left: auto; }
+  .hint { font-size: 11px; color: var(--text-muted); }
 
   .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-bottom: var(--sp3); background: var(--border);
     border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden; }
@@ -110,9 +110,10 @@
   .toolbar h2 { font-size: 14px; font-weight: 600; margin-right: auto; }
   .toolbar h2 .th { font-weight: 400; color: var(--text-muted); font-size: 12px; }
   .search { background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--r-ctl);
-    padding: 7px 12px; font-size: 13px; width: 200px; }
+    padding: 5px 10px; font-size: 12px; width: 132px; height: 28px; }
   .search:focus { outline: none; border-color: var(--accent); }
   .search::placeholder { color: var(--text-muted); }
+  .controls .search { margin-left: auto; flex-shrink: 1; min-width: 96px; }
 
   .row-card, .pcard { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-card); padding: var(--sp3) var(--sp4);
     margin-bottom: var(--sp2); cursor: pointer; transition: background .12s; }
@@ -359,6 +360,33 @@
   function isCurMonth(r){ return r.level==='month'&&r.year===NOW.year&&r.month===NOW.month; }
   function isPartialCur(r){ return isCurMonth(r)&&NOW.day<daysInMonth(NOW.year,NOW.month); }
   function inScope(t,r){ if(r.level==='all') return true; if(r.level==='year') return t.y===r.year; return t.y===r.year&&t.m===r.month; }
+  var SEARCH_CAP = 40;
+  function numericQuery(q){
+    var s=String(q||'').trim().replace(/[$,]/g,'');
+    if(!/^\d+(\.\d+)?$/.test(s)) return null;
+    return Number(s);
+  }
+  function txnMatchesQuery(t, q){
+    var raw=String(q||'').trim();
+    if(!raw) return false;
+    var ql=raw.toLowerCase();
+    if(String(t.merchant||'').toLowerCase().indexOf(ql)>=0) return true;
+    if(String(t.cat||'').toLowerCase().indexOf(ql)>=0) return true;
+    var n=numericQuery(raw);
+    if(n!=null && (Number(t.amount)===n || Number(t.charged)===n)) return true;
+    return false;
+  }
+  function searchHits(txns, q){
+    if(!String(q||'').trim()) return [];
+    return txns.filter(function(t){ return txnMatchesQuery(t,q); }).sort(function(a,b){
+      if(a.y!==b.y) return b.y-a.y;
+      if(a.m!==b.m) return b.m-a.m;
+      if(a.d!==b.d) return b.d-a.d;
+      var ha=a.hm||'', hb=b.hm||'';
+      if(ha!==hb) return ha<hb?1:-1;
+      return (b.amount||0)-(a.amount||0);
+    });
+  }
   function periodLabel(r){ if(r.level==='all') return '全部期間'; if(r.level==='year') return r.year+' 全年'+(r.year===NOW.year?'(1–'+NOW.month+' 月)':''); return r.year+' 年 '+r.month+' 月'+(isPartialCur(r)?'(至今 '+NOW.day+' 日)':''); }
   function isIncome(t){ return t.type==='收入'&&t.cat!=='退款'; }
   function isRefund(t){ return t.type==='收入'&&t.cat==='退款'; }
@@ -464,15 +492,9 @@
     // drops the whole column rather than filling it with em-dashes.
     var catBase=selKey?catBaselines(selKey):null;
 
-    h+='<div class="toolbar"><h2>'+(state.q?'搜尋結果':'支出明細 · 依類別 <span class="th">金額 · 占比 · 對比常態月 · 點開看交易</span>')+'</h2><input class="search" id="q" placeholder="搜尋商店…" value="'+esc(state.q)+'"></div>';
-    if(state.q){
-      var hits=expList.filter(function(t){return t.merchant.toLowerCase().indexOf(state.q.toLowerCase())>=0;}).sort(function(a,b){return b.amount-a.amount;});
-      if(!hits.length) h+='<div class="empty">找不到「'+esc(state.q)+'」的交易</div>';
-      else { h+='<div class="panel"><div class="rc-meta num" style="margin-bottom:var(--sp2)">'+hits.length+' 筆 · 合計 $'+fmt(sum(hits))+'</div>'; hits.slice(0,40).forEach(function(t){ h+=txnRow(t,true); }); h+='</div>'; }
-    } else {
-      if(!items.length) h+='<div class="empty">此範圍沒有支出</div>';
-      else { var max=items[0].total; items.forEach(function(it,i){ h+=rowCard(it,i,max,expList,catBase,prog); }); }
-    }
+    h+='<div class="toolbar"><h2>支出明細 · 依類別 <span class="th">金額 · 占比 · 對比常態月 · 點開看交易</span></h2></div>';
+    if(!items.length) h+='<div class="empty">此範圍沒有支出</div>';
+    else { var max=items[0].total; items.forEach(function(it,i){ h+=rowCard(it,i,max,expList,catBase,prog); }); }
     return h;
   }
 
@@ -1069,6 +1091,18 @@
   }
   function monthlyBars(byMonth,color){ var keys=Object.keys(byMonth).sort().slice(-8); if(!keys.length) return ''; var max=Math.max.apply(null,keys.map(function(k){return byMonth[k];}))||1; var out='<div style="font-size:12px;color:var(--text-muted);margin-bottom:2px">每月新增</div><div class="mbars">'; keys.forEach(function(k){ var hgt=Math.round(byMonth[k]/max*46); out+='<div class="mb"><i style="height:'+Math.max(2,hgt)+'px;background:'+color+'" title="'+k+' $'+fmt(byMonth[k])+'"></i><span>'+(+k.split('-')[1])+'月</span></div>'; }); out+='</div>'; return out; }
 
+  function headSearch(){
+    return '<input class="search" id="q" placeholder="搜尋…" value="'+esc(state.q)+'" spellcheck="false">';
+  }
+  function searchPanel(q){
+    var hits=searchHits(TXNS,q), extra=Math.max(0,hits.length-SEARCH_CAP);
+    var h='<div class="toolbar"><h2>搜尋結果 <span class="th">全期間 · 最新在前</span></h2></div>';
+    if(!hits.length) return h+'<div class="empty">找不到「'+esc(String(q).trim())+'」的交易</div>';
+    h+='<div class="panel"><div class="rc-meta num" style="margin-bottom:var(--sp2)">'+hits.length+' 筆'+(extra?' · 還有 '+extra+' 筆':'')+'</div>';
+    hits.slice(0,SEARCH_CAP).forEach(function(t){ h+=editRow(t); });
+    return h+'</div>';
+  }
+
   function render(){
     var r=resolveScope(state.scope), tab=state.tab, isProj=tab==='project', isInbox=tab==='inbox';
     var nPend=pendingTxns().length;
@@ -1082,14 +1116,15 @@
     if(isInbox){
       h+='<div class="controls"><span class="clabel">範圍</span><button class="ctl'+(state.inboxScope==='all'?' active':'')+'" data-iscope="all">全部</button><button class="ctl'+(state.inboxScope==='year'?' active':'')+'" data-iscope="year">本年</button>'
         +'<button class="ev-toggle" style="margin-left:6px" data-inboxdone>'+(state.inboxDone?'只看待記帳':'一併顯示近 '+INBOX_DONE_DAYS+' 天已記帳')+'</button>'
-        +'<span class="hint">'+(state.inboxDone?'已記帳只回看 '+INBOX_DONE_DAYS+' 天(誤按時取回用)':'待記帳與期間篩選分開,積壓不會被月份藏起來')+'</span></div>';
+        +'<span class="hint">'+(state.inboxDone?'已記帳只回看 '+INBOX_DONE_DAYS+' 天(誤按時取回用)':'待記帳與期間篩選分開,積壓不會被月份藏起來')+'</span>'+headSearch()+'</div>';
     } else if(!isProj){
-      h+='<div class="controls"><span class="clabel">期間</span><button class="ctl'+(state.scope==='all'?' active':'')+'" data-scope="all">全部</button><button class="ctl'+(state.scope==='month'?' active':'')+'" data-scope="month">當月</button><button class="ctl'+(state.scope==='year'?' active':'')+'" data-scope="year">當年</button><span class="clabel" style="margin-left:6px">或指定</span><span class="sel'+(isPick()?' picked':' dim')+'"><select id="selYear">'+yearOptions()+'</select><select id="selMonth">'+monthOptions()+'</select></span></div>';
+      h+='<div class="controls"><span class="clabel">期間</span><button class="ctl'+(state.scope==='all'?' active':'')+'" data-scope="all">全部</button><button class="ctl'+(state.scope==='month'?' active':'')+'" data-scope="month">當月</button><button class="ctl'+(state.scope==='year'?' active':'')+'" data-scope="year">當年</button><span class="clabel" style="margin-left:6px">或指定</span><span class="sel'+(isPick()?' picked':' dim')+'"><select id="selYear">'+yearOptions()+'</select><select id="selMonth">'+monthOptions()+'</select></span>'+headSearch()+'</div>';
     } else {
-      h+='<div class="controls"><span class="clabel">範圍</span><button class="ctl'+(state.projScope==='all'?' active':'')+'" data-pscope="all">全部累計</button><button class="ctl'+(state.projScope==='year'?' active':'')+'" data-pscope="year">本年</button><span class="hint">項目為長期累計,與期間篩選分開</span></div>';
+      h+='<div class="controls"><span class="clabel">範圍</span><button class="ctl'+(state.projScope==='all'?' active':'')+'" data-pscope="all">全部累計</button><button class="ctl'+(state.projScope==='year'?' active':'')+'" data-pscope="year">本年</button><span class="hint">項目為長期累計,與期間篩選分開</span>'+headSearch()+'</div>';
     }
     h+='</div>';
-    h+= tab==='analysis' ? periodTab() : (tab==='trend' ? trendTab() : (tab==='inbox' ? inboxTab() : projectTab()));
+    h+= String(state.q||'').trim() ? searchPanel(state.q)
+      : (tab==='analysis' ? periodTab() : (tab==='trend' ? trendTab() : (tab==='inbox' ? inboxTab() : projectTab())));
     h+='<datalist id="taglist">'+distinctTags().map(function(g){ return '<option value="'+esc(g)+'"></option>'; }).join('')+'</datalist>';
     h+='<datalist id="banklist">'+distinctBanks().map(function(g){ return '<option value="'+esc(g)+'"></option>'; }).join('')+'</datalist>';
     h+='<div class="footer">即時讀取自 Transactions · 冷石板深色</div>';
@@ -1097,7 +1132,7 @@
   }
   function attach(){
     var app=document.getElementById('app');
-    app.querySelectorAll('.tabs button').forEach(function(b){ b.onclick=function(){ state.tab=this.getAttribute('data-tab'); openRow=null; openProj=null; openHeatDay=null; state.q=''; render(); }; });
+    app.querySelectorAll('.tabs button').forEach(function(b){ b.onclick=function(){ state.tab=this.getAttribute('data-tab'); openRow=null; openProj=null; openHeatDay=null; render(); }; });
     app.querySelectorAll('.ctl[data-scope]').forEach(function(b){ b.onclick=function(){ var s=this.getAttribute('data-scope'); state.scope=s; if(s==='year'){state.selYear=NOW.year;state.selMonth=0;} else if(s==='month'){state.selYear=NOW.year;state.selMonth=NOW.month;} openRow=null; openHeatDay=null; render(); }; });
     app.querySelectorAll('.cell[data-hday]').forEach(function(c){ c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); }; });
     app.querySelectorAll('[data-ef]').forEach(function(el){
@@ -1154,7 +1189,11 @@
     var sy=document.getElementById('selYear'), sm=document.getElementById('selMonth');
     function pickSel(){ state.selYear=+sy.value; state.selMonth=+sm.value; state.scope=state.selMonth===0?String(state.selYear):(state.selYear+'-'+('0'+state.selMonth).slice(-2)); openRow=null; openHeatDay=null; render(); }
     if(sy) sy.onchange=pickSel; if(sm) sm.onchange=pickSel;
-    var q=document.getElementById('q'); if(q) q.oninput=function(){ state.q=this.value; var pos=this.selectionStart; render(); var q2=document.getElementById('q'); if(q2){ q2.focus(); try{q2.setSelectionRange(pos,pos);}catch(e){} } };
+    var q=document.getElementById('q');
+    if(q){
+      q.oninput=function(){ state.q=this.value; var pos=this.selectionStart; render(); var q2=document.getElementById('q'); if(q2){ q2.focus(); try{q2.setSelectionRange(pos,pos);}catch(e){} } };
+      q.onkeydown=function(e){ if(e.key==='Escape'){ e.preventDefault(); state.q=''; render(); } };
+    }
     app.querySelectorAll('.row-card').forEach(function(c){ c.onclick=function(e){ if(e.target.id==='q')return; var n=this.getAttribute('data-row'); openRow=(openRow===n)?null:n; render(); }; });
     app.querySelectorAll('.pcard').forEach(function(c){ c.onclick=function(){ var n=this.getAttribute('data-proj'); openProj=(openProj===n)?null:n; render(); }; });
   }
