@@ -40,10 +40,11 @@ function onOpen() {
     .addToUi();
 }
 
-/** Web App entry: serve the dashboard page (injects real NOW in sheet TZ) */
+/** Web App entry: serve the dashboard page (injects real NOW in sheet TZ + sheet URL). */
 function doGet(e) {
   const t = HtmlService.createTemplateFromFile('ToolPanel');
   t.now = nowYMD_();
+  t.sheetUrl = getSpreadsheet_().getUrl();
   return t.evaluate()
     .setTitle('交易工具')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
