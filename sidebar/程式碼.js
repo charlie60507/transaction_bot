@@ -3,6 +3,10 @@
 const CFG = {
   SPREADSHEET_ID: '1PZfUiqaMeUHHSBi8zqEPnEgBfFXqTxKwhnQUltCb8VU',
   DATA_SHEET: 'Transactions',
+  // Load-bearing, not an archive: the bot treats these rows as already-seen so a
+  // deleted auto-record does not come back on the next 7-day scan. Deleting the
+  // tab resurrects anything still inside that window.
+  DELETED_SHEET: 'Deleted',
   TZ: 'Asia/Taipei',
 
   // Transactions column indices (0-based)
@@ -287,16 +291,47 @@ function addTxn(fields) {
   };
 }
 
-/** Delete a MANUAL row only (id starts with "manual-"), located by MessageId. */
+/**
+ * Deleted sheet: create on first use, copying Transactions headers. If it already
+ * exists but is narrower than the source (Transactions later gained a column), copy
+ * only the extra header cells so a human note on Deleted is not overwritten.
+ */
+function getOrCreateDeleted_(ss, src) {
+  let del = ss.getSheetByName(CFG.DELETED_SHEET);
+  const srcCols = Math.max(src.getLastColumn(), 1);
+  if (!del) {
+    del = ss.insertSheet(CFG.DELETED_SHEET);
+    del.getRange(1, 1, 1, srcCols).setValues(src.getRange(1, 1, 1, srcCols).getValues());
+    return del;
+  }
+  if (del.getLastRow() === 0) {
+    del.getRange(1, 1, 1, srcCols).setValues(src.getRange(1, 1, 1, srcCols).getValues());
+    return del;
+  }
+  const have = del.getLastColumn();
+  if (have < srcCols) {
+    del.getRange(1, have + 1, 1, srcCols - have)
+      .setValues(src.getRange(1, have + 1, 1, srcCols - have).getValues());
+  }
+  return del;
+}
+
+/** Delete any row, located by the composite key. Moves it to Deleted first so the
+ *  bot still treats the mail as already handled (the sheet is its only memory). */
 function deleteTxn(messageId) {
   messageId = String(messageId || '');
-  if (messageId.indexOf('manual-') !== 0) throw new Error('只能刪除手動新增的交易');
-  const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
+  const ss = getSpreadsheet_();
+  const sh = ss.getSheetByName(CFG.DATA_SHEET);
   if (!sh) throw new Error('找不到 Transactions 工作表');
   const last = sh.getLastRow();
   if (last <= 1) throw new Error('沒有交易資料');
   const rowNum = findRowByKey_(sh, messageId);
-  if (rowNum === -1) throw new Error('找不到該筆手動交易');
+  if (rowNum === -1) throw new Error('找不到該筆交易');
+  const cols = sh.getLastColumn();
+  const row = sh.getRange(rowNum, 1, 1, cols).getValues()[0];
+  const del = getOrCreateDeleted_(ss, sh);
+  const dest = Math.max(del.getLastRow() + 1, 2);
+  del.getRange(dest, 1, 1, cols).setValues([row]);
   sh.deleteRow(rowNum);
   return { ok: true };
 }
