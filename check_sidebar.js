@@ -165,6 +165,23 @@ if (!keys) {
   ok('CFG literal in ' + keySrc + ' has ' + keys.size + ' keys; ' + used.size + ' referenced');
 }
 
+// ---- 6. dashboard fixture tests (behavior; syntax checks above do not prove it)
+const testDir = path.resolve(__dirname, 'test');
+if (fs.existsSync(testDir)) {
+  const tests = fs.readdirSync(testDir).filter(f => /^dashboard_.*\.js$/.test(f)).sort();
+  tests.forEach(f => {
+    const full = path.join(testDir, f);
+    try {
+      delete require.cache[require.resolve(full)];
+      const mod = require(full);
+      if (typeof mod.run !== 'function') fail('fixture ' + f + ' does not export run()');
+      else { mod.run(); ok('fixture ' + f); }
+    } catch (e) {
+      fail('fixture ' + f + ': ' + (e && e.stack ? e.stack.split('\n')[0] : e));
+    }
+  });
+}
+
 // ---- report ---------------------------------------------------------------
 console.log('checked ' + DIR);
 console.log('  files: ' + jsFiles.length + ' js, ' + htmlFiles.length + ' html, ' + jsonFiles.length + ' json');

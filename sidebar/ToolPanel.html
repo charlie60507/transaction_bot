@@ -201,6 +201,10 @@
   .er1 .merin::placeholder { color: var(--text-muted); font-weight: 400; }
   .er1 .ehm { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
   .er1 .amt { font-weight: 600; white-space: nowrap; }
+  .er1 .mail { color: var(--text-muted); display: inline-flex; align-items: center; align-self: center;
+    flex-shrink: 0; line-height: 0; text-decoration: none; }
+  .er1 .mail:hover { color: var(--accent); }
+  .er1 .mail:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
   .er2 { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
   .er2 .fld { display: flex; align-items: center; gap: 4px; }
   .er2 .fld .lb { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -828,6 +832,18 @@
       .updateTxn(id, { mine: (v==null?'':v) });
   }
 
+  // Gmail permalink for auto-recorded rows. Empty link (manual rows) returns nothing — no
+  // disabled placeholder. Real <a target="_blank"> because the page has <base target="_top">
+  // and Cmd-click only works on an href. Envelope, not a sheet glyph (that is CT-20).
+  function mailLink(t){
+    var href=String(t.link||'').trim();
+    if(!href) return '';
+    return '<a class="mail" href="'+esc(href)+'" target="_blank" rel="noopener" title="Open original email" aria-label="Open original email">'
+      +'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      +'<rect x="3" y="5" width="18" height="14" rx="2"/>'
+      +'<path d="M3 7l9 6 9-6"/>'
+      +'</svg></a>';
+  }
   function editRow(t){
     var tc=typeColor(t.type);
     return '<div class="erow'+(t.posted?' done':'')+'" data-erow="'+esc(t.id)+'">'
@@ -838,7 +854,7 @@
       // a day that holds more than one. Rendered only when the row actually has a time, so the
       // pre-June rows look exactly as they do today. Shown to the minute: 富邦 gives seconds and
       // 國泰 does not, so seconds would advertise a precision most timed rows do not have.
-      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false"><button type="button" class="amt amtbtn num" data-amt="'+esc(t.id)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button></div>'
+      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false">'+mailLink(t)+'<button type="button" class="amt amtbtn num" data-amt="'+esc(t.id)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button></div>'
       +(openSplit===t.id ? splitBox(t) : '')
       +'<div class="er2">'
         +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
