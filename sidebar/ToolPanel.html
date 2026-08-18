@@ -314,10 +314,11 @@
       <div class="mfld"><label>時間（選填）</label><input type="time" id="a-time"></div>
       <div class="mfld"><label>金額 <span class="req">*</span></label><input type="number" id="a-amt" placeholder="0" min="0" inputmode="numeric"></div>
       <div class="mfld"><label>收支別 <span class="req">*</span></label><select id="a-type"><option>支出</option><option>收入</option><option>轉帳</option></select></div>
-      <!-- full: 加了時間欄之後,整列型欄位變成奇數個,來源不跨欄就會在商店/說明前面留一個空格 -->
-      <!-- 選項全部來自交易本身(distinctBanks),markup 裡不留任何帳戶名 —— 寫死的那份有六個
-           選項,其中四個在一千多筆資料裡從沒出現過,而佔 97% 的國泰和富邦一個都選不到。 -->
-      <div class="mfld full"><label>來源</label><input id="a-source" list="banklist" placeholder="（現金）· 可直接打新帳戶" spellcheck="false"></div>
+      <!-- full: after the time field the grid is odd-width; 來源 spans so it
+           does not leave a hole in front of 商店/說明. Options come from
+           distinctBanks() into a closed <select> — the previous datalist was
+           pre-filled and never showed the other accounts on tap. -->
+      <div class="mfld full"><label>來源</label><select id="a-source"></select></div>
       <div class="mfld full"><label>商店 / 說明</label><input type="text" id="a-mer" placeholder="例：路邊攤晚餐"></div>
       <div class="mfld"><label>類別</label><select id="a-cat"></select></div>
       <div class="mfld"><label>TAG（專案）</label><input id="a-tag" list="taglist" placeholder="（無）· 可直接打新專案" spellcheck="false"></div>
@@ -686,15 +687,16 @@
   function realCats(){ return distinctCats().filter(function(c){ return c!=='未分類'; }); }
   function distinctTags(){ var s={}; TXNS.forEach(function(t){ if(t.tag) s[t.tag]=1; }); return Object.keys(s).sort(); }
   /**
-   * 來源(銀行)清單,從交易本身長出來,不寫死任何帳戶名。
+   * Distinct 銀行 names from the loaded transactions. No account is hardcoded.
    *
-   * 可打可選而不是封閉的 <select>:新開的帳戶要等到有一筆交易帶著它才存在,而那筆很可能
-   * 只能靠手動新增 —— 跟 TAG 完全同一個死結,所以給同一個解法。
+   * The add dialog offers this as a closed <select> (same as 類別): a datalist
+   * pre-filled with the first name never surfaced the rest in the owner's
+   * browser. A brand-new account's first row is typed in the sheet.
    *
-   * 排序刻意分兩組:手動輸入過的在前(依手動次數),其餘依整體筆數。把「現金」直接寫死在
-   * 第一個也會得到今天正確的答案,但那正是這次要移除的那份虛構清單的成因 —— 耐久的是
-   * 「手動記的通常是現金,刷卡的自己會寄信進來」這個理由,不是它今天的答案。理由編碼進
-   * 排序規則,習慣改變時清單自己會跟上,沒有人需要回來改這裡。
+   * Two groups: sources previously entered by hand (by manual count), then
+   * everything else by overall count. Hardcoding the current leader would
+   * rot the same way the old six-name list did; ranking by how the field
+   * is used keeps the order in step with habit.
    */
   function distinctBanks(){
     var all={}, man={}, seq={}, names=[];
@@ -785,9 +787,13 @@
     var di=document.getElementById('a-date'); di.value=NOW.year+'-'+('0'+NOW.month).slice(-2)+'-'+('0'+NOW.day).slice(-2);
     // 時間每次都清空:上一筆的時間留在欄位裡,下一筆會被安靜地標上一個從沒發生過的時刻。
     document.getElementById('a-time').value='';
-    // 預設值取自資料而不是寫在 markup 裡:寫死的預設會跟寫死的清單一樣爛掉。空表時留白,
-    // 伺服器的 addTxn 對空來源仍然會補上「現金」。
-    document.getElementById('a-source').value=distinctBanks()[0]||'';
+    // Options and default both come from the data: a hardcoded default would
+    // rot the same way a hardcoded list did. Empty sheet → empty select;
+    // addTxn still coerces a blank source to 現金.
+    var banks=distinctBanks();
+    var src=document.getElementById('a-source');
+    src.innerHTML=banks.map(function(b){return '<option value="'+esc(b)+'">'+esc(b)+'</option>';}).join('');
+    src.value=banks[0]||'';
     document.getElementById('a-amt').value=''; document.getElementById('a-mer').value='';
     document.getElementById('a-amt').classList.remove('bad'); di.classList.remove('bad');
     ov.classList.add('on');
@@ -1139,7 +1145,6 @@
     h+= String(state.q||'').trim() ? searchPanel(state.q)
       : (tab==='analysis' ? periodTab() : (tab==='trend' ? trendTab() : (tab==='inbox' ? inboxTab() : projectTab())));
     h+='<datalist id="taglist">'+distinctTags().map(function(g){ return '<option value="'+esc(g)+'"></option>'; }).join('')+'</datalist>';
-    h+='<datalist id="banklist">'+distinctBanks().map(function(g){ return '<option value="'+esc(g)+'"></option>'; }).join('')+'</datalist>';
     h+='<div class="footer">即時讀取自 Transactions · 冷石板深色</div>';
     document.getElementById('app').innerHTML=h; attach();
   }
