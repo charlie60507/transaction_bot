@@ -734,7 +734,8 @@ function setScriptProperties(obj) {
   const next = Object.assign({}, props.getProperties(), obj);
   // Validate the complete candidate before mutating project state. This makes a
   // typo or a Production id in a Stage setup fail closed.
-  resolveEnvironmentConfig_(next, ScriptApp.getScriptId());
+  const env = resolveEnvironmentConfig_(next, ScriptApp.getScriptId());
+  validateGmailProperties_(next, env.environment);
   props.setProperties(obj);
   Logger.log('Set properties for environment ' + next.ENVIRONMENT + ': ' + Object.keys(obj).join(', '));
 }
@@ -748,8 +749,12 @@ function loadConfig_(allowUnconfigured) {
   let env;
   try {
     env = loadEnvironmentConfig_();
+    validateGmailProperties_(props.getProperties(), env.environment);
   } catch (err) {
-    if (!allowUnconfigured) throw err;
+    // Only a completely fresh project may remain unconfigured. Once an
+    // environment has been selected, invalid or incomplete settings must
+    // remain visible to callers instead of being downgraded to defaults.
+    if (!allowUnconfigured || String(props.getProperty('ENVIRONMENT') || '').trim()) throw err;
     env = {
       environment: 'UNCONFIGURED', scriptId: '', deploymentId: '',
       tz: 'Asia/Taipei', spreadsheetId: '', sheetName: 'Transactions'
@@ -774,6 +779,24 @@ function loadConfig_(allowUnconfigured) {
     sortOrder: props.getProperty('SORT_ORDER') || 'ASC',
     geminiApiKey: props.getProperty('GEMINI_API_KEY') || ''
   };
+}
+
+function validateGmailProperties_(props, environment) {
+  if (environment !== 'STAGE') return;
+  const required = ['GMAIL_STAGE_ACCOUNT', 'GMAIL_STAGE_MARKER', 'FUBON_QUERY_SUBJECT',
+    'FUBON_TRANSFER_QUERY', 'CATHAY_LABEL', 'CATHAY_SUBJECT'];
+  const missing = required.filter(function (key) { return !String(props[key] || '').trim(); });
+  if (missing.length > 0) {
+    throw new Error('Stage requires dedicated Gmail properties: ' + missing.join(', '));
+  }
+  const marker = String(props.GMAIL_STAGE_MARKER).trim().toLowerCase();
+  const identifiers = ['FUBON_QUERY_SUBJECT', 'FUBON_TRANSFER_QUERY', 'CATHAY_LABEL', 'CATHAY_SUBJECT'];
+  const unmarked = identifiers.filter(function (key) {
+    return String(props[key]).toLowerCase().indexOf(marker) === -1;
+  });
+  if (unmarked.length > 0) {
+    throw new Error('Stage Gmail queries and identifiers must contain GMAIL_STAGE_MARKER: ' + unmarked.join(', '));
+  }
 }
 
 function ensureBotConfig_() {

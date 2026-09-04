@@ -478,6 +478,11 @@ function resolveEnvironmentConfig_(props, actualScriptId) {
     throw new Error('Environment SCRIPT_ID does not match this Apps Script project');
   }
   if (environment === 'STAGE') {
+    const missingProductionFences = ['PRODUCTION_SCRIPT_ID', 'PRODUCTION_SPREADSHEET_ID', 'PRODUCTION_DEPLOYMENT_ID']
+      .filter(function (key) { return !String(props[key] || '').trim(); });
+    if (missingProductionFences.length > 0) {
+      throw new Error('Stage requires Production fence properties: ' + missingProductionFences.join(', '));
+    }
     if (props.PRODUCTION_SCRIPT_ID && scriptId === String(props.PRODUCTION_SCRIPT_ID).trim()) {
       throw new Error('Stage SCRIPT_ID must not be the Production Apps Script project');
     }
@@ -501,13 +506,15 @@ function resolveEnvironmentConfig_(props, actualScriptId) {
 
 /** Safe, synthetic-only reset for the isolated Stage project. */
 function resetStageData() {
+  requireEnvironmentConfig_();
   if (ENV_CONFIG.environment !== 'STAGE') throw new Error('resetStageData is available only in STAGE');
   const ss = getSpreadsheet_();
-  const data = getOrCreateStageSheet_(ss, CFG.DATA_SHEET, [
+  const transactionHeader = [
     '已記帳', '銀行', '授權日期時間', '卡末四碼', '金額_NTD',
     '交易內容/商店', '類別', 'Gmail連結', 'MessageId', '收支別', '種類(手動)'
-  ]);
-  const deleted = getOrCreateStageSheet_(ss, CFG.DELETED_SHEET, data.getRange(1, 1, 1, data.getLastColumn()).getValues()[0]);
+  ];
+  const data = getOrCreateStageSheet_(ss, CFG.DATA_SHEET, transactionHeader);
+  const deleted = getOrCreateStageSheet_(ss, CFG.DELETED_SHEET, transactionHeader);
   clearStageRows_(data);
   clearStageRows_(deleted);
   const meta = getOrCreateStageSheet_(ss, 'META', ['Key', 'Value']);
@@ -526,7 +533,15 @@ function resetStageData() {
 function getOrCreateStageSheet_(ss, name, header) {
   let sh = ss.getSheetByName(name);
   if (!sh) sh = ss.insertSheet(name);
-  if (sh.getLastRow() === 0) sh.getRange(1, 1, 1, header.length).setValues([header]);
+  const current = sh.getLastColumn() > 0
+    ? sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), header.length)).getValues()[0]
+    : [];
+  const normalized = current.slice(0, header.length);
+  if (current.length !== header.length || normalized.some(function (value, index) {
+    return String(value || '') !== String(header[index]);
+  })) {
+    sh.getRange(1, 1, 1, header.length).setValues([header]);
+  }
   return sh;
 }
 

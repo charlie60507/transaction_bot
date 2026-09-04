@@ -29,6 +29,7 @@ function run() {
   assert.throws(() => resolve(base(), 'prod-script'), /SCRIPT_ID/);
   assert.throws(() => resolve(base({ SPREADSHEET_ID: 'prod-sheet' }), 'stage-script'), /Production spreadsheet/);
   assert.throws(() => resolve(base({ DEPLOYMENT_ID: 'prod-deployment' }), 'stage-script'), /Production deployment/);
+  assert.throws(() => resolve(base({ PRODUCTION_DEPLOYMENT_ID: '' }), 'stage-script'), /Production fence/);
 
   const html = fs.readFileSync(PANEL, 'utf8');
   const script = extractInlineScript(html);

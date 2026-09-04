@@ -53,11 +53,20 @@ the dashboard or running the bot: `ENVIRONMENT` (`STAGE` or `PRODUCTION`),
 `SCRIPT_ID`, `SPREADSHEET_ID`, and `DEPLOYMENT_ID`. Stage must also set the three
 `PRODUCTION_*` guard properties to prevent accidental cross-targeting.
 
+Stage must additionally set `GMAIL_STAGE_ACCOUNT`, `GMAIL_STAGE_MARKER`,
+`FUBON_QUERY_SUBJECT`, `FUBON_TRANSFER_QUERY`, `CATHAY_LABEL`, and
+`CATHAY_SUBJECT`. The marker must be present in every Stage query, label, and
+subject; the runtime rejects missing or unmarked values instead of falling back
+to the Production Gmail defaults. `GMAIL_STAGE_ACCOUNT` documents the dedicated
+mailbox authorized by the Stage project; Gmail triggers must be installed only
+in that project and mailbox.
+
 Create the Stage project and Sheet separately, install only Stage Gmail triggers
 using a dedicated test mailbox/label, then set its properties from that project.
 Run `clasp run resetStageData` only against Stage. It creates or verifies
-`Transactions`, `Deleted`, and `META`, clears rows while preserving the
-load-bearing `Deleted` tab and headers, and writes deterministic synthetic data.
+`Transactions`, `Deleted`, and `META`, verifies and repairs their exact headers,
+clears rows while preserving the load-bearing `Deleted` tab and headers, and
+writes deterministic synthetic data.
 The dashboard header and bot logs identify the selected environment.
 
 For CI, dispatch `.github/workflows/deploy-dashboard.yml` with
