@@ -27,7 +27,13 @@ Use the built-in helper once per project to avoid hardcoding secrets:
 ```bash
 cd sidebar
 clasp run setScriptProperties --params '[{
+  "ENVIRONMENT":"PRODUCTION",
+  "SCRIPT_ID":"<THIS_APPS_SCRIPT_PROJECT_ID>",
   "SPREADSHEET_ID":"<YOUR_SPREADSHEET_ID>",
+  "DEPLOYMENT_ID":"<PINNED_DEPLOYMENT_ID>",
+  "PRODUCTION_SCRIPT_ID":"<PRODUCTION_APPS_SCRIPT_PROJECT_ID>",
+  "PRODUCTION_SPREADSHEET_ID":"<PRODUCTION_SPREADSHEET_ID>",
+  "PRODUCTION_DEPLOYMENT_ID":"<PRODUCTION_DEPLOYMENT_ID>",
   "TZ":"Asia/Taipei",
   "SHEET_NAME":"Transactions",
   "HEADER":"[\"已記帳\",\"銀行\",\"授權日期時間\",\"卡末四碼\",\"金額_NTD\",\"交易內容/商店\",\"類別\",\"Gmail連結\",\"MessageId\"]",
@@ -36,6 +42,31 @@ clasp run setScriptProperties --params '[{
   "CATHAY_SUBJECT":"消費彙整通知"
 }]'
 ```
+
+## Stage isolation
+
+Stage is a separate Apps Script project, Google Sheet, web-app deployment, Script
+Properties set, credentials, and Gmail trigger installation. The repository keeps
+one canonical source tree; environment-specific identifiers and credentials are
+never committed. Every project must have these Script Properties before serving
+the dashboard or running the bot: `ENVIRONMENT` (`STAGE` or `PRODUCTION`),
+`SCRIPT_ID`, `SPREADSHEET_ID`, and `DEPLOYMENT_ID`. Stage must also set the three
+`PRODUCTION_*` guard properties to prevent accidental cross-targeting.
+
+Create the Stage project and Sheet separately, install only Stage Gmail triggers
+using a dedicated test mailbox/label, then set its properties from that project.
+Run `clasp run resetStageData` only against Stage. It creates or verifies
+`Transactions`, `Deleted`, and `META`, clears rows while preserving the
+load-bearing `Deleted` tab and headers, and writes deterministic synthetic data.
+The dashboard header and bot logs identify the selected environment.
+
+For CI, dispatch `.github/workflows/deploy-dashboard.yml` with
+`environment=stage`; configure `STAGE_CLASPRC_JSON`, `STAGE_SCRIPT_ID`, and
+`STAGE_DEPLOYMENT_ID` separately from the Production secrets. Stage deployment
+is rejected when its script or deployment ID equals the pinned Production target.
+Production continues to deploy from pushes to `main` using its existing pinned
+deployment. Before promotion, compare non-secret project/deployment IDs and
+Production sentinel rows before and after Stage testing.
 Script Properties persist across triggers; you set them once unless you change targets.
 
 ### Deploy / update
@@ -59,4 +90,3 @@ In the Apps Script UI, add a time-based trigger (e.g., hourly) for `appendLast7D
 ### Notes
 - Keep `.env` out of version control (already ignored).
 - Logs are in English; data values remain as-is (Chinese headers) to match the sheet schema.
-

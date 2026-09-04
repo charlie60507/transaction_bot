@@ -1,13 +1,15 @@
 // =================== ⚙️ 設定區域 ===================
 
+const ENV_CONFIG = loadEnvironmentConfig_();
 const CFG = {
-  SPREADSHEET_ID: '1PZfUiqaMeUHHSBi8zqEPnEgBfFXqTxKwhnQUltCb8VU',
-  DATA_SHEET: 'Transactions',
+  SPREADSHEET_ID: ENV_CONFIG.spreadsheetId,
+  DATA_SHEET: ENV_CONFIG.sheetName,
   // Load-bearing, not an archive: the bot treats these rows as already-seen so a
   // deleted auto-record does not come back on the next 7-day scan. Deleting the
   // tab resurrects anything still inside that window.
-  DELETED_SHEET: 'Deleted',
-  TZ: 'Asia/Taipei',
+  DELETED_SHEET: ENV_CONFIG.deletedSheetName,
+  TZ: ENV_CONFIG.tz,
+  ENVIRONMENT: ENV_CONFIG.environment,
 
   // Transactions column indices (0-based)
   IDX_POSTED: 0,           // A: 已記帳 (checkbox)
@@ -45,6 +47,7 @@ function doGet(e) {
   const t = HtmlService.createTemplateFromFile('ToolPanel');
   t.now = nowYMD_();
   t.sheetUrl = getSpreadsheet_().getUrl();
+  t.environmentName = ENV_CONFIG.environment;
   return t.evaluate()
     .setTitle('交易工具')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
@@ -427,6 +430,98 @@ function sheetHasBaseKey_(sh, key) {
  *  "can't open this file"). This is the deployment the user actually uses. */
 function getWebAppUrl() {
   return 'https://script.google.com/macros/s/AKfycbyvVvKPI45Y5zooV9VbzYSN_54EWqQTqjsE6bJPTgBpfvcdJZ13YIynh3rBKdRM3bKaag/exec';
+}
+
+/**
+ * Resolve the complete runtime boundary from Script Properties. Each Apps Script
+ * project has its own copy of these properties; the script id check prevents a
+ * copied configuration from silently targeting the other project.
+ */
+function loadEnvironmentConfig_() {
+  const props = PropertiesService.getScriptProperties().getProperties();
+  return resolveEnvironmentConfig_(props, ScriptApp.getScriptId());
+}
+
+function resolveEnvironmentConfig_(props, actualScriptId) {
+  props = props || {};
+  const environment = String(props.ENVIRONMENT || '').trim().toUpperCase();
+  const spreadsheetId = String(props.SPREADSHEET_ID || '').trim();
+  const scriptId = String(props.SCRIPT_ID || '').trim();
+  const deploymentId = String(props.DEPLOYMENT_ID || '').trim();
+  if (!environment || ['STAGE', 'PRODUCTION'].indexOf(environment) === -1) {
+    throw new Error('Missing or invalid required config: ENVIRONMENT (STAGE or PRODUCTION)');
+  }
+  if (!spreadsheetId || !scriptId || !deploymentId) {
+    throw new Error('Missing required environment config: SCRIPT_ID, SPREADSHEET_ID, DEPLOYMENT_ID');
+  }
+  if (actualScriptId && scriptId !== String(actualScriptId)) {
+    throw new Error('Environment SCRIPT_ID does not match this Apps Script project');
+  }
+  if (environment === 'STAGE') {
+    if (props.PRODUCTION_SCRIPT_ID && scriptId === String(props.PRODUCTION_SCRIPT_ID).trim()) {
+      throw new Error('Stage SCRIPT_ID must not be the Production Apps Script project');
+    }
+    if (props.PRODUCTION_SPREADSHEET_ID && spreadsheetId === String(props.PRODUCTION_SPREADSHEET_ID).trim()) {
+      throw new Error('Stage SPREADSHEET_ID must not be the Production spreadsheet');
+    }
+    if (props.PRODUCTION_DEPLOYMENT_ID && deploymentId === String(props.PRODUCTION_DEPLOYMENT_ID).trim()) {
+      throw new Error('Stage DEPLOYMENT_ID must not be the Production deployment');
+    }
+  }
+  return {
+    environment,
+    spreadsheetId,
+    scriptId,
+    deploymentId,
+    tz: String(props.TZ || 'Asia/Taipei'),
+    sheetName: String(props.SHEET_NAME || 'Transactions'),
+    deletedSheetName: String(props.DELETED_SHEET || 'Deleted')
+  };
+}
+
+/** Safe, synthetic-only reset for the isolated Stage project. */
+function resetStageData() {
+  if (ENV_CONFIG.environment !== 'STAGE') throw new Error('resetStageData is available only in STAGE');
+  const ss = getSpreadsheet_();
+  const data = getOrCreateStageSheet_(ss, CFG.DATA_SHEET, [
+    '已記帳', '銀行', '授權日期時間', '卡末四碼', '金額_NTD',
+    '交易內容/商店', '類別', 'Gmail連結', 'MessageId', '收支別', '種類(手動)'
+  ]);
+  const deleted = getOrCreateStageSheet_(ss, CFG.DELETED_SHEET, data.getRange(1, 1, 1, data.getLastColumn()).getValues()[0]);
+  clearStageRows_(data);
+  clearStageRows_(deleted);
+  const meta = getOrCreateStageSheet_(ss, 'META', ['Key', 'Value']);
+  clearStageRows_(meta);
+  meta.getRange(2, 1, 2, 2).setValues([
+    ['ENVIRONMENT', 'STAGE'],
+    ['SEEDED_BY', 'resetStageData']
+  ]);
+  data.getRange(2, 1, 1, 11).setValues([[
+    false, 'TEST', new Date(2026, 0, 15, 12, 0, 0), '0000', 100,
+    'Synthetic Stage fixture', '測試', '', 'stage-fixture-001', '支出', '測試'
+  ]]);
+  return getEnvironmentInfo();
+}
+
+function getOrCreateStageSheet_(ss, name, header) {
+  let sh = ss.getSheetByName(name);
+  if (!sh) sh = ss.insertSheet(name);
+  if (sh.getLastRow() === 0) sh.getRange(1, 1, 1, header.length).setValues([header]);
+  return sh;
+}
+
+function clearStageRows_(sh) {
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, sh.getMaxColumns()).clearContent();
+}
+
+function getEnvironmentInfo() {
+  return {
+    environment: ENV_CONFIG.environment,
+    spreadsheetId: ENV_CONFIG.spreadsheetId,
+    spreadsheetUrl: getSpreadsheet_().getUrl(),
+    scriptId: ENV_CONFIG.scriptId,
+    deploymentId: ENV_CONFIG.deploymentId
+  };
 }
 
 /** Menu action: dialog with a clickable link that opens the Web App in a new tab */

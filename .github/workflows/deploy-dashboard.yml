@@ -15,6 +15,10 @@ on:
       - '.github/workflows/deploy-dashboard.yml'
   workflow_dispatch:
     inputs:
+      environment:
+        description: Deployment target (production or stage)
+        required: true
+        default: production
       description:
         description: Deployment description (defaults to the commit subject)
         required: false
@@ -48,15 +52,23 @@ jobs:
       - name: Restore clasp credentials
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          STAGE_CLASPRC_JSON: ${{ secrets.STAGE_CLASPRC_JSON }}
         run: |
           set -euo pipefail
-          if [ -z "${CLASPRC_JSON}" ]; then
-            echo "::error::CLASPRC_JSON secret is empty — set it with:  gh secret set CLASPRC_JSON < ~/.clasprc.json"
+          TARGET_ENV="${{ github.event.inputs.environment || 'production' }}"
+          case "${TARGET_ENV}" in production|stage) ;; *) echo "::error::environment must be production or stage"; exit 1 ;; esac
+          if [ "${TARGET_ENV}" = stage ]; then
+            CREDENTIALS="${STAGE_CLASPRC_JSON}"
+          else
+            CREDENTIALS="${CLASPRC_JSON}"
+          fi
+          if [ -z "${CREDENTIALS}" ]; then
+            echo "::error::credentials for ${TARGET_ENV} are not configured"
             exit 1
           fi
           # Written via env, never echoed: this is a Google OAuth refresh token
           # and the repo is public, so it must never reach the build log.
-          printf '%s' "${CLASPRC_JSON}" > "${HOME}/.clasprc.json"
+          printf '%s' "${CREDENTIALS}" > "${HOME}/.clasprc.json"
           chmod 600 "${HOME}/.clasprc.json"
           node -e 'const t=require(process.env.HOME+"/.clasprc.json").tokens?.default;
                    if(!t||!t.refresh_token) throw new Error("clasprc.json has no tokens.default.refresh_token — is it clasp 3.x format?");
@@ -70,10 +82,27 @@ jobs:
           # several deployments and an unpinned `clasp deploy` would create a
           # NEW one, leaving the URL actually in use untouched.
           DEPLOYMENT_ID: AKfycbyvVvKPI45Y5zooV9VbzYSN_54EWqQTqjsE6bJPTgBpfvcdJZ13YIynh3rBKdRM3bKaag
+          PRODUCTION_SCRIPT_ID: 1P4l2DY_XwHjRBSeja7MOkSFCrvZXufo2AzKrfd8ex9Srg3uHKg1VK5R7
+          PRODUCTION_DEPLOYMENT_ID: AKfycbyvVvKPI45Y5zooV9VbzYSN_54EWqQTqjsE6bJPTgBpfvcdJZ13YIynh3rBKdRM3bKaag
+          TARGET_ENV: ${{ github.event.inputs.environment || 'production' }}
+          STAGE_SCRIPT_ID: ${{ secrets.STAGE_SCRIPT_ID }}
+          STAGE_DEPLOYMENT_ID: ${{ secrets.STAGE_DEPLOYMENT_ID }}
           INPUT_DESC: ${{ inputs.description }}
           COMMIT_SUBJECT: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
+          if [ "${TARGET_ENV}" = stage ]; then
+            if [ -z "${STAGE_SCRIPT_ID}" ] || [ -z "${STAGE_DEPLOYMENT_ID}" ]; then
+              echo "::error::Stage script/deployment target is not configured"
+              exit 1
+            fi
+            if [ "${STAGE_SCRIPT_ID}" = "${PRODUCTION_SCRIPT_ID}" ] || [ "${STAGE_DEPLOYMENT_ID}" = "${PRODUCTION_DEPLOYMENT_ID}" ]; then
+              echo "::error::Stage target matches the pinned Production target"
+              exit 1
+            fi
+            node -e 'const fs=require("fs"); const c=JSON.parse(fs.readFileSync(".clasp.json","utf8")); c.scriptId=process.env.STAGE_SCRIPT_ID; fs.writeFileSync(".clasp.json", JSON.stringify(c, null, 2)+"\n");'
+            DEPLOYMENT_ID="${STAGE_DEPLOYMENT_ID}"
+          fi
           DESC="${INPUT_DESC:-}"
           if [ -z "${DESC}" ]; then DESC="$(printf '%s' "${COMMIT_SUBJECT}" | head -n 1)"; fi
           if [ -z "${DESC}" ]; then DESC="manual dispatch"; fi

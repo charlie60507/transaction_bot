@@ -40,6 +40,7 @@ const RX = {
 
 /** ===== Entry: append last 7 days for both banks; Cathay-style logs ===== */
 function appendLast7DaysToSheet() {
+  console.log('Starting transaction import for environment ' + CONFIG.environment);
   const lock = LockService.getScriptLock();
   try {
     lock.tryLock(20 * 1000);
@@ -724,9 +725,14 @@ function backfillExpenseForCreditCards_() {
 
 /** Helper: set script properties from clasp run */
 function setScriptProperties(obj) {
+  if (!obj || typeof obj !== 'object') throw new Error('Configuration must be an object');
   const props = PropertiesService.getScriptProperties();
+  const next = Object.assign({}, props.getProperties(), obj);
+  // Validate the complete candidate before mutating project state. This makes a
+  // typo or a Production id in a Stage setup fail closed.
+  resolveEnvironmentConfig_(next, ScriptApp.getScriptId());
   props.setProperties(obj);
-  Logger.log('Set properties: ' + Object.keys(obj).join(', '));
+  Logger.log('Set properties for environment ' + next.ENVIRONMENT + ': ' + Object.keys(obj).join(', '));
 }
 
 /* =========================
@@ -735,14 +741,14 @@ function setScriptProperties(obj) {
 
 function loadConfig_() {
   const props = PropertiesService.getScriptProperties();
-  const spreadsheetId = props.getProperty('SPREADSHEET_ID');
-  if (!spreadsheetId) {
-    throw new Error('Missing required config: SPREADSHEET_ID');
-  }
+  const env = loadEnvironmentConfig_();
   return {
-    tz: props.getProperty('TZ') || 'Asia/Taipei',
-    spreadsheetId,
-    sheetName: props.getProperty('SHEET_NAME') || 'Transactions',
+    environment: env.environment,
+    scriptId: env.scriptId,
+    deploymentId: env.deploymentId,
+    tz: env.tz,
+    spreadsheetId: env.spreadsheetId,
+    sheetName: env.sheetName,
     header: parseHeader_(props.getProperty('HEADER')),
     gmailConfig: {
       FUBON_QUERY_SUBJECT: props.getProperty('FUBON_QUERY_SUBJECT') || '(subject:"即時消費通知" OR subject:"富邦信用卡消費通知" OR subject:"富邦信用卡即時消費通知")',

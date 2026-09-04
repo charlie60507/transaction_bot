@@ -28,6 +28,8 @@
   .head-top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp3); margin-bottom: var(--sp3); }
   .title-row { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
   .title { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+  .env-badge { display: inline-flex; align-items: center; border: 1px solid var(--accent); border-radius: var(--r-pill);
+    color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .08em; padding: 2px 7px; }
   .sheet-link { color: var(--text-muted); display: inline-flex; align-items: center; flex-shrink: 0;
     line-height: 0; text-decoration: none; }
   .sheet-link:hover { color: var(--accent); }
@@ -341,6 +343,7 @@
   var REST_COLOR = '#5a6070';
   var NOW = { year: +('<?= now.year ?>'), month: +('<?= now.month ?>'), day: +('<?= now.day ?>') };
   var SHEET_URL = '<?= sheetUrl ?>';
+  var ENVIRONMENT = '<?= environmentName ?>';
   function daysInMonth(y,m){ return new Date(y,m,0).getDate(); }
 
   var PROJ_COLOR = { '重機':'#5f9aa0','房子':'#6f88a8','汽車':'#9a8bb0','旅遊':'#b39a68','進修':'#6d8f9e' };
@@ -900,6 +903,9 @@
       +'<path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>'
       +'</svg></a>';
   }
+  function environmentBadge(){
+    return '<span class="env-badge" title="Runtime environment">'+esc(ENVIRONMENT)+'</span>';
+  }
   function editRow(t){
     var tc=typeColor(t.type);
     return '<div class="erow'+(t.posted?' done':'')+'" data-erow="'+esc(t.id)+'">'
@@ -1142,7 +1148,7 @@
                   : esc(periodLabel(r));
     function tb(id,tt,sub){ return '<button data-tab="'+id+'" class="'+(tab===id?'active':'')+'"><span class="tt">'+tt+'</span><span class="tsub">'+sub+'</span></button>'; }
     var inboxSub = nPend ? '<span class="cnt">'+nPend+'</span>筆待處理' : '已全部記帳';
-    var h='<div class="head"><div class="head-top"><span class="title-row"><span class="title">交易 Dashboard</span>'+sheetLink()+'</span><span style="display:flex;align-items:center;gap:var(--sp3);flex-shrink:0"><span class="period">'+periodTxt+'</span><button class="addbtn" data-add>＋ 新增</button></span></div>'
+    var h='<div class="head"><div class="head-top"><span class="title-row"><span class="title">交易 Dashboard</span>'+sheetLink()+environmentBadge()+'</span><span style="display:flex;align-items:center;gap:var(--sp3);flex-shrink:0"><span class="period">'+periodTxt+'</span><button class="addbtn" data-add>＋ 新增</button></span></div>'
       +'<div class="tabs">'+tb('analysis','分析','這段期間花在哪、哪天花的?')+tb('trend','趨勢','幾個月下來的變化?')+tb('project','項目 (TAG)','某個目標累計花了多少?')+tb('inbox','待記帳',inboxSub)+'</div>';
     if(isInbox){
       h+='<div class="controls"><span class="clabel">範圍</span><button class="ctl'+(state.inboxScope==='all'?' active':'')+'" data-iscope="all">全部</button><button class="ctl'+(state.inboxScope==='year'?' active':'')+'" data-iscope="year">本年</button>'
