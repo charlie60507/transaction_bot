@@ -198,6 +198,7 @@ function getAllTxns() {
  *   type   -> J (收支別; must be 支出/收入/轉帳)
  *   tag    -> TAG column (by header)
  *   mine   -> 我的消費 column (by header); '' or null clears it (⇒ whole charge is mine)
+ *   amount -> displayed amount: 我的消費 for split rows, 金額 for non-split rows
  *   posted -> A (已記帳 checkbox; boolean)
  * Returns { ok:true }; throws a clear error the frontend surfaces.
  */
@@ -235,7 +236,14 @@ function updateTxn(messageId, patch) {
     sh.getRange(rowNum, tagIdx + 1).setValue(String(patch.tag || ''));
   }
   if ('amount' in patch) {
-    sh.getRange(rowNum, CFG.IDX_AMOUNT + 1).setValue(Number(patch.amount));
+    // The dashboard's displayed amount is `我的消費` for split rows and `金額` for
+    // ordinary rows. Keep the charged amount untouched when correcting only a split
+    // row's displayed consumption.
+    const mineIdx = getMineColIndex_(sh);
+    const currentMine = mineIdx === -1 ? '' : sh.getRange(rowNum, mineIdx + 1).getValue();
+    const amountIdx = mineIdx !== -1 && currentMine !== '' && currentMine !== null && currentMine !== undefined
+      ? mineIdx : CFG.IDX_AMOUNT;
+    sh.getRange(rowNum, amountIdx + 1).setValue(Number(patch.amount));
   }
   if ('mine' in patch) {
     const mineIdx = ensureMineColIndex_(sh);

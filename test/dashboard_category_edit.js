@@ -19,6 +19,11 @@ function run() {
   assert.ok(/getAllTxns\(\)/.test(src), 'successful edits refresh authoritative transactions');
   assert.ok(/row-card \.drill[\s\S]*?stopPropagation/.test(src), 'editor controls cannot toggle the category card');
 
+  const server = fs.readFileSync(require('path').resolve(__dirname, '..', 'sidebar', '程式碼.js'), 'utf8');
+  assert.ok(/amountIdx[\s\S]*?currentMine[\s\S]*?CFG\.IDX_AMOUNT/.test(server), 'amount write distinguishes split rows from charged-only rows');
+  assert.ok(/currentMine !== '' && currentMine !== null && currentMine !== undefined/.test(server), 'blank 我的消費 keeps non-split charged amount semantics');
+  assert.ok(/setValue\(Number\(patch\.amount\)\)/.test(server), 'amount correction persists a validated number');
+
   const fns = loadFns(['esc', 'fmt', 'isSplitTxn', 'chargedOf', 'splitMark', 'typeColor', 'delBtn', 'mailLink', 'editRow'], {
     openSplit: null,
     splitBox: function () { return ''; },
