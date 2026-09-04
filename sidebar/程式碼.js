@@ -198,6 +198,7 @@ function getAllTxns() {
  *   type   -> J (收支別; must be 支出/收入/轉帳)
  *   tag    -> TAG column (by header)
  *   mine   -> 我的消費 column (by header); '' or null clears it (⇒ whole charge is mine)
+ *   amount -> displayed amount: 我的消費 for split rows, 金額 for non-split rows
  *   posted -> A (已記帳 checkbox; boolean)
  * Returns { ok:true }; throws a clear error the frontend surfaces.
  */
@@ -212,6 +213,15 @@ function updateTxn(messageId, patch) {
 
   const rowNum = findRowByKey_(sh, messageId);
   if (rowNum === -1) throw new Error('找不到該筆交易 (key=' + messageId + ')');
+
+  if ('amount' in patch) {
+    const amount = Number(patch.amount);
+    if (!isFinite(amount) || amount <= 0) throw new Error('金額需大於 0');
+    // Amount correction is intentionally scoped to expense rows. Income and transfer
+    // rows retain their existing editor contract and must not gain a charged-amount write.
+    const rowType = String(sh.getRange(rowNum, CFG.IDX_INOUT + 1).getValue() || '支出');
+    if (rowType !== '支出') throw new Error('只有支出交易可以修正金額');
+  }
 
   if ('merchant' in patch) {
     sh.getRange(rowNum, CFG.IDX_MERCHANT + 1).setValue(String(patch.merchant || ''));
@@ -228,6 +238,16 @@ function updateTxn(messageId, patch) {
     const tagIdx = getTagColIndex_(sh);
     if (tagIdx === -1) throw new Error('找不到 TAG 欄');
     sh.getRange(rowNum, tagIdx + 1).setValue(String(patch.tag || ''));
+  }
+  if ('amount' in patch) {
+    // The dashboard's displayed amount is `我的消費` for split rows and `金額` for
+    // ordinary rows. Keep the charged amount untouched when correcting only a split
+    // row's displayed consumption.
+    const mineIdx = getMineColIndex_(sh);
+    const currentMine = mineIdx === -1 ? '' : sh.getRange(rowNum, mineIdx + 1).getValue();
+    const amountIdx = mineIdx !== -1 && currentMine !== '' && currentMine !== null && currentMine !== undefined
+      ? mineIdx : CFG.IDX_AMOUNT;
+    sh.getRange(rowNum, amountIdx + 1).setValue(Number(patch.amount));
   }
   if ('mine' in patch) {
     const mineIdx = ensureMineColIndex_(sh);
