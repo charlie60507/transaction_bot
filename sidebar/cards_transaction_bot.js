@@ -1,11 +1,13 @@
 /** ===== Shared config (loaded from Script Properties to avoid hardcoding secrets) ===== */
-const CONFIG = loadConfig_();
-const SORT_ORDER = CONFIG.sortOrder; // 'ASC' | 'DESC' | 'NONE'
-const TZ = CONFIG.tz;
-const SPREADSHEET_ID = CONFIG.spreadsheetId;
-const SHEET_NAME = CONFIG.sheetName;
-const HEADER = CONFIG.header;
-const GMAIL_CFG = CONFIG.gmailConfig;
+// Keep setup callable before the project's Script Properties exist. Runtime
+// entry points call ensureBotConfig_() before using the deferred values.
+let CONFIG = loadConfig_(true);
+let SORT_ORDER = CONFIG.sortOrder; // 'ASC' | 'DESC' | 'NONE'
+let TZ = CONFIG.tz;
+let SPREADSHEET_ID = CONFIG.spreadsheetId;
+let SHEET_NAME = CONFIG.sheetName;
+let HEADER = CONFIG.header;
+let GMAIL_CFG = CONFIG.gmailConfig;
 
 /* ========== Fubon email regex helpers (more tolerant) ========== */
 const RX = {
@@ -40,6 +42,7 @@ const RX = {
 
 /** ===== Entry: append last 7 days for both banks; Cathay-style logs ===== */
 function appendLast7DaysToSheet() {
+  ensureBotConfig_();
   console.log('Starting transaction import for environment ' + CONFIG.environment);
   const lock = LockService.getScriptLock();
   try {
@@ -696,6 +699,7 @@ function makeLooseDedupKeyFromRow_(row) {
  * Optional: one-time backfill empty column J for credit cards with "支出"
  * ------------------------- */
 function backfillExpenseForCreditCards_() {
+  ensureBotConfig_();
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const sh = ss.getSheetByName(SHEET_NAME);
   if (!sh) return;
@@ -739,9 +743,18 @@ function setScriptProperties(obj) {
  *       Config utilities
  * ========================= */
 
-function loadConfig_() {
+function loadConfig_(allowUnconfigured) {
   const props = PropertiesService.getScriptProperties();
-  const env = loadEnvironmentConfig_();
+  let env;
+  try {
+    env = loadEnvironmentConfig_();
+  } catch (err) {
+    if (!allowUnconfigured) throw err;
+    env = {
+      environment: 'UNCONFIGURED', scriptId: '', deploymentId: '',
+      tz: 'Asia/Taipei', spreadsheetId: '', sheetName: 'Transactions'
+    };
+  }
   return {
     environment: env.environment,
     scriptId: env.scriptId,
@@ -761,6 +774,20 @@ function loadConfig_() {
     sortOrder: props.getProperty('SORT_ORDER') || 'ASC',
     geminiApiKey: props.getProperty('GEMINI_API_KEY') || ''
   };
+}
+
+function ensureBotConfig_() {
+  const next = loadConfig_();
+  CONFIG = next;
+  // These are intentionally mutable so a direct clasp invocation after setup
+  // uses the validated project properties for the whole runtime.
+  SORT_ORDER = next.sortOrder;
+  TZ = next.tz;
+  SPREADSHEET_ID = next.spreadsheetId;
+  SHEET_NAME = next.sheetName;
+  HEADER = next.header;
+  GMAIL_CFG = next.gmailConfig;
+  return next;
 }
 
 function parseHeader_(headerValue) {
@@ -1041,6 +1068,7 @@ function autoCategorizeRows_(ss, sh, startRow, numRows) {
 
 /** One-time bootstrap: build category rules from existing manually-categorized transactions */
 function bootstrapCategoryRules() {
+  ensureBotConfig_();
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const sh = ss.getSheetByName(SHEET_NAME);
   if (!sh || sh.getLastRow() <= 1) {
@@ -1107,6 +1135,7 @@ function bootstrapCategoryRules() {
  *  New layout: A 交易關鍵字 | B 種類 (rules) | C spacer | D 種類清單 | E TAG清單 (vocab).
  *  Rebuilds the dropdowns and deletes the old `category` sheet. Run once from the editor. */
 function migrateMetaCategoryToMerged() {
+  ensureBotConfig_();
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const meta = ss.getSheetByName('META');
   if (!meta) { Logger.log('ABORT: META sheet not found.'); return; }

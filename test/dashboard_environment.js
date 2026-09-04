@@ -37,10 +37,17 @@ function run() {
   assert.ok(script.includes('sheetLink()+environmentBadge()'));
 
   const server = fs.readFileSync(path.resolve(__dirname, '..', 'sidebar', '程式碼.js'), 'utf8');
-  assert.ok(server.includes('const ENV_CONFIG = loadEnvironmentConfig_();'));
-  assert.ok(server.includes('SpreadsheetApp.openById(CFG.SPREADSHEET_ID)'));
+  assert.ok(server.includes('const ENV_CONFIG = loadEnvironmentConfig_(true);'));
+  assert.ok(server.includes('function requireEnvironmentConfig_()'));
+  assert.ok(server.includes("SpreadsheetApp.openById(requireEnvironmentConfig_().spreadsheetId)"));
+  assert.ok(server.includes("return 'https://script.google.com/macros/s/' + encodeURIComponent(config.deploymentId) + '/exec';"));
   assert.ok(server.includes("if (ENV_CONFIG.environment !== 'STAGE')"));
   assert.ok(server.includes('function getEnvironmentInfo()'));
+
+  const bot = fs.readFileSync(path.resolve(__dirname, '..', 'sidebar', 'cards_transaction_bot.js'), 'utf8');
+  assert.ok(bot.includes('let CONFIG = loadConfig_(true);'));
+  assert.ok(bot.includes('function ensureBotConfig_()'));
+  assert.ok(bot.includes('function setScriptProperties(obj)'));
 }
 
 if (require.main === module) {

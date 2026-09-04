@@ -1,6 +1,10 @@
 // =================== ⚙️ 設定區域 ===================
 
-const ENV_CONFIG = loadEnvironmentConfig_();
+// Keep the project loadable before Script Properties are configured. Setup uses
+// setScriptProperties(), which must be callable in a fresh Apps Script project.
+// User-facing and mutating entry points call requireEnvironmentConfig_() before
+// using these values.
+const ENV_CONFIG = loadEnvironmentConfig_(true);
 const CFG = {
   SPREADSHEET_ID: ENV_CONFIG.spreadsheetId,
   DATA_SHEET: ENV_CONFIG.sheetName,
@@ -44,6 +48,7 @@ function onOpen() {
 
 /** Web App entry: serve the dashboard page (injects real NOW in sheet TZ + sheet URL). */
 function doGet(e) {
+  requireEnvironmentConfig_();
   const t = HtmlService.createTemplateFromFile('ToolPanel');
   t.now = nowYMD_();
   t.sheetUrl = getSpreadsheet_().getUrl();
@@ -423,13 +428,10 @@ function sheetHasBaseKey_(sh, key) {
   return false;
 }
 
-/** Web App URL of the user's live deployment.
- *  Hardcoded on purpose: ScriptApp.getService().getUrl() returns an
- *  unpredictable/stale deployment URL when the project has multiple
- *  deployments, which makes the menu open an invalid link (Drive's
- *  "can't open this file"). This is the deployment the user actually uses. */
+/** Web App URL for this project's configured deployment. */
 function getWebAppUrl() {
-  return 'https://script.google.com/macros/s/AKfycbyvVvKPI45Y5zooV9VbzYSN_54EWqQTqjsE6bJPTgBpfvcdJZ13YIynh3rBKdRM3bKaag/exec';
+  const config = requireEnvironmentConfig_();
+  return 'https://script.google.com/macros/s/' + encodeURIComponent(config.deploymentId) + '/exec';
 }
 
 /**
@@ -437,7 +439,25 @@ function getWebAppUrl() {
  * project has its own copy of these properties; the script id check prevents a
  * copied configuration from silently targeting the other project.
  */
-function loadEnvironmentConfig_() {
+function loadEnvironmentConfig_(allowUnconfigured) {
+  const props = PropertiesService.getScriptProperties().getProperties();
+  try {
+    return resolveEnvironmentConfig_(props, ScriptApp.getScriptId());
+  } catch (err) {
+    if (!allowUnconfigured) throw err;
+    return {
+      environment: 'UNCONFIGURED',
+      spreadsheetId: '',
+      scriptId: '',
+      deploymentId: '',
+      tz: 'Asia/Taipei',
+      sheetName: 'Transactions',
+      deletedSheetName: 'Deleted'
+    };
+  }
+}
+
+function requireEnvironmentConfig_() {
   const props = PropertiesService.getScriptProperties().getProperties();
   return resolveEnvironmentConfig_(props, ScriptApp.getScriptId());
 }
@@ -515,12 +535,13 @@ function clearStageRows_(sh) {
 }
 
 function getEnvironmentInfo() {
+  const config = requireEnvironmentConfig_();
   return {
-    environment: ENV_CONFIG.environment,
-    spreadsheetId: ENV_CONFIG.spreadsheetId,
+    environment: config.environment,
+    spreadsheetId: config.spreadsheetId,
     spreadsheetUrl: getSpreadsheet_().getUrl(),
-    scriptId: ENV_CONFIG.scriptId,
-    deploymentId: ENV_CONFIG.deploymentId
+    scriptId: config.scriptId,
+    deploymentId: config.deploymentId
   };
 }
 
@@ -552,7 +573,7 @@ function showPanelLauncher() {
 
 /** The target spreadsheet (Web App has no active spreadsheet → open by id). */
 function getSpreadsheet_() {
-  return SpreadsheetApp.openById(CFG.SPREADSHEET_ID);
+  return SpreadsheetApp.openById(requireEnvironmentConfig_().spreadsheetId);
 }
 
 /**
