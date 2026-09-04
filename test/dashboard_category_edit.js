@@ -34,6 +34,11 @@ function run() {
   assert.ok(html.indexOf('data-ef="amount"') >= 0, 'row exposes amount correction');
   assert.ok(html.indexOf('value="120"') >= 0, 'amount editor carries current value');
   assert.ok(html.indexOf('data-amt="msg|date|120|1234|0"') >= 0, 'split affordance retains stable row identity');
+
+  const incomeHtml = fns.editRow(sample({ type: '收入' }));
+  assert.strictEqual(incomeHtml.indexOf('data-ef="amount"'), -1, 'income rows do not expose expense amount correction');
+  assert.ok(/t\.type==='支出'\?'<input class="amtcor/.test(src), 'amount correction is guarded by expense type');
+  assert.ok(/rowType[\s\S]*只有支出交易可以修正金額/.test(server), 'server rejects amount patches for non-expense rows');
 }
 
 if (require.main === module) {

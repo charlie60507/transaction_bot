@@ -217,6 +217,10 @@ function updateTxn(messageId, patch) {
   if ('amount' in patch) {
     const amount = Number(patch.amount);
     if (!isFinite(amount) || amount <= 0) throw new Error('金額需大於 0');
+    // Amount correction is intentionally scoped to expense rows. Income and transfer
+    // rows retain their existing editor contract and must not gain a charged-amount write.
+    const rowType = String(sh.getRange(rowNum, CFG.IDX_INOUT + 1).getValue() || '支出');
+    if (rowType !== '支出') throw new Error('只有支出交易可以修正金額');
   }
 
   if ('merchant' in patch) {
