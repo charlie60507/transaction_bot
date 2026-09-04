@@ -103,6 +103,10 @@ jobs:
             node -e 'const fs=require("fs"); const c=JSON.parse(fs.readFileSync(".clasp.json","utf8")); c.scriptId=process.env.STAGE_SCRIPT_ID; fs.writeFileSync(".clasp.json", JSON.stringify(c, null, 2)+"\n");'
             DEPLOYMENT_ID="${STAGE_DEPLOYMENT_ID}"
           fi
+          if ! clasp list-deployments | grep -F -- "${DEPLOYMENT_ID}" >/dev/null; then
+            echo "::error::deployment ${DEPLOYMENT_ID} is not registered in the selected Apps Script project"
+            exit 1
+          fi
           DESC="${INPUT_DESC:-}"
           if [ -z "${DESC}" ]; then DESC="$(printf '%s' "${COMMIT_SUBJECT}" | head -n 1)"; fi
           if [ -z "${DESC}" ]; then DESC="manual dispatch"; fi

@@ -17,7 +17,8 @@ function base(overrides) {
   return Object.assign({
     ENVIRONMENT: 'STAGE', SCRIPT_ID: 'stage-script', SPREADSHEET_ID: 'stage-sheet',
     DEPLOYMENT_ID: 'stage-deployment', PRODUCTION_SCRIPT_ID: 'prod-script',
-    PRODUCTION_SPREADSHEET_ID: 'prod-sheet', PRODUCTION_DEPLOYMENT_ID: 'prod-deployment'
+    PRODUCTION_SPREADSHEET_ID: 'prod-sheet', PRODUCTION_DEPLOYMENT_ID: 'prod-deployment',
+    DEPLOYMENT_SCRIPT_ID: 'stage-script'
   }, overrides || {});
 }
 
@@ -30,6 +31,7 @@ function run() {
   assert.throws(() => resolve(base({ SPREADSHEET_ID: 'prod-sheet' }), 'stage-script'), /Production spreadsheet/);
   assert.throws(() => resolve(base({ DEPLOYMENT_ID: 'prod-deployment' }), 'stage-script'), /Production deployment/);
   assert.throws(() => resolve(base({ PRODUCTION_DEPLOYMENT_ID: '' }), 'stage-script'), /Production fence/);
+  assert.throws(() => resolve(base({ DEPLOYMENT_SCRIPT_ID: 'other-script' }), 'stage-script'), /bound to SCRIPT_ID/);
 
   const html = fs.readFileSync(PANEL, 'utf8');
   const script = extractInlineScript(html);
@@ -43,6 +45,7 @@ function run() {
   assert.ok(server.includes("SpreadsheetApp.openById(requireEnvironmentConfig_().spreadsheetId)"));
   assert.ok(server.includes("return 'https://script.google.com/macros/s/' + encodeURIComponent(config.deploymentId) + '/exec';"));
   assert.ok(server.includes("if (ENV_CONFIG.environment !== 'STAGE')"));
+  assert.ok(server.includes("['交易關鍵字', '種類', '', '種類清單', 'TAG清單']"));
   assert.ok(server.includes('function getEnvironmentInfo()'));
 
   const bot = fs.readFileSync(path.resolve(__dirname, '..', 'sidebar', 'cards_transaction_bot.js'), 'utf8');

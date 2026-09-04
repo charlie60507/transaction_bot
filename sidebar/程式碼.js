@@ -478,10 +478,13 @@ function resolveEnvironmentConfig_(props, actualScriptId) {
     throw new Error('Environment SCRIPT_ID does not match this Apps Script project');
   }
   if (environment === 'STAGE') {
-    const missingProductionFences = ['PRODUCTION_SCRIPT_ID', 'PRODUCTION_SPREADSHEET_ID', 'PRODUCTION_DEPLOYMENT_ID']
+    const missingProductionFences = ['PRODUCTION_SCRIPT_ID', 'PRODUCTION_SPREADSHEET_ID', 'PRODUCTION_DEPLOYMENT_ID', 'DEPLOYMENT_SCRIPT_ID']
       .filter(function (key) { return !String(props[key] || '').trim(); });
     if (missingProductionFences.length > 0) {
       throw new Error('Stage requires Production fence properties: ' + missingProductionFences.join(', '));
+    }
+    if (String(props.DEPLOYMENT_SCRIPT_ID).trim() !== scriptId) {
+      throw new Error('Stage DEPLOYMENT_ID must be bound to SCRIPT_ID via DEPLOYMENT_SCRIPT_ID');
     }
     if (props.PRODUCTION_SCRIPT_ID && scriptId === String(props.PRODUCTION_SCRIPT_ID).trim()) {
       throw new Error('Stage SCRIPT_ID must not be the Production Apps Script project');
@@ -517,12 +520,9 @@ function resetStageData() {
   const deleted = getOrCreateStageSheet_(ss, CFG.DELETED_SHEET, transactionHeader);
   clearStageRows_(data);
   clearStageRows_(deleted);
-  const meta = getOrCreateStageSheet_(ss, 'META', ['Key', 'Value']);
+  const meta = getOrCreateStageSheet_(ss, 'META', ['交易關鍵字', '種類', '', '種類清單', 'TAG清單']);
   clearStageRows_(meta);
-  meta.getRange(2, 1, 2, 2).setValues([
-    ['ENVIRONMENT', 'STAGE'],
-    ['SEEDED_BY', 'resetStageData']
-  ]);
+  meta.getRange(2, 1, 1, 5).setValues([['', '', '', '測試', '測試']]);
   data.getRange(2, 1, 1, 11).setValues([[
     false, 'TEST', new Date(2026, 0, 15, 12, 0, 0), '0000', 100,
     'Synthetic Stage fixture', '測試', '', 'stage-fixture-001', '支出', '測試'

@@ -789,13 +789,24 @@ function validateGmailProperties_(props, environment) {
   if (missing.length > 0) {
     throw new Error('Stage requires dedicated Gmail properties: ' + missing.join(', '));
   }
-  const marker = String(props.GMAIL_STAGE_MARKER).trim().toLowerCase();
+  const marker = String(props.GMAIL_STAGE_MARKER).trim();
+  if (!/^STAGE-[A-Z0-9]{12,}$/.test(marker)) {
+    throw new Error('GMAIL_STAGE_MARKER must be a unique marker matching STAGE-[A-Z0-9]{12,}');
+  }
   const identifiers = ['FUBON_QUERY_SUBJECT', 'FUBON_TRANSFER_QUERY', 'CATHAY_LABEL', 'CATHAY_SUBJECT'];
+  const markerPattern = new RegExp('(?:^|[^A-Z0-9])' + marker.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&') + '(?:$|[^A-Z0-9])', 'i');
   const unmarked = identifiers.filter(function (key) {
-    return String(props[key]).toLowerCase().indexOf(marker) === -1;
+    return !markerPattern.test(String(props[key]));
   });
   if (unmarked.length > 0) {
     throw new Error('Stage Gmail queries and identifiers must contain GMAIL_STAGE_MARKER: ' + unmarked.join(', '));
+  }
+  const effectiveAccount = typeof Session !== 'undefined' && Session.getEffectiveUser
+    ? String(Session.getEffectiveUser().getEmail() || '').trim().toLowerCase()
+    : '';
+  const stageAccount = String(props.GMAIL_STAGE_ACCOUNT).trim().toLowerCase();
+  if (effectiveAccount && effectiveAccount !== stageAccount) {
+    throw new Error('GMAIL_STAGE_ACCOUNT does not match the executing Apps Script account');
   }
 }
 

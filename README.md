@@ -34,6 +34,7 @@ clasp run setScriptProperties --params '[{
   "PRODUCTION_SCRIPT_ID":"<PRODUCTION_APPS_SCRIPT_PROJECT_ID>",
   "PRODUCTION_SPREADSHEET_ID":"<PRODUCTION_SPREADSHEET_ID>",
   "PRODUCTION_DEPLOYMENT_ID":"<PRODUCTION_DEPLOYMENT_ID>",
+  "DEPLOYMENT_SCRIPT_ID":"<THIS_APPS_SCRIPT_PROJECT_ID>",
   "TZ":"Asia/Taipei",
   "SHEET_NAME":"Transactions",
   "HEADER":"[\"已記帳\",\"銀行\",\"授權日期時間\",\"卡末四碼\",\"金額_NTD\",\"交易內容/商店\",\"類別\",\"Gmail連結\",\"MessageId\"]",
@@ -55,11 +56,12 @@ the dashboard or running the bot: `ENVIRONMENT` (`STAGE` or `PRODUCTION`),
 
 Stage must additionally set `GMAIL_STAGE_ACCOUNT`, `GMAIL_STAGE_MARKER`,
 `FUBON_QUERY_SUBJECT`, `FUBON_TRANSFER_QUERY`, `CATHAY_LABEL`, and
-`CATHAY_SUBJECT`. The marker must be present in every Stage query, label, and
-subject; the runtime rejects missing or unmarked values instead of falling back
-to the Production Gmail defaults. `GMAIL_STAGE_ACCOUNT` documents the dedicated
-mailbox authorized by the Stage project; Gmail triggers must be installed only
-in that project and mailbox.
+`CATHAY_SUBJECT`. The marker must match `STAGE-<12+ uppercase letters or digits>`
+and appear as a bounded token in every Stage query, label, and subject; the
+runtime rejects missing or unmarked values instead of falling back to the
+Production Gmail defaults. `GMAIL_STAGE_ACCOUNT` documents the dedicated mailbox
+and the runtime verifies that it matches the executing Apps Script account; Gmail
+triggers must be installed only in that project and mailbox.
 
 Create the Stage project and Sheet separately, install only Stage Gmail triggers
 using a dedicated test mailbox/label, then set its properties from that project.
@@ -72,7 +74,10 @@ The dashboard header and bot logs identify the selected environment.
 For CI, dispatch `.github/workflows/deploy-dashboard.yml` with
 `environment=stage`; configure `STAGE_CLASPRC_JSON`, `STAGE_SCRIPT_ID`, and
 `STAGE_DEPLOYMENT_ID` separately from the Production secrets. Stage deployment
-is rejected when its script or deployment ID equals the pinned Production target.
+is rejected when its script or deployment ID equals the pinned Production target,
+and the selected deployment must be present in the selected clasp project's
+deployment inventory. Set `DEPLOYMENT_SCRIPT_ID` to the current project's script
+ID in every Stage property set.
 Production continues to deploy from pushes to `main` using its existing pinned
 deployment. Before promotion, compare non-secret project/deployment IDs and
 Production sentinel rows before and after Stage testing.
