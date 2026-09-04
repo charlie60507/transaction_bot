@@ -653,7 +653,7 @@
       +'<div class="rc-bar"><i style="width:'+(max>0?(it.total/max*100).toFixed(1):0)+'%;background:'+color+'"></i></div>'
       +'<div class="rc-meta num">'+it.count+' 筆 · 平均 $'+fmt(it.total/it.count)+' · 占 '+pct+'%'
       +(advCat>0?' · <span class="adv">代墊 $'+fmt(advCat)+' 未計入</span>':'')+'</div>';
-    var d='<div class="drill">'; list.forEach(function(t){ d+=txnRow(t,false); }); if(!list.length) d+='<div style="color:var(--text-muted);font-size:12px">無</div>'; d+='</div>';
+    var d='<div class="drill">'; list.forEach(function(t){ d+=editRow(t); }); if(!list.length) d+='<div style="color:var(--text-muted);font-size:12px">無</div>'; d+='</div>';
     return h+d+'</div>';
   }
 
@@ -725,6 +725,11 @@
   function applyEdit(id,field,value){
     var t=txnById(id); if(!t) return;
     var prev=t[field]; t[field]=value;
+    if(field==='amount'){
+      var amount=Number(value);
+      if(!isFinite(amount)||amount<=0){ t[field]=prev; render(); toast('金額需大於 0', true); return; }
+      t[field]=amount;
+    }
     // A title edit commits on blur, which on a touch device happens as part of the SAME tap
     // that is heading for another control. Re-rendering here would replace the DOM before
     // that tap lands, so 已記帳 pressed straight after typing was silently dropped. The input
@@ -740,7 +745,14 @@
     // 種類(手動). Clearing the category writes a blank cell, which is what 未分類 means.
     var patch={}; patch[field]=(field==='cat'&&value==='未分類')?'':value;
     google.script.run
-      .withSuccessHandler(function(){ if(field==='posted') toast(value?'已記帳 · 從清單移除':'已取回待記帳'); })
+      .withSuccessHandler(function(){
+        // Amount is part of the composite row key. Always adopt the authoritative feed after
+        // a write so category membership, aggregates, and the next edit use the post-save key.
+        google.script.run
+          .withSuccessHandler(function(data){ adoptTxns(data); render(); if(field==='posted') toast(value?'已記帳 · 從清單移除':'已取回待記帳'); })
+          .withFailureHandler(function(err){ t[field]=prev; render(); toast('重新整理失敗:'+((err&&err.message)||err), true); })
+          .getAllTxns();
+      })
       .withFailureHandler(function(err){ t[field]=prev; render(); toast('寫入失敗:'+((err&&err.message)||err), true); })
       .updateTxn(id, patch);
   }
@@ -898,7 +910,7 @@
       // a day that holds more than one. Rendered only when the row actually has a time, so the
       // pre-June rows look exactly as they do today. Shown to the minute: 富邦 gives seconds and
       // 國泰 does not, so seconds would advertise a precision most timed rows do not have.
-      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false">'+mailLink(t)+'<button type="button" class="amt amtbtn num" data-amt="'+esc(t.id)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button></div>'
+      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false">'+mailLink(t)+'<input class="amtcor num" type="number" min="0.01" step="0.01" data-ef="amount" data-id="'+esc(t.id)+'" value="'+esc(t.amount)+'" aria-label="金額">'+(t.type==='支出'?'<button type="button" class="amt amtbtn num" data-amt="'+esc(t.id)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button>':'')+'</div>'
       +(openSplit===t.id ? splitBox(t) : '')
       +'<div class="er2">'
         +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
@@ -1154,11 +1166,11 @@
     app.querySelectorAll('.ctl[data-scope]').forEach(function(b){ b.onclick=function(){ var s=this.getAttribute('data-scope'); state.scope=s; if(s==='year'){state.selYear=NOW.year;state.selMonth=0;} else if(s==='month'){state.selYear=NOW.year;state.selMonth=NOW.month;} openRow=null; openHeatDay=null; render(); }; });
     app.querySelectorAll('.cell[data-hday]').forEach(function(c){ c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); }; });
     app.querySelectorAll('[data-ef]').forEach(function(el){
-      el.onchange=function(){ applyEdit(this.getAttribute('data-id'), this.getAttribute('data-ef'), this.value.trim()); };
+      el.onchange=function(e){ e.stopPropagation(); applyEdit(this.getAttribute('data-id'), this.getAttribute('data-ef'), this.value.trim()); };
       if(el.tagName==='INPUT'){ el.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } }; }
     });
     app.querySelectorAll('[data-emer]').forEach(function(i){
-      i.onchange=function(){ applyEdit(this.getAttribute('data-emer'),'merchant',this.value.trim()); };
+      i.onchange=function(e){ e.stopPropagation(); applyEdit(this.getAttribute('data-emer'),'merchant',this.value.trim()); };
       i.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } };
     });
     app.querySelectorAll('[data-erec]').forEach(function(b){ b.onclick=function(){ var id=this.getAttribute('data-erec'); var t=txnById(id); if(t) applyEdit(id,'posted',!t.posted); }; });
@@ -1213,6 +1225,7 @@
       q.onkeydown=function(e){ if(e.key==='Escape'){ e.preventDefault(); state.q=''; render(); } };
     }
     app.querySelectorAll('.row-card').forEach(function(c){ c.onclick=function(e){ if(e.target.id==='q')return; var n=this.getAttribute('data-row'); openRow=(openRow===n)?null:n; render(); }; });
+    app.querySelectorAll('.row-card .drill').forEach(function(d){ d.onclick=function(e){ e.stopPropagation(); }; });
     app.querySelectorAll('.pcard').forEach(function(c){ c.onclick=function(){ var n=this.getAttribute('data-proj'); openProj=(openProj===n)?null:n; render(); }; });
   }
 

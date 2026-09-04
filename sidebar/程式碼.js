@@ -213,6 +213,11 @@ function updateTxn(messageId, patch) {
   const rowNum = findRowByKey_(sh, messageId);
   if (rowNum === -1) throw new Error('找不到該筆交易 (key=' + messageId + ')');
 
+  if ('amount' in patch) {
+    const amount = Number(patch.amount);
+    if (!isFinite(amount) || amount <= 0) throw new Error('金額需大於 0');
+  }
+
   if ('merchant' in patch) {
     sh.getRange(rowNum, CFG.IDX_MERCHANT + 1).setValue(String(patch.merchant || ''));
   }
@@ -228,6 +233,9 @@ function updateTxn(messageId, patch) {
     const tagIdx = getTagColIndex_(sh);
     if (tagIdx === -1) throw new Error('找不到 TAG 欄');
     sh.getRange(rowNum, tagIdx + 1).setValue(String(patch.tag || ''));
+  }
+  if ('amount' in patch) {
+    sh.getRange(rowNum, CFG.IDX_AMOUNT + 1).setValue(Number(patch.amount));
   }
   if ('mine' in patch) {
     const mineIdx = ensureMineColIndex_(sh);
