@@ -201,8 +201,16 @@ function getAllTxns() {
  *   amount -> displayed amount: 我的消費 for split rows, 金額 for non-split rows
  *   posted -> A (已記帳 checkbox; boolean)
  * Returns { ok:true }; throws a clear error the frontend surfaces.
+ *
+ * `wantTxns` is opt-in and OFF by default, so the call sites that ignore the return value
+ * (the split editor, the per-day bulk post) are byte-for-byte unaffected. When it is set the
+ * ack carries the authoritative list as `txns`, in the same shape `getAllTxns` returns, so an
+ * edit is one round trip instead of two — a write can no longer succeed and then be reverted
+ * by a failed refetch. `SpreadsheetApp.flush()` first, exactly as `deleteTxn` does: without it
+ * the read can return a snapshot taken before this call's own setValue landed, and the page
+ * would then correctly conclude "nothing changed" about a value the server disagrees with.
  */
-function updateTxn(messageId, patch) {
+function updateTxn(messageId, patch, wantTxns) {
   messageId = asTxnKey_(messageId);
   if (!messageId) throw new Error('缺少 MessageId');
   patch = patch || {};
@@ -264,6 +272,10 @@ function updateTxn(messageId, patch) {
   }
   if ('posted' in patch) {
     sh.getRange(rowNum, CFG.IDX_POSTED + 1).setValue(!!patch.posted);
+  }
+  if (wantTxns) {
+    SpreadsheetApp.flush();
+    return { ok: true, txns: getAllTxns() };
   }
   return { ok: true };
 }
