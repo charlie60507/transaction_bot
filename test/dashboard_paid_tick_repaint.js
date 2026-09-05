@@ -191,11 +191,15 @@ function run() {
     return i === 0 ? Object.assign({}, t, { id: t.id.replace('|0', '|1') }) : t;
   })), true, 'a renumbered occurrence reports a change');
 
-  // Nulls are not conflated with the empty string, or a cleared split would look unchanged.
+  // A split cleared to '' on the wire is a change against a row whose split was null. Note what
+  // this does NOT prove: adoptTxns coerces mine to a number, so '' reaches the signature as 0 and
+  // the two are told apart by that coercion, not by the signature's null handling. Every string
+  // field getAllTxns returns is String()-coerced server-side and `mine` is the only nullable one,
+  // so a signature that conflated null with '' would be indistinguishable here on purpose.
   const nulled = harness(base);
   assert.strictEqual(nulled.adoptTxns(serverCopy(base).map(function (t, i) {
     return i === 0 ? Object.assign({}, t, { mine: '' }) : t;
-  })), true, 'null and empty string are distinguishable in the signature');
+  })), true, 'a split cleared on the wire is adopted as a change');
 
   // ---- a successful tick repaints exactly once: the optimistic render at tap time ----
   const tick = harness(base);
@@ -458,6 +462,66 @@ function run() {
   assert.strictEqual(once.TXNS[0].id, base[0].id, 'the superseded read is not adopted');
   once.reads[1].success(editedList());
   assert.strictEqual(once.TXNS[0].id, EDITED_ID, 'and the page still converges on the post-edit key');
+
+  // ---- the recovered list reaches the SCREEN, and the debt it paid is CLEARED ----
+  // Two properties the rest of this fixture only ever observed through TXNS, which is not what
+  // the owner looks at. Adopting the refetch is half the recovery; repainting it is the other
+  // half — a page holding the corrected list behind a pre-refetch screen is the same 找不到該筆
+  // 交易 for the human, who has no refresh control to force the render. And the debt has to be
+  // cleared when the read GOES OUT, not only when a later response happens to carry a list:
+  // bulk rows carry none, so an uncleared debt turns every subsequent settle into another full
+  // read of the table — the per-row refetch bulkPost exists to avoid, arriving by the back door.
+  const paid = harness(bulkBase());
+  paid.applyEdit(base[0].id, 'amount', 999);                   // seq 1
+  paid.applySplit(base[1].id, '50');                           // seq 2 supersedes it
+  paid.calls[0].success({ ok: true, txns: preBulkList() });     // dropped and booked
+  paid.calls[1].success({ ok: true });                         // settles at zero → the debt's read
+  assert.strictEqual(paid.reads.length, 1, 'the drop is repaid with one read');
+  const beforeRecovery = paid.renders.n;
+  paid.reads[0].success(preBulkList());                        // current on arrival → adopted
+  assert.strictEqual(paid.TXNS[0].id, EDITED_ID, 'the recovered list is adopted');
+  assert.strictEqual(paid.renders.n, beforeRecovery + 1,
+    'and it is REPAINTED: a recovery that differs from the panel must reach the screen, not just TXNS');
+
+  // Read budget, stated as the property rather than as a number: a bulk post that follows a PAID
+  // debt pulls ZERO lists, however many rows it writes. Each extra row must cost one write and
+  // nothing else — the budget is flat in N, not one read per row.
+  const BULK_IDS = [base[1].id, third.id, EDITED_ID];   // every row the recovered list holds
+  const readsAfterDebt = paid.reads.length;
+  const writesBeforeBulk = paid.calls.length;
+  paid.bulkPost(BULK_IDS);
+  for (let i = 0; i < BULK_IDS.length; i++) {
+    const c = paid.calls[writesBeforeBulk + i];
+    assert.ok(c, 'bulk row ' + (i + 1) + ' is written');
+    assert.strictEqual(c.wantTxns, undefined, 'bulk row ' + (i + 1) + ' asks for no list');
+    c.success({ ok: true });                                   // settles, then issues the next row
+  }
+  assert.strictEqual(paid.calls.length, writesBeforeBulk + BULK_IDS.length,
+    'a bulk post is exactly one write per row');
+  assert.strictEqual(paid.reads.length - readsAfterDebt, 0,
+    'and pays for no read at all once the debt is paid — an N-row bulk post pulls 0 copies of the list, not N');
+  assert.ok(paid.TXNS.every(function (t) { return t.posted; }), 'every bulk row is posted');
+
+  // ---- a superseded read does NOT go straight back out while a write is still in flight ----
+  // The re-book is unconditional; re-ISSUING on the spot is not. Reading the table while a write
+  // is out fetches a list that is already behind that write, so it can only come home stale and
+  // ask again. The debt is remembered instead and goes out once, when the write has landed.
+  const gated = harness(bulkBase());
+  gated.applyEdit(base[0].id, 'amount', 999);                  // seq 1
+  gated.applySplit(base[1].id, '50');                          // seq 2 supersedes it
+  gated.calls[0].success({ ok: true, txns: preBulkList() });    // dropped and booked
+  gated.calls[1].success({ ok: true });                        // settles at zero → read #1 (seq 2)
+  assert.strictEqual(gated.reads.length, 1, 'the drop is repaid with one read');
+  gated.applySplit(base[1].id, '60');                          // seq 3, WHILE read #1 is out
+  gated.reads[0].success(preBulkList());                       // stale on arrival, INFLIGHT is 1
+  assert.strictEqual(gated.reads.length, 1,
+    'a superseded read is re-booked, not re-issued, while a mutation is still in flight');
+  assert.strictEqual(gated.TXNS[0].id, base[0].id, 'and the superseded list is not adopted');
+  gated.calls[2].success({ ok: true });                        // that write lands → INFLIGHT zero
+  assert.strictEqual(gated.reads.length, 2, 'the re-booked debt goes out exactly once after it');
+  gated.reads[1].success(preBulkList());
+  assert.strictEqual(gated.TXNS[0].id, EDITED_ID, 'and the page converges on the post-edit row key');
+  assert.strictEqual(gated.reads.length, 2, 'the read that adopted a current list stops there');
 
   // ---- a superseded delete response neither resurrects rows nor strands the page ----
   const del = harness(base);
