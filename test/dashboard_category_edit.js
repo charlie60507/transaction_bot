@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('assert');
 const fs = require('fs');
-const { loadFns, PANEL } = require('./extract_panel');
+const { loadFns, extractInlineScript, extractFunction, PANEL } = require('./extract_panel');
 
 function sample(overrides) {
   return Object.assign({
@@ -15,7 +15,15 @@ function run() {
   const src = fs.readFileSync(PANEL, 'utf8');
   assert.ok(/data-ef="amount"/.test(src), 'expense amount has an editor control');
   assert.ok(/field==='amount'[\s\S]*?金額需大於 0/.test(src), 'client validates amount');
-  assert.ok(/getAllTxns\(\)/.test(src), 'successful edits refresh authoritative transactions');
+  // The old form of this check — does the string getAllTxns() appear anywhere in the file —
+  // kept passing off boot()'s call after the edit path stopped making one, so it asserted
+  // nothing about editing. The contract is now one round trip: updateTxn returns the
+  // authoritative list itself, and applyEdit never fetches it separately.
+  const applyEditSrc = extractFunction(extractInlineScript(src), 'applyEdit');
+  assert.ok(/\.updateTxn\(id, patch, true\);/.test(applyEditSrc),
+    'successful edits refresh authoritative transactions in the same call that writes them');
+  assert.ok(!/getAllTxns/.test(applyEditSrc),
+    'the edit path does not follow a successful write with a second fetch');
   assert.ok(/row-card \.drill[\s\S]*?stopPropagation/.test(src), 'editor controls cannot toggle the category card');
 
   const server = fs.readFileSync(require('path').resolve(__dirname, '..', 'sidebar', '程式碼.js'), 'utf8');

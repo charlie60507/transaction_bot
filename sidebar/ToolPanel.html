@@ -738,6 +738,90 @@
   function typeColor(tp){ return tp==='收入'?'var(--income)':(tp==='轉帳'?'var(--warn)':'var(--spend)'); }
   var _toastTmo=null;
   function toast(msg,isErr){ var el=document.getElementById('toast'); if(!el) return; el.textContent=msg; el.className='toast show'+(isErr?' err':''); clearTimeout(_toastTmo); _toastTmo=setTimeout(function(){ el.className='toast'; },1900); }
+  // ---------- repaint bookkeeping ----------
+  /**
+   * Value signature of the WHOLE normalised list — every row, every field the server returns,
+   * in order. Deliberately not a field subset and not the id set: an amount edit changes a
+   * non-split row's id but leaves a split row's alone, applySplit changes the displayed amount
+   * without touching any id, and because `occurrence` is numbered across the sheet one edit can
+   * renumber a DIFFERENT row's id. Anything narrower lets a server-normalised value diverge from
+   * the screen in silence, and this page has no polling and no refresh control to correct it.
+   */
+  function txnsSignature(list){
+    var fields=['id','y','m','d','hm','type','amount','charged','mine','cat','merchant','tag','bank','last4','link','posted'];
+    return (list||[]).map(function(t){
+      return fields.map(function(f){ var v=(t||{})[f]; return (v==null)?'\u0000':String(v); }).join('\u001f');
+    }).join('\u001e');
+  }
+
+  // Monotonic count of local mutations ISSUED. Every response carries the value captured when
+  // its own request went out; if the count has moved on since, a later mutation already changed
+  // local state and that response describes a sheet older than what is on screen. Adopting it
+  // would resurrect the value the owner just replaced, so it is discarded instead. This still
+  // converges: only superseded responses are dropped, and the superseding mutation's own
+  // response is adopted.
+  var MUTATION_SEQ=0;
+  function nextMutation(){ MUTATION_SEQ++; return MUTATION_SEQ; }
+  function isStale(seq){ return seq!==MUTATION_SEQ; }
+
+  /** A selector naming the focused control across a rebuild — its id, or the data-* attributes
+   *  that identify it. Null when the element carries no identity worth restoring (e.g. body). */
+  function focusKey(el){
+    if(!el||!el.tagName||!el.attributes) return null;
+    if(el.id) return '#'+el.id;
+    var parts=[];
+    for(var i=0;i<el.attributes.length;i++){
+      var a=el.attributes[i];
+      if(String(a.name).indexOf('data-')!==0) continue;
+      var v=String(a.value);
+      // A quote or a backslash inside the value would need CSS escaping. No attribute this page
+      // writes contains either — ids are messageId|time|amount|last4|occurrence — so give up on
+      // restoring focus rather than hand querySelector a selector that might be malformed.
+      if(v.indexOf('"')>=0||v.indexOf(String.fromCharCode(92))>=0) return null;
+      parts.push('['+a.name+'="'+v+'"]');
+    }
+    return parts.length ? String(el.tagName).toLowerCase()+parts.join('') : null;
+  }
+
+  /**
+   * render(), without losing where you were. render() ends in innerHTML on #app, which destroys
+   * every descendant, so focus falls back to <body> on every repaint. The search box used to
+   * restore its own focus and caret by hand — this is that restoration generalised to the
+   * focused control's identity, plus the window scroll offset, so the repaints that genuinely
+   * remain do not move the page under the owner. A row whose id the edit itself changed cannot
+   * be found again; that control loses focus exactly as it does today.
+   */
+  function repaint(){
+    var doc=(typeof document!=='undefined')?document:null;
+    var el=doc?doc.activeElement:null;
+    var key=focusKey(el), sel=null;
+    if(key&&el&&typeof el.selectionStart==='number'){ try{ sel=[el.selectionStart,el.selectionEnd]; }catch(e){} }
+    var win=(typeof window!=='undefined')?window:null;
+    var x=win?win.pageXOffset:0, y=win?win.pageYOffset:0;
+    render();
+    if(key&&doc){
+      var next=null; try{ next=doc.querySelector(key); }catch(e2){}
+      if(next){
+        try{ next.focus(); }catch(e3){}
+        if(sel&&typeof next.selectionStart==='number'){ try{ next.setSelectionRange(sel[0],sel[1]); }catch(e4){} }
+      }
+    }
+    if(win&&win.scrollTo) win.scrollTo(x,y);
+  }
+
+  /**
+   * Undo an optimistic change the server rejected. The row is re-resolved from TXNS by id AT
+   * FAILURE TIME: adoptTxns rebuilds TXNS out of fresh objects, so a row captured when the
+   * request was issued is detached the moment any other response is adopted, and mutating that
+   * orphan would leave the rejected value on screen. Repaint either way — when the row is gone
+   * the screen is the only place still showing it.
+   */
+  function revertTxn(id, prevFields){
+    var t=txnById(id);
+    if(t){ for(var k in prevFields){ if(Object.prototype.hasOwnProperty.call(prevFields,k)) t[k]=prevFields[k]; } }
+    repaint();
+  }
+
   // optimistic edit: update local state now, write back, revert on failure
   function applyEdit(id,field,value){
     var t=txnById(id); if(!t) return;
@@ -758,20 +842,29 @@
     // input already shows the new value, so there is nothing to repaint. Applies to every
     // free-text field — merchant and now tag, which became an input so new projects can be typed.
     if (field !== 'merchant' && field !== 'tag') render();
+    // The message belongs to the tap that caused it. It used to wait for a second round trip —
+    // the same beat that produced the stray repaint — so it landed after the row had already
+    // gone. After this change a successful write is silent apart from this message; only a
+    // failure repaints, which is a real change in what the screen confirms.
+    if(field==='posted') toast(value?'已記帳 · 從清單移除':'已取回待記帳');
     // 未分類 is a display value, not a sheet value: writing it would put the literal string into
     // 種類(手動). Clearing the category writes a blank cell, which is what 未分類 means.
     var patch={}; patch[field]=(field==='cat'&&value==='未分類')?'':value;
+    var undo={}; undo[field]=prev;
+    var seq=nextMutation();
     google.script.run
-      .withSuccessHandler(function(){
-        // Amount is part of the composite row key. Always adopt the authoritative feed after
-        // a write so category membership, aggregates, and the next edit use the post-save key.
-        google.script.run
-          .withSuccessHandler(function(data){ adoptTxns(data); render(); if(field==='posted') toast(value?'已記帳 · 從清單移除':'已取回待記帳'); })
-          .withFailureHandler(function(err){ t[field]=prev; render(); toast('重新整理失敗:'+((err&&err.message)||err), true); })
-          .getAllTxns();
+      .withSuccessHandler(function(res){
+        // ONE round trip: the ack and the authoritative list arrive together, so the old
+        // succeeded-write-then-failed-refetch state — sheet written, screen reverted, nothing
+        // left to correct it — cannot happen. Amount is part of the composite row key, so the
+        // list is still adopted after every write; it simply no longer repaints when the server
+        // agrees with what the screen already shows. A newly arrived bot row DOES change the
+        // signature, so ticking 已記帳 stays this page's de facto refresh.
+        if(isStale(seq)) return;
+        if(res && res.txns && adoptTxns(res.txns)) repaint();
       })
-      .withFailureHandler(function(err){ t[field]=prev; render(); toast('寫入失敗:'+((err&&err.message)||err), true); })
-      .updateTxn(id, patch);
+      .withFailureHandler(function(err){ revertTxn(id, undo); toast('寫入失敗:'+((err&&err.message)||err), true); })
+      .updateTxn(id, patch, true);
   }
   // ---------- manual add / delete ----------
   function isManual(t){ return !!(t && t.id && String(t.id).indexOf('manual-')===0); }
@@ -796,10 +889,11 @@
     pendingDelId=null;
     delBusy=true;
     var ok=document.getElementById('d-ok'); if(ok) ok.disabled=true;
+    var delSeq=nextMutation();
     google.script.run
       .withSuccessHandler(function(res){
         delBusy=false;
-        if(res && res.txns) adoptTxns(res.txns);
+        if(res && res.txns && !isStale(delSeq)) adoptTxns(res.txns);
         closeDelModal(); render(); toast('已刪除');
       })
       .withFailureHandler(function(err){
@@ -842,7 +936,7 @@
     // hm on the optimistic row too, or a 19:40 entry appears first in its day and then jumps
     // into place the moment the server's row lands.
     var temp={ y:+p[0], m:+p[1], d:+p[2], hm:time, type:fields.type, amount:amt, cat:fields.cat||'未分類', merchant:fields.merchant, tag:fields.tag, bank:fields.source, last4:'', link:'', id:'manual-temp-'+(TXNS.length+1), posted:true };
-    TXNS.push(temp); closeAddModal(); render();
+    TXNS.push(temp); closeAddModal(); render(); nextMutation();
     // The success handler adopts the server's hm as well as its id: the server decides what
     // counts as "no time" (midnight does not count), so taking its answer keeps this row
     // identical to what the next reload will show, without restating that rule here.
@@ -888,13 +982,16 @@
     if(v!==null && v===chg) v=null;
     t.mine=v; t.amount=(v==null)?chg:v;
     openSplit=null; render();
+    // A split is a local mutation too: bumping the counter stops an edit response already in
+    // flight from adopting a list that predates it.
+    nextMutation();
     google.script.run
       .withSuccessHandler(function(){
         if(v==null) toast('整筆都是你的 · $'+fmt(chg));
         else if(v>chg) toast('這筆你消費 $'+fmt(v)+'，比刷卡 $'+fmt(chg)+' 多 — 有人先幫你墊了 $'+fmt(v-chg));
         else toast('這筆算你 $'+fmt(v)+'，代墊 $'+fmt(chg-v)+' 不計入統計');
       })
-      .withFailureHandler(function(err){ t.mine=prevMine; t.amount=prevAmt; render(); toast('寫入失敗:'+((err&&err.message)||err), true); })
+      .withFailureHandler(function(err){ revertTxn(id, { mine:prevMine, amount:prevAmt }); toast('寫入失敗:'+((err&&err.message)||err), true); })
       .updateTxn(id, { mine: (v==null?'':v) });
   }
 
@@ -1005,6 +1102,10 @@
         else toast('已記帳 '+todo.length+' 筆');
         return;
       }
+      // Two arguments on purpose: bulk post ignores the return value, so it must not pay for a
+      // full list per row. The counter still moves, so an edit response issued before this run
+      // cannot be adopted on top of the rows it just marked.
+      nextMutation();
       google.script.run
         .withSuccessHandler(function(){ step(i+1); })
         .withFailureHandler(function(){ var t=txnById(todo[i]); if(t) t.posted=false; failed++; step(i+1); })
@@ -1239,7 +1340,9 @@
     if(sy) sy.onchange=pickSel; if(sm) sm.onchange=pickSel;
     var q=document.getElementById('q');
     if(q){
-      q.oninput=function(){ state.q=this.value; var pos=this.selectionStart; render(); var q2=document.getElementById('q'); if(q2){ q2.focus(); try{q2.setSelectionRange(pos,pos);}catch(e){} } };
+      // Focus and caret used to be restored here by hand; repaint() now does that for every
+      // control by identity, so this is the same behaviour without a second bespoke copy.
+      q.oninput=function(){ state.q=this.value; repaint(); };
       q.onkeydown=function(e){ if(e.key==='Escape'){ e.preventDefault(); state.q=''; render(); } };
     }
     app.querySelectorAll('.row-card').forEach(function(c){ c.onclick=function(e){ if(e.target.id==='q')return; var n=this.getAttribute('data-row'); openRow=(openRow===n)?null:n; openCategoryTxn=null; openSplit=null; render(); }; });
@@ -1249,7 +1352,10 @@
   }
 
   // ---------- boot: fetch real data, then render ----------
+  /** Adopt a server list and report whether anything the page renders actually changed, so a
+   *  write whose result matches the optimistic prediction repaints nothing. */
   function adoptTxns(data){
+    var before=txnsSignature(TXNS);
     TXNS = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount;
       // charged/mine arrive from the server; default them so a page served before the
       // matching server version simply behaves as it did — every row "all mine".
@@ -1260,6 +1366,7 @@
       // before times existed. No blank badge, no undefined on screen, no NaN in the comparator.
       t.hm = (t.hm==null) ? '' : String(t.hm);
       t.posted = (t.posted===true); t.id = String(t.id||''); return t; });
+    return txnsSignature(TXNS)!==before;
   }
   function boot(){
     document.getElementById('app').innerHTML = '<div class="loading">載入中…</div>';
