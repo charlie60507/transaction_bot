@@ -136,6 +136,11 @@
   .rc-bar + .rc-meta { margin-top: 0; }
   .drill { margin-top: var(--sp3); border-top: 1px solid var(--border); padding-top: var(--sp2); display: none; }
   .row-card.open .drill, .pcard.open .pdrill { display: block; }
+  .txn-toggle { display: block; width: 100%; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .txn-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+  .txn-toggle .txn::before { content: '▶'; color: var(--text-muted); font-size: 10px; }
+  .txn-toggle[aria-expanded="true"] .txn::before { content: '▼'; }
+  .category-txn .erow.done { opacity: 1; }
   .txn { display: flex; align-items: center; gap: var(--sp2); font-size: 12px; padding: 5px 0; }
   .txn .m { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .txn .a { color: var(--text-primary); font-weight: 600; } .txn .d { color: var(--text-muted); }
@@ -219,9 +224,10 @@
   .er2 .fld .lb { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
   .er2 select { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; font-size: 12px; cursor: pointer; }
   .er2 select:focus { outline: none; border-color: var(--accent); }
-  .er2 .tagin { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border);
+  .er2 .tagin, .er2 .amtcor { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border);
     border-radius: 6px; padding: 5px 7px; font: inherit; font-size: 12px; width: 132px; }
-  .er2 .tagin:focus { outline: none; border-color: var(--accent); }
+  .er2 .amtcor { width: 96px; text-align: right; }
+  .er2 .tagin:focus, .er2 .amtcor:focus { outline: none; border-color: var(--accent); }
   .er2 .tagin::placeholder { color: var(--text-muted); font-size: 11px; }
   .erec { margin-left: auto; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-muted); border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 
@@ -350,6 +356,7 @@
   var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all',
                 inboxScope:'all', inboxDone:false };
   var openRow=null, openProj=null, openHeatDay=null, openSplit=null;
+  var openCategoryTxn=null;
 
   // ---------- 我的消費 (advanced-money split) ----------
   // t.amount is ALREADY my consumption — the server nets it in getAllTxns, so every
@@ -653,8 +660,18 @@
       +'<div class="rc-bar"><i style="width:'+(max>0?(it.total/max*100).toFixed(1):0)+'%;background:'+color+'"></i></div>'
       +'<div class="rc-meta num">'+it.count+' 筆 · 平均 $'+fmt(it.total/it.count)+' · 占 '+pct+'%'
       +(advCat>0?' · <span class="adv">代墊 $'+fmt(advCat)+' 未計入</span>':'')+'</div>';
-    var d='<div class="drill">'; list.forEach(function(t){ d+=editRow(t); }); if(!list.length) d+='<div style="color:var(--text-muted);font-size:12px">無</div>'; d+='</div>';
+    var d='';
+    if(isOpen){
+      d='<div class="drill">'; list.forEach(function(t){ d+=categoryTxn(t); }); if(!list.length) d+='<div style="color:var(--text-muted);font-size:12px">無</div>'; d+='</div>';
+    }
     return h+d+'</div>';
+  }
+  function categoryTxn(t){
+    var isOpen=openCategoryTxn===t.id;
+    // Reuse the compact transaction summary; mount the shared editor only on selection.
+    var summary=txnRow(t,false).replace(/^<div/, '<span').replace(/<\/div>$/, '</span>');
+    return '<div class="category-txn"><button type="button" class="txn-toggle" data-category-txn="'+esc(t.id)+'" aria-expanded="'+isOpen+'">'+summary+'</button>'
+      +(isOpen?editRow(t):'')+'</div>';
   }
 
   // blend --spend (#c46a58) toward --bg-raised (#222630) by t in 0..1 -> rgb() (avoids CSS color-mix dependency)
@@ -910,9 +927,10 @@
       // a day that holds more than one. Rendered only when the row actually has a time, so the
       // pre-June rows look exactly as they do today. Shown to the minute: 富邦 gives seconds and
       // 國泰 does not, so seconds would advertise a precision most timed rows do not have.
-      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false">'+mailLink(t)+(t.type==='支出'?'<input class="amtcor num" type="number" min="0.01" step="0.01" data-ef="amount" data-id="'+esc(t.id)+'" value="'+esc(t.amount)+'" aria-label="金額">':'')+(t.type==='支出'?'<button type="button" class="amt amtbtn num" data-amt="'+esc(t.id)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button>':'')+'</div>'
+      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false">'+mailLink(t)+'<button type="button" class="amt amtbtn num" data-amt="'+esc(t.id)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button></div>'
       +(openSplit===t.id ? splitBox(t) : '')
       +'<div class="er2">'
+        +(t.type==='支出'?'<div class="fld"><span class="lb">金額</span><input class="amtcor num" type="number" inputmode="decimal" min="0.01" step="0.01" data-ef="amount" data-id="'+esc(t.id)+'" value="'+esc(t.amount)+'" aria-label="金額"></div>':'')
         +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
         +'<div class="fld"><span class="lb">收支</span><select data-ef="type" data-id="'+esc(t.id)+'" style="color:'+tc+'">'+selOpts(['支出','收入','轉帳'],t.type)+'</select></div>'
         // TAG is a type-or-pick field, not a closed list: a project only exists once a
@@ -1224,7 +1242,8 @@
       q.oninput=function(){ state.q=this.value; var pos=this.selectionStart; render(); var q2=document.getElementById('q'); if(q2){ q2.focus(); try{q2.setSelectionRange(pos,pos);}catch(e){} } };
       q.onkeydown=function(e){ if(e.key==='Escape'){ e.preventDefault(); state.q=''; render(); } };
     }
-    app.querySelectorAll('.row-card').forEach(function(c){ c.onclick=function(e){ if(e.target.id==='q')return; var n=this.getAttribute('data-row'); openRow=(openRow===n)?null:n; render(); }; });
+    app.querySelectorAll('.row-card').forEach(function(c){ c.onclick=function(e){ if(e.target.id==='q')return; var n=this.getAttribute('data-row'); openRow=(openRow===n)?null:n; openCategoryTxn=null; openSplit=null; render(); }; });
+    app.querySelectorAll('[data-category-txn]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); var id=this.getAttribute('data-category-txn'); openCategoryTxn=(openCategoryTxn===id)?null:id; openSplit=null; render(); }; });
     app.querySelectorAll('.row-card .drill').forEach(function(d){ d.onclick=function(e){ e.stopPropagation(); }; });
     app.querySelectorAll('.pcard').forEach(function(c){ c.onclick=function(){ var n=this.getAttribute('data-proj'); openProj=(openProj===n)?null:n; render(); }; });
   }
