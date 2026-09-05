@@ -801,9 +801,27 @@ function validateGmailProperties_(props, environment) {
   if (unmarked.length > 0) {
     throw new Error('Stage Gmail queries and identifiers must contain GMAIL_STAGE_MARKER: ' + unmarked.join(', '));
   }
-  const effectiveAccount = typeof Session !== 'undefined' && Session.getEffectiveUser
-    ? String(Session.getEffectiveUser().getEmail() || '').trim().toLowerCase()
-    : '';
+  // Gmail search accepts OR/grouped branches. A marker in only one branch is
+  // not an isolation boundary, so Stage values must be simple conjunctions of
+  // positive terms. Date bounds are appended by the importer itself.
+  const unsafeQueryShape = identifiers.filter(function (key) {
+    const value = String(props[key]);
+    return /\bOR\b|[(){}]|(^|\s)-\S/i.test(value);
+  });
+  if (unsafeQueryShape.length > 0) {
+    throw new Error('Stage Gmail queries must use positive conjunctive terms only: ' + unsafeQueryShape.join(', '));
+  }
+  let effectiveAccount = '';
+  try {
+    effectiveAccount = typeof Session !== 'undefined' && Session.getEffectiveUser
+      ? String(Session.getEffectiveUser().getEmail() || '').trim().toLowerCase()
+      : '';
+  } catch (err) {
+    effectiveAccount = '';
+  }
+  if (!effectiveAccount) {
+    throw new Error('Unable to verify the executing Stage Gmail account');
+  }
   const stageAccount = String(props.GMAIL_STAGE_ACCOUNT).trim().toLowerCase();
   if (effectiveAccount && effectiveAccount !== stageAccount) {
     throw new Error('GMAIL_STAGE_ACCOUNT does not match the executing Apps Script account');

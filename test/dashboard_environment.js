@@ -13,6 +13,14 @@ function loadResolver() {
   return sandbox.resolveEnvironmentConfig_;
 }
 
+function loadGmailValidator(email) {
+  const src = fs.readFileSync(path.resolve(__dirname, '..', 'sidebar', 'cards_transaction_bot.js'), 'utf8');
+  const sandbox = { Session: { getEffectiveUser: () => ({ getEmail: () => email }) } };
+  vm.createContext(sandbox);
+  vm.runInContext(extractFunction(src, 'validateGmailProperties_'), sandbox);
+  return sandbox.validateGmailProperties_;
+}
+
 function base(overrides) {
   return Object.assign({
     ENVIRONMENT: 'STAGE', SCRIPT_ID: 'stage-script', SPREADSHEET_ID: 'stage-sheet',
@@ -22,8 +30,21 @@ function base(overrides) {
   }, overrides || {});
 }
 
+function stageGmail(overrides) {
+  return Object.assign({
+    GMAIL_STAGE_ACCOUNT: 'stage@example.test',
+    GMAIL_STAGE_MARKER: 'STAGE-ABCDEFGHIJKL',
+    FUBON_QUERY_SUBJECT: 'subject:"STAGE-ABCDEFGHIJKL 即時消費通知"',
+    FUBON_TRANSFER_QUERY: 'from:mbank@example.test subject:"STAGE-ABCDEFGHIJKL 臺幣轉帳"',
+    CATHAY_LABEL: 'STAGE-ABCDEFGHIJKL-國泰世華消費',
+    CATHAY_SUBJECT: 'STAGE-ABCDEFGHIJKL 消費彙整通知'
+  }, overrides || {});
+}
+
 function run() {
   const resolve = loadResolver();
+  const validateGmail = loadGmailValidator('stage@example.test');
+  const validateGmailWithoutIdentity = loadGmailValidator('');
   assert.strictEqual(resolve(base(), 'stage-script').environment, 'STAGE');
   assert.strictEqual(resolve(base({ ENVIRONMENT: 'production', SCRIPT_ID: 'prod-script', SPREADSHEET_ID: 'prod-sheet', DEPLOYMENT_ID: 'prod-deployment' }), 'prod-script').environment, 'PRODUCTION');
   assert.throws(() => resolve(base({ ENVIRONMENT: '' }), 'stage-script'), /ENVIRONMENT/);
@@ -32,6 +53,15 @@ function run() {
   assert.throws(() => resolve(base({ DEPLOYMENT_ID: 'prod-deployment' }), 'stage-script'), /Production deployment/);
   assert.throws(() => resolve(base({ PRODUCTION_DEPLOYMENT_ID: '' }), 'stage-script'), /Production fence/);
   assert.throws(() => resolve(base({ DEPLOYMENT_SCRIPT_ID: 'other-script' }), 'stage-script'), /bound to SCRIPT_ID/);
+
+  assert.doesNotThrow(() => validateGmail(stageGmail(), 'STAGE'));
+  assert.throws(() => validateGmail(stageGmail({
+    FUBON_QUERY_SUBJECT: '(subject:"STAGE-ABCDEFGHIJKL" OR subject:"Production")'
+  }), 'STAGE'), /positive conjunctive terms/);
+  assert.throws(() => validateGmail(stageGmail({
+    FUBON_TRANSFER_QUERY: 'from:example.test -label:"STAGE-ABCDEFGHIJKL"'
+  }), 'STAGE'), /positive conjunctive terms/);
+  assert.throws(() => validateGmailWithoutIdentity(stageGmail(), 'STAGE'), /executing Stage Gmail account/);
 
   const html = fs.readFileSync(PANEL, 'utf8');
   const script = extractInlineScript(html);

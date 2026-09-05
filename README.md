@@ -71,6 +71,29 @@ clears rows while preserving the load-bearing `Deleted` tab and headers, and
 writes deterministic synthetic data.
 The dashboard header and bot logs identify the selected environment.
 
+### Cloud isolation verification status
+
+Repository verification is **blocked** from claiming cloud isolation. The exact
+evidence still required from the owner or an authenticated cloud audit is:
+
+- the Stage and Production Apps Script project IDs, proving they differ;
+- the selected Stage and Production deployment inventories, with each deployment
+  resolved to its owning script project;
+- the Stage and Production spreadsheet IDs and sentinel read/write observations;
+- the complete Script Properties for both projects, with secret values redacted
+  but environment, spreadsheet, script, deployment, Production-fence, and Gmail
+  identifiers visible;
+- the installed trigger inventories and trigger identities in both projects;
+- the executing Gmail identities/mailboxes and Stage-only query, label, and subject
+  observations;
+- the Stage and Production web-app target URLs and visible environment indicators;
+- the CI credential/secret bindings proving Stage and Production deploy with
+  separate credentials or explicitly approved isolated targets.
+
+Until those observations are captured, cloud isolation is a human-decision/
+blocked prerequisite and this repository makes no claim that the live cloud
+resources are distinct.
+
 For CI, dispatch `.github/workflows/deploy-dashboard.yml` with
 `environment=stage`; configure `STAGE_CLASPRC_JSON`, `STAGE_SCRIPT_ID`, and
 `STAGE_DEPLOYMENT_ID` separately from the Production secrets. Stage deployment
