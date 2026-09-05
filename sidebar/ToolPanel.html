@@ -754,15 +754,62 @@
     }).join('\u001e');
   }
 
-  // Monotonic count of local mutations ISSUED. Every response carries the value captured when
-  // its own request went out; if the count has moved on since, a later mutation already changed
-  // local state and that response describes a sheet older than what is on screen. Adopting it
-  // would resurrect the value the owner just replaced, so it is discarded instead. This still
-  // converges: only superseded responses are dropped, and the superseding mutation's own
-  // response is adopted.
-  var MUTATION_SEQ=0;
-  function nextMutation(){ MUTATION_SEQ++; return MUTATION_SEQ; }
+  // Monotonic count of local mutations ISSUED, plus how many of them are still in flight. Every
+  // response carries the value captured when its own request went out; if the count has moved on
+  // since, a later mutation already changed local state and that response describes a sheet older
+  // than what is on screen. Adopting it would resurrect the value the owner just replaced, so it
+  // is discarded instead.
+  //
+  // Discarding it also discards the authoritative list it carried, and THAT does not correct
+  // itself. applySplit, bulkPost and submitAdd bump this counter without ever adopting a list, so
+  // a superseded applyEdit response can be the last word the server would have got in. 金額 is the
+  // third segment of the composite row key (txnKey_ in 程式碼.js), so a dropped post-amount-edit
+  // list leaves the page holding the row's OLD id; findRowByKey_ matches on the full five-part
+  // key, so the NEXT write to that row throws 找不到該筆交易, and this page has no polling and no
+  // refresh control to recover with. A drop is therefore REMEMBERED: settle() records the debt and
+  // refreshTxns() pays it with one read once the last in-flight mutation has landed. Convergence
+  // is that refetch, not the guard.
+  var MUTATION_SEQ=0, INFLIGHT=0, STALE_DROPPED=false, REFRESHING=false;
+  function nextMutation(){ MUTATION_SEQ++; INFLIGHT++; return MUTATION_SEQ; }
   function isStale(seq){ return seq!==MUTATION_SEQ; }
+
+  /**
+   * Book the end of one mutation. `txns` is the authoritative list its response carried, or null
+   * for the call sites that deliberately do not ask for one. Returns true when adopting that list
+   * changed something the page renders, so the caller repaints — and false otherwise, including
+   * every discarded response.
+   *
+   * Called from BOTH handlers of every call site that bumped the counter: a rejected write settles
+   * too, or the in-flight count never reaches zero and the debt is never paid.
+   */
+  function settle(seq, txns){
+    if(INFLIGHT>0) INFLIGHT--;
+    var changed=false;
+    if(isStale(seq)) STALE_DROPPED=true;
+    else if(txns){ STALE_DROPPED=false; changed=adoptTxns(txns); }
+    if(STALE_DROPPED && INFLIGHT===0) refreshTxns();
+    return changed;
+  }
+
+  /**
+   * Pay the debt a discarded response left behind: ONE read of the authoritative list, adopted
+   * only while it is still current, repainting only when it differs from what is on screen. A read
+   * that a newer mutation has itself superseded re-books the debt instead of being adopted, and so
+   * does a failed one — the next mutation to settle tries again.
+   */
+  function refreshTxns(){
+    if(REFRESHING) return;
+    STALE_DROPPED=false; REFRESHING=true;
+    var seq=MUTATION_SEQ;
+    google.script.run
+      .withSuccessHandler(function(data){
+        REFRESHING=false;
+        if(isStale(seq)){ STALE_DROPPED=true; return; }
+        if(adoptTxns(data)) repaint();
+      })
+      .withFailureHandler(function(){ REFRESHING=false; STALE_DROPPED=true; })
+      .getAllTxns();
+  }
 
   /** A selector naming the focused control across a rebuild — its id, or the data-* attributes
    *  that identify it. Null when the element carries no identity worth restoring (e.g. body). */
@@ -783,27 +830,51 @@
     return parts.length ? String(el.tagName).toLowerCase()+parts.join('') : null;
   }
 
+  /** Every element the key names, in document order. The key is NOT unique: editRow() is rendered
+   *  from four sites and two of them can be live at once — an opened heat day lists every row of
+   *  that day while an expanded category row lists its own — so one transaction can appear twice
+   *  with identical data-id / data-emer / data-erec. */
+  function focusMatches(doc,key){
+    if(!doc||!key||!doc.querySelectorAll) return [];
+    try{ return doc.querySelectorAll(key)||[]; }catch(e){ return []; }
+  }
+  /** WHICH of those copies currently holds focus. Restoring by the first match would drop the
+   *  caret into a different copy of the row than the one being typed in. */
+  function focusIndex(doc,key,el){
+    var all=focusMatches(doc,key);
+    for(var i=0;i<all.length;i++){ if(all[i]===el) return i; }
+    return 0;
+  }
+
   /**
    * render(), without losing where you were. render() ends in innerHTML on #app, which destroys
    * every descendant, so focus falls back to <body> on every repaint. The search box used to
    * restore its own focus and caret by hand — this is that restoration generalised to the
-   * focused control's identity, plus the window scroll offset, so the repaints that genuinely
-   * remain do not move the page under the owner. A row whose id the edit itself changed cannot
-   * be found again; that control loses focus exactly as it does today.
+   * focused control's identity AND to which copy of it had focus, plus the window scroll offset,
+   * so the repaints that genuinely remain do not move the page under the owner. A row whose id
+   * the edit itself changed cannot be found again; that control loses focus exactly as it does
+   * today, and so does one whose copy count changed under it — the first match is the fallback.
    */
   function repaint(){
     var doc=(typeof document!=='undefined')?document:null;
     var el=doc?doc.activeElement:null;
     var key=focusKey(el), sel=null;
-    if(key&&el&&typeof el.selectionStart==='number'){ try{ sel=[el.selectionStart,el.selectionEnd]; }catch(e){} }
+    // The typeof probe belongs INSIDE the try, not in the condition guarding it: Chromium throws
+    // InvalidStateError when selectionStart is merely READ on an input whose type does not support
+    // selection, and the controls this page repaints under are exactly those — the 金額 corrector
+    // and the split box are <input type="number">. Probing outside meant the probe threw first and
+    // repaint() aborted before render(), inside a google.script.run success handler.
+    if(key&&el){ try{ if(typeof el.selectionStart==='number') sel=[el.selectionStart,el.selectionEnd]; }catch(e){} }
+    var idx=focusIndex(doc,key,el);
     var win=(typeof window!=='undefined')?window:null;
     var x=win?win.pageXOffset:0, y=win?win.pageYOffset:0;
     render();
     if(key&&doc){
-      var next=null; try{ next=doc.querySelector(key); }catch(e2){}
+      var all=focusMatches(doc,key);
+      var next=all.length?(all[idx]||all[0]):null;
       if(next){
         try{ next.focus(); }catch(e3){}
-        if(sel&&typeof next.selectionStart==='number'){ try{ next.setSelectionRange(sel[0],sel[1]); }catch(e4){} }
+        if(sel){ try{ if(typeof next.selectionStart==='number') next.setSelectionRange(sel[0],sel[1]); }catch(e4){} }
       }
     }
     if(win&&win.scrollTo) win.scrollTo(x,y);
@@ -859,11 +930,11 @@
         // left to correct it — cannot happen. Amount is part of the composite row key, so the
         // list is still adopted after every write; it simply no longer repaints when the server
         // agrees with what the screen already shows. A newly arrived bot row DOES change the
-        // signature, so ticking 已記帳 stays this page's de facto refresh.
-        if(isStale(seq)) return;
-        if(res && res.txns && adoptTxns(res.txns)) repaint();
+        // signature, so ticking 已記帳 stays this page's de facto refresh. settle() owns the
+        // ordering: a snapshot a later mutation superseded is dropped AND booked for a refetch.
+        if(settle(seq, res && res.txns)) repaint();
       })
-      .withFailureHandler(function(err){ revertTxn(id, undo); toast('寫入失敗:'+((err&&err.message)||err), true); })
+      .withFailureHandler(function(err){ settle(seq, null); revertTxn(id, undo); toast('寫入失敗:'+((err&&err.message)||err), true); })
       .updateTxn(id, patch, true);
   }
   // ---------- manual add / delete ----------
@@ -893,11 +964,12 @@
     google.script.run
       .withSuccessHandler(function(res){
         delBusy=false;
-        if(res && res.txns && !isStale(delSeq)) adoptTxns(res.txns);
+        settle(delSeq, res && res.txns);
         closeDelModal(); render(); toast('已刪除');
       })
       .withFailureHandler(function(err){
         delBusy=false; if(ok) ok.disabled=false;
+        settle(delSeq, null);
         pendingDelId=id;
         toast('刪除失敗:'+((err&&err.message)||err), true);
       })
@@ -936,13 +1008,16 @@
     // hm on the optimistic row too, or a 19:40 entry appears first in its day and then jumps
     // into place the moment the server's row lands.
     var temp={ y:+p[0], m:+p[1], d:+p[2], hm:time, type:fields.type, amount:amt, cat:fields.cat||'未分類', merchant:fields.merchant, tag:fields.tag, bank:fields.source, last4:'', link:'', id:'manual-temp-'+(TXNS.length+1), posted:true };
-    TXNS.push(temp); closeAddModal(); render(); nextMutation();
+    // A manual add is a local mutation too, and it adopts no list of its own — so it settles
+    // through settle(), which is what makes an edit response it superseded get refetched.
+    TXNS.push(temp); closeAddModal(); render();
+    var addSeq=nextMutation();
     // The success handler adopts the server's hm as well as its id: the server decides what
     // counts as "no time" (midnight does not count), so taking its answer keeps this row
     // identical to what the next reload will show, without restating that rule here.
     google.script.run
-      .withSuccessHandler(function(nt){ if(nt&&nt.id) temp.id=String(nt.id); if(nt) temp.hm=(nt.hm==null)?'':String(nt.hm); toast('已新增 · 已記帳 ✓'); render(); })
-      .withFailureHandler(function(err){ var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1); render(); toast('新增失敗:'+((err&&err.message)||err), true); })
+      .withSuccessHandler(function(nt){ if(nt&&nt.id) temp.id=String(nt.id); if(nt) temp.hm=(nt.hm==null)?'':String(nt.hm); settle(addSeq, null); toast('已新增 · 已記帳 ✓'); render(); })
+      .withFailureHandler(function(err){ var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1); settle(addSeq, null); render(); toast('新增失敗:'+((err&&err.message)||err), true); })
       .addTxn(fields);
   }
   /**
@@ -983,15 +1058,17 @@
     t.mine=v; t.amount=(v==null)?chg:v;
     openSplit=null; render();
     // A split is a local mutation too: bumping the counter stops an edit response already in
-    // flight from adopting a list that predates it.
-    nextMutation();
+    // flight from adopting a list that predates it, and settling through settle() is what makes
+    // that dropped list come back as a refetch instead of stranding the page on a stale row id.
+    var seq=nextMutation();
     google.script.run
       .withSuccessHandler(function(){
+        settle(seq, null);
         if(v==null) toast('整筆都是你的 · $'+fmt(chg));
         else if(v>chg) toast('這筆你消費 $'+fmt(v)+'，比刷卡 $'+fmt(chg)+' 多 — 有人先幫你墊了 $'+fmt(v-chg));
         else toast('這筆算你 $'+fmt(v)+'，代墊 $'+fmt(chg-v)+' 不計入統計');
       })
-      .withFailureHandler(function(err){ revertTxn(id, { mine:prevMine, amount:prevAmt }); toast('寫入失敗:'+((err&&err.message)||err), true); })
+      .withFailureHandler(function(err){ settle(seq, null); revertTxn(id, { mine:prevMine, amount:prevAmt }); toast('寫入失敗:'+((err&&err.message)||err), true); })
       .updateTxn(id, { mine: (v==null?'':v) });
   }
 
@@ -1104,11 +1181,13 @@
       }
       // Two arguments on purpose: bulk post ignores the return value, so it must not pay for a
       // full list per row. The counter still moves, so an edit response issued before this run
-      // cannot be adopted on top of the rows it just marked.
-      nextMutation();
+      // cannot be adopted on top of the rows it just marked — and settling each row through
+      // settle() is what turns that dropped list into one refetch rather than a stale row id.
+      // Nothing is refetched on the ordinary run: the debt only exists after a real drop.
+      var seq=nextMutation();
       google.script.run
-        .withSuccessHandler(function(){ step(i+1); })
-        .withFailureHandler(function(){ var t=txnById(todo[i]); if(t) t.posted=false; failed++; step(i+1); })
+        .withSuccessHandler(function(){ settle(seq, null); step(i+1); })
+        .withFailureHandler(function(){ settle(seq, null); var t=txnById(todo[i]); if(t) t.posted=false; failed++; step(i+1); })
         .updateTxn(todo[i], { posted:true });
     })(0);
   }

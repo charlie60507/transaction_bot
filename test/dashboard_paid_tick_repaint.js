@@ -5,10 +5,16 @@
  * The panel is a bound Apps Script page, so none of this can be exercised against the real
  * sheet from here. What IS provable offline is the decision logic: the whole-list signature
  * that decides whether a server response changes anything on screen, the sequence guard that
- * refuses a snapshot another mutation has already superseded, and the revert path that must
- * re-resolve its row after an adoption detached the object it captured. Each function is
- * lifted out of ToolPanel.html by extract_panel and run against a stubbed google.script.run,
- * so a repaint is a counted call rather than something a human has to watch for.
+ * refuses a snapshot another mutation has already superseded, the refetch that pays back the
+ * authoritative list such a discard threw away, and the revert path that must re-resolve its
+ * row after an adoption detached the object it captured. Each function is lifted out of
+ * ToolPanel.html by extract_panel and run against a stubbed google.script.run, so a repaint is
+ * a counted call rather than something a human has to watch for.
+ *
+ * repaint() is exercised the same way, against a stub DOM rather than by matching the file's
+ * text: a focused control, a caret, a scroll offset, and TWO copies of one row (an opened heat
+ * day and an expanded category row can both list it) so that restoring focus into the wrong
+ * copy is a failure rather than an invisible coin flip.
  *
  * NOT evidence that the reported symptom is gone: that needs the deployed dashboard.
  */
@@ -39,35 +45,117 @@ function serverCopy(list) {
   return list.map(function (t) { return Object.assign({}, t); });
 }
 
-function harness(initial) {
-  const renders = { n: 0 };
-  const toasts = [];
-  const calls = [];
+// Every server entry point the panel reaches, recorded with its handlers so a test decides when
+// — and in which order — each response lands. getAllTxns() is recorded too: the refetch that
+// pays back a discarded list is a counted call, so "an ordinary run pays for no extra read" and
+// "a discarded list is refetched exactly once" are both assertable.
+function recordingRun(rec) {
   let pending = {};
+  function take() { const p = pending; pending = {}; return p; }
   const run = {
     withSuccessHandler: function (f) { pending.success = f; return run; },
     withFailureHandler: function (f) { pending.failure = f; return run; },
     updateTxn: function (id, patch, wantTxns) {
-      calls.push({ id: id, patch: patch, wantTxns: wantTxns, success: pending.success, failure: pending.failure });
-      pending = {};
-    }
+      const p = take();
+      rec.calls.push({ id: id, patch: patch, wantTxns: wantTxns, success: p.success, failure: p.failure });
+    },
+    deleteTxn: function (arg) { const p = take(); rec.deletes.push({ arg: arg, success: p.success, failure: p.failure }); },
+    addTxn: function (fields) { const p = take(); rec.adds.push({ fields: fields, success: p.success, failure: p.failure }); },
+    getAllTxns: function () { const p = take(); rec.reads.push({ success: p.success, failure: p.failure }); }
   };
-  const fns = loadFns(
-    ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isStale', 'focusKey', 'repaint', 'revertTxn', 'applyEdit'],
-    {
-      TXNS: serverCopy(initial || []),
-      MUTATION_SEQ: 0,
-      google: { script: { run: run } },
-      render: function () { renders.n++; },
-      toast: function (msg, isErr) { toasts.push({ msg: msg, err: !!isErr }); },
-      document: { activeElement: null, querySelector: function () { return null; } },
-      window: { pageXOffset: 0, pageYOffset: 0, scrollTo: function () {} }
+  return run;
+}
+
+function fakeNode(value) {
+  return {
+    value: value === undefined ? '' : value, disabled: false, hidden: false,
+    innerHTML: '', textContent: '', classList: { add: function () {}, remove: function () {} }
+  };
+}
+
+// Enough document for the modal paths (submitAdd, confirmDelete) and nothing more: they read
+// field values and toggle classes, and this fixture is about the mutation bookkeeping around
+// them, not their markup.
+function domStub(fields) {
+  const nodes = {};
+  return {
+    activeElement: null,
+    getElementById: function (id) { if (!nodes[id]) nodes[id] = fakeNode((fields || {})[id]); return nodes[id]; },
+    querySelector: function () { return null; },
+    querySelectorAll: function () { return []; }
+  };
+}
+
+const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isStale', 'settle',
+  'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
+  'applySplit', 'bulkPost', 'submitAdd', 'confirmDelete', 'closeDelModal', 'closeAddModal',
+  'chargedOf', 'isSplitTxn', 'fmt'];
+
+function harness(initial, opts) {
+  opts = opts || {};
+  const renders = { n: 0 };
+  const toasts = [];
+  const scrolls = [];
+  const rec = { calls: [], deletes: [], adds: [], reads: [] };
+  const doc = opts.document || domStub(ADD_FORM);
+  const fns = loadFns(PANEL_FNS, {
+    TXNS: serverCopy(initial || []),
+    MUTATION_SEQ: 0, INFLIGHT: 0, STALE_DROPPED: false, REFRESHING: false,
+    pendingDelId: null, delBusy: false, openSplit: null,
+    google: { script: { run: recordingRun(rec) } },
+    render: function () { renders.n++; if (opts.onRender) opts.onRender(); },
+    toast: function (msg, isErr) { toasts.push({ msg: msg, err: !!isErr }); },
+    document: doc,
+    window: {
+      pageXOffset: opts.pageX || 0, pageYOffset: opts.pageY || 0,
+      scrollTo: function (x, y) { scrolls.push([x, y]); }
     }
-  );
+  });
   fns.renders = renders;
   fns.toasts = toasts;
-  fns.calls = calls;
+  fns.scrolls = scrolls;
+  fns.calls = rec.calls;
+  fns.deletes = rec.deletes;
+  fns.adds = rec.adds;
+  fns.reads = rec.reads;
   return fns;
+}
+
+const ADD_FORM = {
+  'a-date': '2026-08-12', 'a-amt': '80', 'a-time': '', 'a-type': '支出',
+  'a-source': '現金', 'a-mer': '午餐', 'a-cat': '飲食', 'a-tag': ''
+};
+
+/** One editable control. `caret` gives it a readable selection; `selectionThrows` reproduces
+ *  Chromium on <input type="number">, where READING selectionStart raises InvalidStateError. */
+function fakeInput(attrs, opts) {
+  opts = opts || {};
+  const el = {
+    tagName: 'INPUT', id: opts.id || '',
+    attributes: Object.keys(attrs).map(function (k) { return { name: k, value: attrs[k] }; }),
+    focused: 0, ranges: [],
+    focus: function () { el.focused++; },
+    setSelectionRange: function (a, b) { el.ranges.push([a, b]); }
+  };
+  if (opts.selectionThrows) {
+    const boom = function () { throw new Error('InvalidStateError'); };
+    Object.defineProperty(el, 'selectionStart', { get: boom });
+    Object.defineProperty(el, 'selectionEnd', { get: boom });
+  } else if (opts.caret) { el.selectionStart = opts.caret[0]; el.selectionEnd = opts.caret[1]; }
+  return el;
+}
+
+/** A DOM whose matches for one selector are swapped for a rebuilt set when render() runs, which
+ *  is what innerHTML on #app does — including dropping focus back to <body>. */
+function rebuildingDom(key, before, after) {
+  const dom = {
+    activeElement: before[0], matches: before,
+    getElementById: function () { return null; },
+    querySelector: function (sel) { return sel === key ? (dom.matches[0] || null) : null; },
+    querySelectorAll: function (sel) { return sel === key ? dom.matches : []; },
+    rebuild: function () { dom.matches = after; dom.activeElement = null; }
+  };
+  return dom;
 }
 
 function run() {
@@ -176,9 +264,101 @@ function run() {
     keys.focusKey({ tagName: 'INPUT', id: '', attributes: [{ name: 'data-emer', value: 'msg-a|1000|120|1234|0' }] }),
     'input[data-emer="msg-a|1000|120|1234|0"]', 'a row control is named by its data attribute');
   assert.strictEqual(keys.focusKey({ tagName: 'BODY', id: '', attributes: [] }), null, 'body carries no identity');
-  assert.ok(!/var pos=this\.selectionStart/.test(script), 'the search box no longer restores focus by hand');
-  assert.ok(/q\.oninput=function\(\)\{ state\.q=this\.value; repaint\(\); \};/.test(script),
-    'the search box goes through the shared repaint wrapper');
+  // The search box's own restoration is gone — checked on the handler-binding function alone, and
+  // by what it does NOT mention, so it does not depend on how the line happens to be formatted.
+  // What repaint() actually does with that focus is asserted below, against a stub DOM.
+  const attachSrc = extractFunction(script, 'attach');
+  assert.ok(/repaint\(\)/.test(attachSrc), 'the search box repaints through the shared wrapper');
+  assert.ok(!/selectionStart/.test(attachSrc), 'and no longer restores its own focus and caret by hand');
+
+  // ---- repaint(): focus, caret and scroll land on the copy that had them ----
+  // editRow() is rendered from four sites and two of them can be live at once, so the data-*
+  // selector matches more than one element and "the first match" is the wrong answer.
+  const DUP_KEY = 'input[data-emer="' + base[0].id + '"]';
+  const dupBefore = [fakeInput({ 'data-emer': base[0].id }, { caret: [2, 5] }),
+                     fakeInput({ 'data-emer': base[0].id }, { caret: [2, 5] })];
+  const dupAfter = [fakeInput({ 'data-emer': base[0].id }, { caret: [0, 0] }),
+                    fakeInput({ 'data-emer': base[0].id }, { caret: [0, 0] })];
+  const dupDom = rebuildingDom(DUP_KEY, dupBefore, dupAfter);
+  dupDom.activeElement = dupBefore[1];                     // the SECOND copy is being typed in
+  const dup = harness(base, { document: dupDom, pageX: 13, pageY: 421, onRender: dupDom.rebuild });
+  dup.repaint();
+  assert.strictEqual(dup.renders.n, 1, 'repaint renders once');
+  assert.strictEqual(dupAfter[1].focused, 1, 'focus returns to the copy that had it');
+  assert.strictEqual(dupAfter[0].focused, 0, 'the other copy of the same row is left alone');
+  assert.deepStrictEqual(dupAfter[1].ranges, [[2, 5]], 'the caret comes back with it');
+  assert.deepStrictEqual(dupAfter[0].ranges, [], 'and is not written into the wrong copy');
+  assert.deepStrictEqual(dup.scrolls, [[13, 421]], 'the scroll offset is restored, not reset to the top');
+
+  // A control whose selection cannot be read at all: Chromium throws on <input type="number">,
+  // which is what the 金額 corrector and the split box are. repaint() must still render.
+  const NUM_KEY = 'input[data-ef="amount"][data-id="' + base[0].id + '"]';
+  const numAttrs = { 'data-ef': 'amount', 'data-id': base[0].id };
+  const numBefore = [fakeInput(numAttrs, { selectionThrows: true })];
+  const numAfter = [fakeInput(numAttrs, { selectionThrows: true })];
+  const numDom = rebuildingDom(NUM_KEY, numBefore, numAfter);
+  const num = harness(base, { document: numDom, onRender: numDom.rebuild });
+  assert.doesNotThrow(function () { num.repaint(); },
+    'reading selectionStart on a number input throws, and repaint() must survive it');
+  assert.strictEqual(num.renders.n, 1, 'render() still runs — the probe must not abort the repaint');
+  assert.strictEqual(numAfter[0].focused, 1, 'focus is still restored');
+  assert.deepStrictEqual(numAfter[0].ranges, [], 'no caret is written when none could be read');
+
+  // ---- a list discarded by the sequence guard is refetched, not lost ----
+  // applySplit, bulkPost and submitAdd bump the counter and adopt no list of their own. When one
+  // of them supersedes an edit, the edit's authoritative list is dropped — and because 金額 is
+  // part of the composite row key, dropping it silently would leave the page holding the row's
+  // PRE-EDIT id, which is the key the NEXT write sends. So the drop must be booked and repaid.
+  const EDITED_ID = base[0].id.replace('|120|', '|999|');
+  function editedList() {
+    const l = serverCopy(base);
+    l[0].amount = 999; l[0].id = EDITED_ID;
+    return l;
+  }
+  function amountEditSupersededBy(name, issue) {
+    const h = harness(base);
+    h.applyEdit(base[0].id, 'amount', 999);
+    assert.strictEqual(h.calls.length, 1, name + ': the amount edit is written');
+    issue(h)();                                            // the other mutation goes out and lands
+    assert.strictEqual(h.reads.length, 0, name + ': an ordinary run pays for no extra read');
+    h.calls[0].success({ ok: true, txns: editedList() });   // superseded — must not be adopted
+    assert.strictEqual(h.TXNS[0].id, base[0].id, name + ': the superseded snapshot is discarded');
+    assert.strictEqual(h.reads.length, 1, name + ': and exactly one authoritative refetch is issued');
+    h.reads[0].success(editedList());
+    assert.strictEqual(h.TXNS[0].id, EDITED_ID,
+      name + ': the page ends on the post-edit row key the next write has to send');
+    return h;
+  }
+  amountEditSupersededBy('applySplit', function (h) {
+    h.applySplit(base[1].id, '50');
+    assert.strictEqual(h.calls.length, 2, 'applySplit writes the split');
+    return function () { h.calls[1].success({ ok: true }); };
+  });
+  amountEditSupersededBy('bulkPost', function (h) {
+    h.bulkPost([base[1].id]);
+    assert.strictEqual(h.calls.length, 2, 'bulkPost writes its row');
+    return function () { h.calls[1].success({ ok: true }); };
+  });
+  amountEditSupersededBy('submitAdd', function (h) {
+    h.submitAdd();
+    assert.strictEqual(h.adds.length, 1, 'submitAdd writes the new row');
+    return function () { h.adds[0].success({ id: 'manual-9', hm: '' }); };
+  });
+
+  // ---- a superseded delete response neither resurrects rows nor strands the page ----
+  const del = harness(base);
+  del.pendingDelId = base[1].id;
+  del.confirmDelete();
+  assert.strictEqual(del.deletes.length, 1, 'the delete is written');
+  del.applyEdit(base[0].id, 'posted', true);
+  del.deletes[0].success({ ok: true, txns: serverCopy(base) });   // the sheet before the tick
+  assert.strictEqual(del.TXNS.length, 2, 'a superseded delete response does not rebuild the list');
+  assert.strictEqual(del.txnById(base[0].id).posted, true, 'and does not resurrect the pre-tick value');
+  const afterTick = serverCopy([base[0]]);
+  afterTick[0].posted = true;
+  del.calls[0].success({ ok: true, txns: afterTick });
+  assert.strictEqual(del.TXNS.length, 1, 'the superseding response brings the authoritative list');
+  assert.strictEqual(del.reads.length, 0, 'which settles the debt without a second read');
 
   // ---- the two call sites that ignore the return value stay on two arguments ----
   const split = extractFunction(script, 'applySplit');
