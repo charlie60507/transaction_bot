@@ -13,7 +13,6 @@ function sample(overrides) {
 
 function run() {
   const src = fs.readFileSync(PANEL, 'utf8');
-  assert.ok(/支出明細[\s\S]*?d\+=editRow\(t\)/.test(src), 'category drill-down uses the existing editor');
   assert.ok(/data-ef="amount"/.test(src), 'expense amount has an editor control');
   assert.ok(/field==='amount'[\s\S]*?金額需大於 0/.test(src), 'client validates amount');
   assert.ok(/getAllTxns\(\)/.test(src), 'successful edits refresh authoritative transactions');
@@ -24,8 +23,12 @@ function run() {
   assert.ok(/currentMine !== '' && currentMine !== null && currentMine !== undefined/.test(server), 'blank 我的消費 keeps non-split charged amount semantics');
   assert.ok(/setValue\(Number\(patch\.amount\)\)/.test(server), 'amount correction persists a validated number');
 
-  const fns = loadFns(['esc', 'fmt', 'isSplitTxn', 'chargedOf', 'splitMark', 'typeColor', 'delBtn', 'mailLink', 'editRow'], {
+  const fns = loadFns(['esc', 'fmt', 'isSplitTxn', 'chargedOf', 'advOf', 'advIn', 'splitMark', 'typeColor', 'delBtn', 'mailLink', 'editRow', 'txnRow', 'categoryTxn', 'rowCard'], {
     openSplit: null,
+    openCategoryTxn: null,
+    openRow: null,
+    PALETTE: ['#5f9aa0'],
+    catDelta: function () { return ''; },
     splitBox: function () { return ''; },
     selOpts: function () { return ''; },
     distinctCats: function () { return ['飲食']; }
@@ -37,7 +40,26 @@ function run() {
 
   const incomeHtml = fns.editRow(sample({ type: '收入' }));
   assert.strictEqual(incomeHtml.indexOf('data-ef="amount"'), -1, 'income rows do not expose expense amount correction');
-  assert.ok(/t\.type==='支出'\?'<input class="amtcor/.test(src), 'amount correction is guarded by expense type');
+  assert.ok(incomeHtml.includes('+$120'), 'income amount remains visible');
+  const transferHtml = fns.editRow(sample({ type: '轉帳' }));
+  assert.ok(transferHtml.includes('$120'), 'transfer amount remains visible');
+  assert.ok(transferHtml.includes('data-amt='), 'transfer retains its existing split control');
+  assert.ok(!transferHtml.includes('data-ef="amount"'), 'transfer does not gain expense correction');
+  assert.ok(html.indexOf('data-ef="amount"') > html.indexOf('class="er2"'), 'amount correction does not crowd the merchant line');
+
+  const t = sample();
+  const item = { name: t.cat, total: t.amount, count: 1 };
+  assert.ok(!fns.rowCard(item, 0, 120, [t], null, 1).includes('data-erow='), 'collapsed category mounts no editor');
+  fns.openRow = t.cat;
+  const category = fns.rowCard(item, 0, 120, [t], null, 1);
+  assert.ok(category.includes('data-category-txn="'+t.id+'"'), 'expanded category lists selectable transactions');
+  assert.ok(category.includes('aria-expanded="false"'), 'transaction starts collapsed');
+  assert.ok(!category.includes('data-erow='), 'category expansion does not open every editor');
+  fns.openCategoryTxn = t.id;
+  const selected = fns.rowCard(item, 0, 120, [t], null, 1);
+  assert.ok(selected.includes('aria-expanded="true"'), 'selected transaction is expanded');
+  assert.ok(selected.includes('data-erow="'+t.id+'"'), 'selected transaction mounts the shared editor');
+  assert.ok(!fns.categoryTxn(sample({id:'another-row'})).includes('data-erow='), 'other transactions stay collapsed');
   assert.ok(/rowType[\s\S]*只有支出交易可以修正金額/.test(server), 'server rejects amount patches for non-expense rows');
 }
 
