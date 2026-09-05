@@ -767,8 +767,9 @@
   // list leaves the page holding the row's OLD id; findRowByKey_ matches on the full five-part
   // key, so the NEXT write to that row throws 找不到該筆交易, and this page has no polling and no
   // refresh control to recover with. A drop is therefore REMEMBERED: settle() records the debt and
-  // refreshTxns() pays it with one read once the last in-flight mutation has landed. Convergence
-  // is that refetch, not the guard.
+  // refreshTxns() pays it with one read once the last in-flight mutation has landed — and that read
+  // re-books itself if a mutation supersedes it too, so the debt survives an arbitrarily long run
+  // of writes. Convergence is that refetch, not the guard.
   var MUTATION_SEQ=0, INFLIGHT=0, STALE_DROPPED=false, REFRESHING=false;
   function nextMutation(){ MUTATION_SEQ++; INFLIGHT++; return MUTATION_SEQ; }
   function isStale(seq){ return seq!==MUTATION_SEQ; }
@@ -793,9 +794,16 @@
 
   /**
    * Pay the debt a discarded response left behind: ONE read of the authoritative list, adopted
-   * only while it is still current, repainting only when it differs from what is on screen. A read
-   * that a newer mutation has itself superseded re-books the debt instead of being adopted, and so
-   * does a failed one — the next mutation to settle tries again.
+   * only while it is still current, repainting only when it differs from what is on screen.
+   *
+   * A read the page superseded while it was in flight cannot be adopted — but the debt it went
+   * out to pay is still outstanding, so it RE-BOOKS ITSELF and, when nothing is in flight, goes
+   * straight back out. Waiting for the next settle() is not enough: INFLIGHT===0 is not proof the
+   * page is quiescent, because bulkPost settles row i and issues row i+1 synchronously in the same
+   * handler. The refetch armed there is stale before its response can return, and no settle
+   * follows the last row — so a read that only re-books would leave the page on the pre-edit row
+   * key for good. A read that FAILS re-books without retrying on the spot: an unreachable server
+   * would otherwise be asked again immediately, and the next mutation to settle tries anyway.
    */
   function refreshTxns(){
     if(REFRESHING) return;
@@ -804,7 +812,7 @@
     google.script.run
       .withSuccessHandler(function(data){
         REFRESHING=false;
-        if(isStale(seq)){ STALE_DROPPED=true; return; }
+        if(isStale(seq)){ STALE_DROPPED=true; if(INFLIGHT===0) refreshTxns(); return; }
         if(adoptTxns(data)) repaint();
       })
       .withFailureHandler(function(){ REFRESHING=false; STALE_DROPPED=true; })

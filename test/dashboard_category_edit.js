@@ -20,7 +20,7 @@ function run() {
   // nothing about editing. The contract is now one round trip: updateTxn returns the
   // authoritative list itself, and applyEdit never fetches it separately.
   const applyEditSrc = extractFunction(extractInlineScript(src), 'applyEdit');
-  assert.ok(/\.updateTxn\(id, patch, true\);/.test(applyEditSrc),
+  assert.ok(/\.updateTxn\(\s*id,\s*patch,\s*true\s*\)/.test(applyEditSrc),
     'successful edits refresh authoritative transactions in the same call that writes them');
   assert.ok(!/getAllTxns/.test(applyEditSrc),
     'the edit path does not follow a successful write with a second fetch');

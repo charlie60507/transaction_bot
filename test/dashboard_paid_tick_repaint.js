@@ -264,6 +264,17 @@ function run() {
     keys.focusKey({ tagName: 'INPUT', id: '', attributes: [{ name: 'data-emer', value: 'msg-a|1000|120|1234|0' }] }),
     'input[data-emer="msg-a|1000|120|1234|0"]', 'a row control is named by its data attribute');
   assert.strictEqual(keys.focusKey({ tagName: 'BODY', id: '', attributes: [] }), null, 'body carries no identity');
+  // A value carrying a quote or a backslash would need CSS escaping; the selector is abandoned
+  // rather than handed to querySelector half-formed (which throws, and takes the repaint with it).
+  assert.strictEqual(keys.focusKey({ tagName: 'INPUT', id: '', attributes: [{ name: 'data-id', value: 'a"b' }] }),
+    null, 'a value needing CSS escaping gives up instead of building a malformed selector');
+  assert.strictEqual(keys.focusKey({ tagName: 'INPUT', id: '', attributes: [{ name: 'data-id', value: 'a' + String.fromCharCode(92) + 'b' }] }),
+    null, 'and so does a backslash');
+  // .length, not deepStrictEqual: the empty list is built inside the sandbox, so its Array
+  // prototype is not this file's.
+  assert.strictEqual(
+    keys.focusMatches({ querySelectorAll: function () { throw new Error('bad selector'); } }, 'input[data-id="x"]').length,
+    0, 'a selector the DOM rejects yields no matches rather than aborting the repaint');
   // The search box's own restoration is gone — checked on the handler-binding function alone, and
   // by what it does NOT mention, so it does not depend on how the line happens to be formatted.
   // What repaint() actually does with that focus is asserted below, against a stub DOM.
@@ -345,6 +356,109 @@ function run() {
     return function () { h.adds[0].success({ id: 'manual-9', hm: '' }); };
   });
 
+  // ---- a MULTI-ROW bulk post supersedes the very refetch it just armed ----
+  // INFLIGHT===0 is not proof the page is quiescent. bulkPost settles row i and issues row i+1
+  // SYNCHRONOUSLY in the same handler, so the refetch settle() arms while row i is coming home is
+  // already superseded before its own response can return. Dropping it there and waiting for the
+  // next settle strands the page on the PRE-EDIT row key — nothing settles after the last row —
+  // which is exactly the 找不到該筆交易 the debt exists to prevent. The read has to re-book ITSELF.
+  const third = other({ id: 'msg-c|3000|60|9999|0', merchant: '7-11', amount: 60, charged: 60 });
+  function bulkBase() { return [base[0], base[1], third]; }
+  // What the sheet looked like BEFORE the bulk post, with the amount edit already applied: the
+  // list the armed read is answered with. Adopting it would un-post the rows just ticked.
+  function preBulkList() {
+    const l = serverCopy(bulkBase());
+    l[0].amount = 999; l[0].id = EDITED_ID;
+    return l;
+  }
+  function settledList() {
+    return preBulkList().map(function (t, i) { return i === 0 ? t : Object.assign({}, t, { posted: true }); });
+  }
+  const multi = harness(bulkBase());
+  multi.applyEdit(base[0].id, 'amount', 999);                  // seq 1, still in flight
+  multi.bulkPost([base[1].id, third.id]);                      // seq 2 goes out; the third row waits
+  assert.strictEqual(multi.calls.length, 2, 'bulk post writes one row at a time');
+  multi.calls[0].success({ ok: true, txns: preBulkList() });    // superseded amount edit — dropped
+  assert.strictEqual(multi.reads.length, 0, 'the debt waits while a bulk row is still in flight');
+  multi.calls[1].success({ ok: true });                        // settles row 1 AND issues row 2
+  assert.strictEqual(multi.reads.length, 1, 'the debt arms a refetch the moment INFLIGHT hits zero');
+  assert.strictEqual(multi.calls.length, 3, 'and the next bulk row goes out in that same handler');
+  multi.calls[2].success({ ok: true });                        // the last row: nothing settles after it
+  multi.reads[0].success(preBulkList());                       // the read was stale before it returned
+  assert.strictEqual(multi.TXNS[1].posted, true, 'a superseded read does not un-post the bulk rows');
+  assert.strictEqual(multi.TXNS[2].posted, true, 'a superseded read does not un-post the bulk rows');
+  assert.strictEqual(multi.reads.length, 2,
+    'a refetch that is superseded on arrival re-books itself — no later settle is coming');
+  multi.reads[1].success(settledList());
+  assert.strictEqual(multi.TXNS[0].id, EDITED_ID,
+    'the page converges on the post-edit row key the next write has to send');
+  assert.strictEqual(multi.reads.length, 2, 'and the retry that adopted a current list stops there');
+
+  // ---- every counter-bumping call site settles on FAILURE too ----
+  // A rejected write must book its end as well, or INFLIGHT never returns to zero and the debt a
+  // dropped list left behind is never repaid — the page keeps the stale row key for good.
+  function debtPaidByFailedMutation(name, issue, reject) {
+    const h = harness(base);
+    h.applyEdit(base[0].id, 'amount', 999);                    // seq 1
+    issue(h);                                                  // seq 2, from the site under test
+    h.calls[0].success({ ok: true, txns: editedList() });       // superseded — booked, not adopted
+    assert.strictEqual(h.reads.length, 0, name + ': the debt waits for the in-flight write');
+    reject(h);                                                 // that write is REJECTED
+    assert.strictEqual(h.reads.length, 1, name + ': a rejected write settles, so the debt is repaid');
+    h.reads[0].success(editedList());
+    assert.strictEqual(h.TXNS[0].id, EDITED_ID, name + ': and the page ends on the post-edit row key');
+  }
+  const boom = function (h, take) { return function () { take(h).failure(new Error('boom')); }; };
+  debtPaidByFailedMutation('applyEdit',
+    function (h) { h.applyEdit(base[1].id, 'posted', true); },
+    function (h) { boom(h, function (x) { return x.calls[1]; })(); });
+  debtPaidByFailedMutation('applySplit',
+    function (h) { h.applySplit(base[1].id, '50'); },
+    function (h) { boom(h, function (x) { return x.calls[1]; })(); });
+  debtPaidByFailedMutation('bulkPost',
+    function (h) { h.bulkPost([base[1].id]); },
+    function (h) { boom(h, function (x) { return x.calls[1]; })(); });
+  debtPaidByFailedMutation('submitAdd',
+    function (h) { h.submitAdd(); },
+    function (h) { boom(h, function (x) { return x.adds[0]; })(); });
+  debtPaidByFailedMutation('confirmDelete',
+    function (h) { h.pendingDelId = base[1].id; h.confirmDelete(); },
+    function (h) { boom(h, function (x) { return x.deletes[0]; })(); });
+
+  // ---- the refetch's own bookkeeping: one read at a time, re-booked when it cannot be used ----
+  // A read that FAILS leaves the debt outstanding for the next settle to retry.
+  const retry = harness(base);
+  retry.applyEdit(base[0].id, 'amount', 999);                  // seq 1
+  retry.applySplit(base[1].id, '50');                          // seq 2 supersedes it
+  retry.calls[0].success({ ok: true, txns: editedList() });     // dropped and booked
+  retry.calls[1].success({ ok: true });                        // settles at zero → read #1
+  assert.strictEqual(retry.reads.length, 1, 'the drop is repaid with one read');
+  retry.reads[0].failure(new Error('offline'));
+  assert.strictEqual(retry.reads.length, 1, 'a failed read does not retry on the spot');
+  retry.applySplit(base[1].id, '60');                          // the next mutation, adopting no list
+  retry.calls[2].success({ ok: true });
+  assert.strictEqual(retry.reads.length, 2, 'a failed read is re-booked and retried by the next settle');
+  retry.reads[1].success(editedList());
+  assert.strictEqual(retry.TXNS[0].id, EDITED_ID, 'the retried read is what converges the page');
+
+  // A read already in flight is never duplicated: a second drop rides on the one that is out.
+  const once = harness(base);
+  once.applyEdit(base[0].id, 'amount', 999);                   // seq 1
+  once.applySplit(base[1].id, '50');                           // seq 2
+  once.calls[0].success({ ok: true, txns: editedList() });      // dropped and booked
+  once.calls[1].success({ ok: true });                         // → read #1, in flight from here on
+  assert.strictEqual(once.reads.length, 1, 'one read for the first drop');
+  once.applyEdit(base[0].id, 'posted', true);                  // seq 3
+  once.applySplit(base[1].id, '70');                           // seq 4 supersedes it
+  once.calls[2].success({ ok: true, txns: editedList() });      // a SECOND drop, while read #1 is out
+  once.calls[3].success({ ok: true });                         // settles at zero → would refetch
+  assert.strictEqual(once.reads.length, 1, 'a read already in flight is not duplicated');
+  once.reads[0].success(serverCopy(base));                     // superseded on arrival
+  assert.strictEqual(once.reads.length, 2, 'the in-flight read carries both drops and re-issues once');
+  assert.strictEqual(once.TXNS[0].id, base[0].id, 'the superseded read is not adopted');
+  once.reads[1].success(editedList());
+  assert.strictEqual(once.TXNS[0].id, EDITED_ID, 'and the page still converges on the post-edit key');
+
   // ---- a superseded delete response neither resurrects rows nor strands the page ----
   const del = harness(base);
   del.pendingDelId = base[1].id;
@@ -361,12 +475,23 @@ function run() {
   assert.strictEqual(del.reads.length, 0, 'which settles the debt without a second read');
 
   // ---- the two call sites that ignore the return value stay on two arguments ----
+  // Behaviourally first — the recording stub captures the third argument, so "asks for no list"
+  // is an observation rather than a whitespace-exact match on the file's text.
+  const arity = harness(base);
+  arity.applySplit(base[0].id, '50');
+  assert.strictEqual(arity.calls[0].wantTxns, undefined, 'applySplit asks for no list');
+  arity.calls[0].success({ ok: true });
+  arity.bulkPost([base[1].id]);
+  assert.strictEqual(arity.calls[1].wantTxns, undefined, 'a bulk row asks for no list');
+  arity.calls[1].success({ ok: true });
+  assert.strictEqual(arity.reads.length, 0, 'and an ordinary run of either pays for no extra read');
+
   const split = extractFunction(script, 'applySplit');
-  assert.ok(/\.updateTxn\(id, \{ mine: \(v==null\?'':v\) \}\);/.test(split), 'applySplit still calls updateTxn with two arguments');
+  assert.ok(/\.updateTxn\(\s*id,\s*\{\s*mine:\s*\(v==null\?'':v\)\s*\}\s*\)/.test(split), 'applySplit still calls updateTxn with two arguments');
   assert.ok(!/getAllTxns/.test(split), 'applySplit does not fetch the full list');
-  assert.ok(/revertTxn\(id, \{ mine:prevMine, amount:prevAmt \}\)/.test(split), 'applySplit reverts by re-resolving its row');
+  assert.ok(/revertTxn\(\s*id,\s*\{\s*mine:prevMine,\s*amount:prevAmt\s*\}\s*\)/.test(split), 'applySplit reverts by re-resolving its row');
   const bulk = extractFunction(script, 'bulkPost');
-  assert.ok(/\.updateTxn\(todo\[i\], \{ posted:true \}\);/.test(bulk), 'bulkPost still calls updateTxn with two arguments');
+  assert.ok(/\.updateTxn\(\s*todo\[i\],\s*\{\s*posted:true\s*\}\s*\)/.test(bulk), 'bulkPost still calls updateTxn with two arguments');
   assert.ok(!/getAllTxns/.test(bulk), 'a ten-row bulk post does not pull ten copies of the table');
   const edit = extractFunction(script, 'applyEdit');
   assert.ok(!/getAllTxns/.test(edit), 'the edit path no longer refetches after a successful write');
