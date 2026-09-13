@@ -181,6 +181,12 @@
     display: flex; align-items: flex-start; justify-content: flex-end; padding: 3px 4px; position: relative; }
   @media (max-width: 520px) { .cell { aspect-ratio: 1.15; max-height: none; } }
   .cell .dn { font-size: 10px; color: var(--text-muted); opacity: .7; }
+  .cell .hadd { position: absolute; left: 2px; bottom: 2px; width: 30px; height: 30px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent;
+    border-radius: 5px; background: transparent; color: var(--text-muted); font: inherit; font-size: 16px;
+    line-height: 1; cursor: pointer; opacity: .75; }
+  .cell .hadd:hover { background: rgba(255,255,255,.07); border-color: var(--border); color: var(--text-primary); opacity: 1; }
+  .cell .hadd:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; color: var(--text-primary); opacity: 1; }
   /* Income/transfer-only hit: 4px muted dot. Borders already mean today/sel. */
   .cell .mark { position: absolute; left: 50%; bottom: 5px; width: 4px; height: 4px; margin-left: -2px;
     border-radius: 50%; background: var(--text-muted); pointer-events: none; }
@@ -356,6 +362,7 @@
   var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all',
                 inboxScope:'all', inboxDone:false };
   var openRow=null, openProj=null, openHeatDay=null, openSplit=null;
+  var addHeatDate=null;
   var openCategoryTxn=null;
 
   // ---------- 我的消費 (advanced-money split) ----------
@@ -983,11 +990,12 @@
       })
       .deleteTxn({ id: id });
   }
-  function openAddModal(){
+  function openAddModal(date){
     var ov=document.getElementById('addOverlay'); if(!ov) return;
+    addHeatDate=(typeof date==='string'&&date)?date:null;
     document.getElementById('a-cat').innerHTML='<option value="">（未分類）</option>'+realCats().map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>';}).join('');
     document.getElementById('a-tag').value='';
-    var di=document.getElementById('a-date'); di.value=NOW.year+'-'+('0'+NOW.month).slice(-2)+'-'+('0'+NOW.day).slice(-2);
+    var di=document.getElementById('a-date'); di.value=addHeatDate||(NOW.year+'-'+('0'+NOW.month).slice(-2)+'-'+('0'+NOW.day).slice(-2));
     // 時間每次都清空:上一筆的時間留在欄位裡,下一筆會被安靜地標上一個從沒發生過的時刻。
     document.getElementById('a-time').value='';
     // Options and default both come from the data: a hardcoded default would
@@ -1001,7 +1009,7 @@
     document.getElementById('a-amt').classList.remove('bad'); di.classList.remove('bad');
     ov.classList.add('on');
   }
-  function closeAddModal(){ var ov=document.getElementById('addOverlay'); if(ov) ov.classList.remove('on'); }
+  function closeAddModal(){ addHeatDate=null; var ov=document.getElementById('addOverlay'); if(ov) ov.classList.remove('on'); }
   function submitAdd(){
     var di=document.getElementById('a-date'), ai=document.getElementById('a-amt');
     var date=di.value, amt=Number(ai.value), ok=true;
@@ -1013,19 +1021,40 @@
     var time=document.getElementById('a-time').value;
     var fields={ date:date, time:time, amount:amt, type:document.getElementById('a-type').value, source:document.getElementById('a-source').value.trim(), merchant:document.getElementById('a-mer').value, cat:document.getElementById('a-cat').value, tag:document.getElementById('a-tag').value.trim() };
     var p=date.split('-');
+    var contextual=typeof addHeatDate!=='undefined'&&addHeatDate!==null;
+    var navBefore=contextual?{ scope:state.scope, selYear:state.selYear, selMonth:state.selMonth, openHeatDay:openHeatDay }:null;
     // hm on the optimistic row too, or a 19:40 entry appears first in its day and then jumps
     // into place the moment the server's row lands.
     var temp={ y:+p[0], m:+p[1], d:+p[2], hm:time, type:fields.type, amount:amt, cat:fields.cat||'未分類', merchant:fields.merchant, tag:fields.tag, bank:fields.source, last4:'', link:'', id:'manual-temp-'+(TXNS.length+1), posted:true };
     // A manual add is a local mutation too, and it adopts no list of its own — so it settles
     // through settle(), which is what makes an edit response it superseded get refetched.
+    if(contextual){
+      state.scope=p[0]+'-'+('0'+(+p[1])).slice(-2); state.selYear=+p[0]; state.selMonth=+p[1];
+      openHeatDay=(+p[0])+'-'+(+p[1])+'-'+(+p[2]);
+    }
     TXNS.push(temp); closeAddModal(); render();
     var addSeq=nextMutation();
     // The success handler adopts the server's hm as well as its id: the server decides what
     // counts as "no time" (midnight does not count), so taking its answer keeps this row
     // identical to what the next reload will show, without restating that rule here.
     google.script.run
-      .withSuccessHandler(function(nt){ if(nt&&nt.id) temp.id=String(nt.id); if(nt) temp.hm=(nt.hm==null)?'':String(nt.hm); settle(addSeq, null); toast('已新增 · 已記帳 ✓'); render(); })
-      .withFailureHandler(function(err){ var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1); settle(addSeq, null); render(); toast('新增失敗:'+((err&&err.message)||err), true); })
+      .withSuccessHandler(function(nt){
+        if(nt&&nt.id) temp.id=String(nt.id);
+        if(nt){
+          temp.hm=(nt.hm==null)?'':String(nt.hm);
+          if(nt.y!=null) temp.y=+nt.y; if(nt.m!=null) temp.m=+nt.m; if(nt.d!=null) temp.d=+nt.d;
+        }
+        if(contextual){
+          state.scope=temp.y+'-'+('0'+temp.m).slice(-2); state.selYear=temp.y; state.selMonth=temp.m;
+          openHeatDay=temp.y+'-'+temp.m+'-'+temp.d;
+        }
+        settle(addSeq, null); toast('已新增 · 已記帳 ✓'); render();
+      })
+      .withFailureHandler(function(err){
+        var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1);
+        if(contextual){ state.scope=navBefore.scope; state.selYear=navBefore.selYear; state.selMonth=navBefore.selMonth; openHeatDay=navBefore.openHeatDay; }
+        settle(addSeq, null); render(); toast('新增失敗:'+((err&&err.message)||err), true);
+      })
       .addTxn(fields);
   }
   /**
@@ -1288,7 +1317,8 @@
       var t=maxDay>0?v/maxDay:0, bg=(future||v<=0)?'var(--bg-raised)':blendSpend(0.18+t*0.72);
       var hit=x.kind!=='inert', sel=hit&&openHeatDay===(y+'-'+m+'-'+dd);
       var dot=x.kind==='zero-spend-hit';
-      grid+='<div class="cell'+(future?' future':'')+(today?' today':'')+(hit?' hit':'')+(sel?' sel':'')+'"'+(hit?' data-hday="'+y+'-'+m+'-'+dd+'"':'')+' style="background:'+bg+'" title="'+y+'/'+m+'/'+dd+(future?'':' $'+fmt(v))+'"><span class="dn num">'+dd+'</span>'+(dot?'<i class="mark"></i>':'')+'</div>';
+      var iso=y+'-'+('0'+m).slice(-2)+'-'+('0'+dd).slice(-2);
+      grid+='<div class="cell'+(future?' future':'')+(today?' today':'')+(hit?' hit':'')+(sel?' sel':'')+'"'+(hit?' data-hday="'+y+'-'+m+'-'+dd+'"':'')+' style="background:'+bg+'" title="'+y+'/'+m+'/'+dd+(future?'':' $'+fmt(v))+'"><span class="dn num">'+dd+'</span>'+(dot?'<i class="mark"></i>':'')+'<button type="button" class="hadd" data-hadd="'+iso+'" aria-label="新增 '+y+'/'+m+'/'+dd+' 交易">＋</button></div>';
     });
     grid+='</div>';
     var tip='<div class="heat-tip"><span>最高:<b class="num">'+(peak.d?m+'/'+peak.d+' · $'+fmt(peak.v):'—')+'</b></span><span>有消費 <b class="num">'+spentDays+'</b> 天</span><span>日均 <b class="num">$'+fmt(lastDay?total/lastDay:0)+'</b></span><span style="margin-left:auto;opacity:.85">點有交易的日子看當天明細</span></div>';
@@ -1371,6 +1401,7 @@
     app.querySelectorAll('.tabs button').forEach(function(b){ b.onclick=function(){ state.tab=this.getAttribute('data-tab'); openRow=null; openProj=null; openHeatDay=null; render(); }; });
     app.querySelectorAll('.ctl[data-scope]').forEach(function(b){ b.onclick=function(){ var s=this.getAttribute('data-scope'); state.scope=s; if(s==='year'){state.selYear=NOW.year;state.selMonth=0;} else if(s==='month'){state.selYear=NOW.year;state.selMonth=NOW.month;} openRow=null; openHeatDay=null; render(); }; });
     app.querySelectorAll('.cell[data-hday]').forEach(function(c){ c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); }; });
+    app.querySelectorAll('[data-hadd]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); openAddModal(this.getAttribute('data-hadd')); }; });
     app.querySelectorAll('[data-ef]').forEach(function(el){
       el.onchange=function(e){ e.stopPropagation(); applyEdit(this.getAttribute('data-id'), this.getAttribute('data-ef'), this.value.trim()); };
       if(el.tagName==='INPUT'){ el.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } }; }
@@ -1413,7 +1444,7 @@
         } else note.hidden=true;
       };
     });
-    var addB=app.querySelector('[data-add]'); if(addB) addB.onclick=openAddModal;
+    var addB=app.querySelector('[data-add]'); if(addB) addB.onclick=function(){ openAddModal(null); };
     app.querySelectorAll('[data-del]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); deleteTxnRow(this.getAttribute('data-del')); }; });
     app.querySelectorAll('.ctl[data-pscope]').forEach(function(b){ b.onclick=function(){ state.projScope=this.getAttribute('data-pscope'); openProj=null; render(); }; });
     app.querySelectorAll('.ctl[data-iscope]').forEach(function(b){ b.onclick=function(){ state.inboxScope=this.getAttribute('data-iscope'); render(); }; });
