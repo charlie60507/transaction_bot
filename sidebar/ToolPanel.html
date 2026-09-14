@@ -411,6 +411,7 @@
   function periodLabel(r){ if(r.level==='all') return '全部期間'; if(r.level==='year') return r.year+' 全年'+(r.year===NOW.year?'(1–'+NOW.month+' 月)':''); return r.year+' 年 '+r.month+' 月'+(isPartialCur(r)?'(至今 '+NOW.day+' 日)':''); }
   function isIncome(t){ return t.type==='收入'&&t.cat!=='退款'; }
   function isRefund(t){ return t.type==='收入'&&t.cat==='退款'; }
+  function isConsumption(t){ var cat=String(t.cat||'').trim(); return t.type==='支出'||(t.type==='轉帳'&&cat!==''&&cat!=='未分類'); }
   function sumScope(pred,r){ return TXNS.filter(function(t){ return pred(t)&&inScope(t,r); }).reduce(function(s,t){return s+t.amount;},0); }
   function sum(a){ return a.reduce(function(s,t){return s+t.amount;},0); }
   function median(a){ if(!a.length) return 0; var s=a.slice().sort(function(x,y){return x-y;}); return s[Math.floor(s.length/2)]; }
@@ -457,19 +458,19 @@
   // heatmap, the split, the per-category detail — sits here together.
   function periodTab(){
     var r=resolveScope(state.scope), partial=isPartialCur(r);
-    var grossExp=sumScope(function(t){return t.type==='支出';},r);
+    var grossExp=sumScope(isConsumption,r);
     var refunds=sumScope(isRefund,r);
     var expTotal=grossExp-refunds;
     var incTotal=sumScope(isIncome,r);
     var net=incTotal-expTotal;
-    var expList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
+    var expList=TXNS.filter(function(t){return isConsumption(t)&&inScope(t,r);});
     var incCount=TXNS.filter(function(t){return isIncome(t)&&inScope(t,r);}).length, expCount=expList.length;
     // Monthly baselines only mean something for a single month. A year or 全部期間 has no
     // "typical month of the same kind" to sit against, so the comparison is withheld there —
     // same rule the previous-period version used, for the same reason.
     var selKey=(r.level==='month')?r.year+'-'+('0'+r.month).slice(-2):null;
     var prog=monthProgress(r);
-    var baseExp=selKey?monthlyBaseline(function(t){return t.type==='支出';},selKey):null;
+    var baseExp=selKey?monthlyBaseline(isConsumption,selKey):null;
     var baseInc=selKey?monthlyBaseline(isIncome,selKey):null;
 
     var subs=recurring(), subTot=subs.reduce(function(s,x){return s+x.amt;},0), subNames={}; subs.forEach(function(x){ subNames[x.name]=1; });
@@ -503,7 +504,7 @@
       +'<div class="panel"><h3 class="inc">收入來源</h3>'+incomeList(TXNS.filter(function(t){return isIncome(t)&&inScope(t,r);}),incTotal)+'</div>'
       +'</div>';
 
-    var heat=heatPanel(r);
+    var heat=heatPanel(r,isConsumption);
     h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>消費日曆熱力圖 <span class="h3note">'
       + (heat ? r.year+' / '+r.month+' · 每日花費濃淡 · 點有交易的日子看當天明細' : '') + '</span></h3>'
       + (heat || '<div class="empty" style="padding:var(--sp4) 0">熱力圖只在選擇「單一月份」時顯示。目前為'+(r.level==='year'?'整年':'全部期間')+',請切到「當月」或用右上指定某月。</div>')
@@ -522,7 +523,8 @@
   // ---------- 趨勢: only what needs MORE THAN ONE period to mean anything ----------
   function trendTab(){
     var r=resolveScope(state.scope);
-    var expList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
+    var expList=TXNS.filter(function(t){return isConsumption(t)&&inScope(t,r);});
+    var cardExpList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
     var subs=recurring(), subTot=subs.reduce(function(s,x){return s+x.amt;},0), subNames={}; subs.forEach(function(x){ subNames[x.name]=1; });
 
     var h='<div class="panel" style="margin-bottom:var(--sp4)"><h3>每月收支趨勢 <span class="h3note">'+trendMaxNote(r,subNames,subTot)+'</span></h3>'+trendChart(r,subNames,subTot)+'</div>';
@@ -532,10 +534,10 @@
 
     // 信用卡別 sits here rather than on 分析: which card was used is not part of reading a month,
     // it is a slow-moving habit, and it was crowding the page the owner actually reads.
-    h+='<div class="panel"><h3>信用卡別分析 <span class="h3note">各卡本範圍支出</span></h3>'+cardPanel(expList)+'</div>';
+    h+='<div class="panel"><h3>信用卡別分析 <span class="h3note">各卡本範圍支出</span></h3>'+cardPanel(cardExpList)+'</div>';
 
-    // The 轉帳 panel is deliberately absent. Transfers are already excluded from 支出/收入, so
-    // listing them added a section that changed no number and answered no question the owner had.
+    // The 轉帳 panel is deliberately absent. Categorized transfers already participate in
+    // consumption analysis, while payment-type presentation remains on each transaction row.
     return h;
   }
   function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+(t.tag?' <span class="cat">'+esc(t.tag)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+splitMark(t)+'</span></div>'; }
@@ -599,7 +601,7 @@
     var idx={}; keys.forEach(function(k,i){ idx[k]=i; });
     var per={};   // cat -> array of monthly totals, one slot per baseline month
     TXNS.forEach(function(t){
-      if(t.type!=='支出') return;
+      if(!isConsumption(t)) return;
       var i=idx[t.y+'-'+('0'+t.m).slice(-2)]; if(i===undefined) return;
       if(!per[t.cat]){ per[t.cat]=[]; for(var j=0;j<keys.length;j++) per[t.cat].push(0); }
       per[t.cat][i]+=t.amount;
@@ -629,7 +631,7 @@
   }
   function incomeList(list,incTotal){ if(!list.length) return '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">此範圍沒有收入</div>'; var imap={}; list.forEach(function(t){ imap[t.cat]=(imap[t.cat]||0)+t.amount; }); var items=Object.keys(imap).map(function(k){return {name:k,total:imap[k]};}).sort(function(a,b){return b.total-a.total;}); var out=''; items.forEach(function(it){ var pct=incTotal>0?it.total/incTotal*100:0; out+='<div style="padding:6px 0;border-bottom:1px solid var(--border)"><div class="lrow" style="padding:0;border:none"><span class="ln">'+esc(it.name)+'</span><span class="la inc num">$'+fmt(it.total)+'</span></div><div class="sharebar"><i style="width:'+pct.toFixed(0)+'%"></i></div></div>'; }); out+='<div class="ltot"><span class="t-l">收入合計</span><span class="t-v num" style="color:var(--income)">$'+fmt(incTotal)+'</span></div>'; return out; }
   function monthsBack(n){ var arr=[],y=NOW.year,mm=NOW.month; for(var i=0;i<n;i++){ arr.unshift({y:y,m:mm}); mm--; if(mm<1){mm=12;y--;} } return arr; }
-  function trendData(r,subNames,subTot){ var months=r.level==='year'?(function(){ var a=[],last=(r.year===NOW.year)?NOW.month:12; for(var m=1;m<=last;m++)a.push({y:r.year,m:m}); return a; })():monthsBack(6); return months.map(function(o){ var e=0,in_=0,exps=[]; TXNS.forEach(function(t){ if(t.y===o.y&&t.m===o.m){ if(t.type==='支出'){e+=t.amount; exps.push(t);} else if(isIncome(t)) in_+=t.amount; } }); var dim=daysInMonth(o.y,o.m); var part=(o.y===NOW.year&&o.m===NOW.month&&NOW.day<dim); var proj=part?projectMonth(exps,NOW.day,dim,subNames||{},subTot||0):e; return {label:o.m+'月',exp:e,inc:in_,partial:part,proj:proj,net:in_-e}; }); }
+  function trendData(r,subNames,subTot){ var months=r.level==='year'?(function(){ var a=[],last=(r.year===NOW.year)?NOW.month:12; for(var m=1;m<=last;m++)a.push({y:r.year,m:m}); return a; })():monthsBack(6); return months.map(function(o){ var e=0,in_=0,exps=[]; TXNS.forEach(function(t){ if(t.y===o.y&&t.m===o.m){ if(isConsumption(t)){e+=t.amount; exps.push(t);} else if(isIncome(t)) in_+=t.amount; } }); var dim=daysInMonth(o.y,o.m); var part=(o.y===NOW.year&&o.m===NOW.month&&NOW.day<dim); var proj=part?projectMonth(exps,NOW.day,dim,subNames||{},subTot||0):e; return {label:o.m+'月',exp:e,inc:in_,partial:part,proj:proj,net:in_-e}; }); }
   function trendMaxNote(r,sn,st){ var d=trendData(r,sn,st); var mx=Math.max.apply(null,d.map(function(x){return Math.max(x.proj,x.inc);})); return '單月上限 $'+fmt(mx); }
   function trendChart(r,sn,st){
     var data=trendData(r,sn,st), max=Math.max(1,Math.max.apply(null,data.map(function(d){return Math.max(d.proj,d.inc);})));
@@ -642,7 +644,7 @@
       out+='<div class="tcol'+(d.partial?' partial':'')+'"><div class="tbars"><i class="b-inc" style="height:'+Math.max(2,hi)+'px" title="收入 $'+fmt(d.inc)+'"></i><div class="spendstack">'+(hp>0?'<i class="b-proj" style="height:'+hp+'px" title="預估再增 $'+fmt(d.proj-d.exp)+'"></i>':'')+'<i class="b-exp" style="height:'+Math.max(2,he)+'px;border-radius:'+expTop+'" title="支出 $'+fmt(d.exp)+'"></i></div></div><div class="tlabel">'+d.label+(d.partial?' 至今':'')+'</div><div class="tnetv" style="color:'+netc+'" title="淨額 '+(d.net>=0?'+':'−')+'$'+fmt(Math.abs(d.net))+'">淨'+nets+'</div></div>'; });
     return '<div class="trend">'+out+'</div><div class="tlegend"><span><i style="background:var(--income)"></i>收入</span><span><i style="background:var(--spend)"></i>支出</span><span><i class="proj"></i>月底預估</span><span>「淨」=當月收支差</span></div>';
   }
-  function recurring(){ var m={}; TXNS.filter(function(t){return t.type==='支出';}).forEach(function(t){ var k=t.y+'-'+('0'+t.m).slice(-2); if(!m[t.merchant])m[t.merchant]={}; m[t.merchant][k]=(m[t.merchant][k]||0)+t.amount; }); var recent=monthsBack(6).map(function(o){return o.y+'-'+('0'+o.m).slice(-2);}); var last2=recent.slice(-2); var out=[]; Object.keys(m).forEach(function(name){ var present=recent.filter(function(k){return m[name][k]!=null;}); if(present.length<4) return; if(!last2.some(function(k){return m[name][k]!=null;})) return; var amts=present.map(function(k){return m[name][k];}); var med=median(amts); if(amts.every(function(a){return Math.abs(a-med)<=med*0.12;})) out.push({name:name,amt:med}); }); return out.sort(function(a,b){return b.amt-a.amt;}); }
+  function recurring(){ var m={}; TXNS.filter(isConsumption).forEach(function(t){ var k=t.y+'-'+('0'+t.m).slice(-2); if(!m[t.merchant])m[t.merchant]={}; m[t.merchant][k]=(m[t.merchant][k]||0)+t.amount; }); var recent=monthsBack(6).map(function(o){return o.y+'-'+('0'+o.m).slice(-2);}); var last2=recent.slice(-2); var out=[]; Object.keys(m).forEach(function(name){ var present=recent.filter(function(k){return m[name][k]!=null;}); if(present.length<4) return; if(!last2.some(function(k){return m[name][k]!=null;})) return; var amts=present.map(function(k){return m[name][k];}); var med=median(amts); if(amts.every(function(a){return Math.abs(a-med)<=med*0.12;})) out.push({name:name,amt:med}); }); return out.sort(function(a,b){return b.amt-a.amt;}); }
   function subPanel(subs,tot){ if(!subs.length) return '<div style="color:var(--text-muted);font-size:12px">未偵測到定期扣款</div>'; var out=''; subs.forEach(function(x){ out+='<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls">每月</span><span class="la num">$'+fmt(x.amt)+'</span></div>'; }); out+='<div class="ltot"><span class="t-l">每月合計</span><span class="t-v num">$'+fmt(tot)+'</span></div>'; return out; }
   function topMerchants(exp){ var m={}; exp.forEach(function(t){ if(!m[t.merchant])m[t.merchant]={total:0,count:0}; m[t.merchant].total+=t.amount; m[t.merchant].count++; }); var arr=Object.keys(m).map(function(k){return {name:k,total:m[k].total,count:m[k].count};}).sort(function(a,b){return b.total-a.total;}).slice(0,6); if(!arr.length) return '<div style="color:var(--text-muted);font-size:12px">無資料</div>'; var out=''; arr.forEach(function(x){ out+='<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls num">'+x.count+' 筆</span><span class="la num">$'+fmt(x.total)+'</span></div>'; }); return out; }
   /** vs-monthly-mean chip for one category. `catBase` null ⇒ nothing comparable, render nothing
@@ -1187,7 +1189,7 @@
     var all=TXNS.filter(function(t){ return t.y===y&&t.m===m&&t.d===sd; })
                 .sort(byTimeThenAmount);
     var pendN=all.filter(function(t){ return !t.posted; }).length;
-    var spendList=all.filter(function(t){ return t.type==='支出'; });
+    var spendList=all.filter(isConsumption);
     var spend=spendList.reduce(function(s,t){ return s+t.amount; },0);
     var advDay=advIn(spendList);
     var h='<div class="hdetail"><div class="ev-head"><span class="lbl">'+m+' / '+sd+' 當天 · <b style="color:var(--text-primary)">'+all.length+'</b> 筆 · 支出 <b class="num" style="color:var(--text-primary)">$'+fmt(spend)+'</b>'
@@ -1247,13 +1249,13 @@
     if(state.inboxScope === 'year') pool = pool.filter(function(t){ return t.y === NOW.year; });
 
     var pendScoped = pool.filter(function(t){ return !t.posted; });
-    var pendSpend = pendScoped.filter(function(t){ return t.type==='支出'; }).reduce(function(s,t){ return s+t.amount; },0);
+    var pendSpend = pendScoped.filter(isConsumption).reduce(function(s,t){ return s+t.amount; },0);
     var oldest = pendScoped.slice().sort(function(a,b){ return dayKeyOf(a).localeCompare(dayKeyOf(b)); })[0];
     var dayCount = Object.keys(pendScoped.reduce(function(m,t){ m[dayKeyOf(t)]=1; return m; },{})).length;
 
     var h = '<div class="kpis k3">'
       + kpi('待記帳筆數', fmt(pendScoped.length), '<div class="k-sub">橫跨 '+dayCount+' 天</div>', pendScoped.length?'spend':'')
-      + kpi('待記帳支出', '$'+fmt(pendSpend), '<div class="k-sub">收入/轉帳不計入</div>', 'spend')
+      + kpi('待記帳支出', '$'+fmt(pendSpend), '<div class="k-sub">含已分類轉帳</div>', 'spend')
       + kpi('最舊一筆', oldest?ageLabel(daysAgo(oldest)):'—',
             '<div class="k-sub">'+(oldest?oldest.y+'/'+oldest.m+'/'+oldest.d:'沒有積壓')+'</div>', '')
       + '</div>';
@@ -1275,7 +1277,7 @@
       var list = groups[k].sort(byTimeThenAmount);
       var p = k.split('-'), y=+p[0], mo=+p[1], dy=+p[2];
       var open = list.filter(function(t){ return !t.posted; });
-      var spend = open.filter(function(t){ return t.type==='支出'; }).reduce(function(s,t){ return s+t.amount; },0);
+      var spend = open.filter(isConsumption).reduce(function(s,t){ return s+t.amount; },0);
       var dow = DOW[new Date(y,mo-1,dy).getDay()];
       h += '<div class="dsec"><span class="dd num">'+y+'/'+('0'+mo).slice(-2)+'/'+('0'+dy).slice(-2)+'</span>'
         + '<span class="dw">(週'+dow+')</span><span class="dage">· '+ageLabel(daysAgo({y:y,m:mo,d:dy}))+'</span>'
@@ -1287,15 +1289,17 @@
     return h + '</div>';
   }
 
-  // Classify one month of TXNS for the heatmap. Intensity stays expense-only; clickability is
-  // "any row, any 收支別, not future". Kinds: inert | spend-hit | zero-spend-hit (income/transfer-only).
-  function heatDaysForMonth(txns, y, m, now){
+  // Classify one month of TXNS for the heatmap. Intensity follows consumption eligibility;
+  // clickability is "any row, any 收支別, not future".
+  function heatDaysForMonth(txns, y, m, now, eligible){
+    // Production passes isConsumption; the default preserves this pure helper's standalone API.
+    eligible=eligible||function(t){ return t.type==='支出'; };
     var dim=daysInMonth(y,m), isCur=(y===now.year&&m===now.month);
     var perDay={}, hasTxn={}, hasExp={};
     txns.forEach(function(t){
       if(t.y!==y||t.m!==m) return;
       hasTxn[t.d]=true;
-      if(t.type==='支出'){ hasExp[t.d]=true; perDay[t.d]=(perDay[t.d]||0)+t.amount; }
+      if(eligible(t)){ hasExp[t.d]=true; perDay[t.d]=(perDay[t.d]||0)+t.amount; }
     });
     var days=[];
     for(var dd=1;dd<=dim;dd++){
@@ -1306,11 +1310,11 @@
     return days;
   }
   // spend calendar heatmap: single-month scope only; current partial month renders future days inert
-  function heatPanel(r){
+  function heatPanel(r,eligible){
     if(r.level!=='month') return '';
     var y=r.year, m=r.month, dim=daysInMonth(y,m);
     var isCur=(y===NOW.year&&m===NOW.month), lastDay=isCur?Math.min(NOW.day,dim):dim;
-    var days=heatDaysForMonth(TXNS,y,m,NOW);
+    var days=heatDaysForMonth(TXNS,y,m,NOW,eligible);
     var maxDay=0; days.forEach(function(x){ if(!x.future) maxDay=Math.max(maxDay,x.v); });
     var first=new Date(y,m-1,1).getDay(), dows=['日','一','二','三','四','五','六'];
     var grid='<div class="cal">'; dows.forEach(function(w){ grid+='<div class="dow">'+w+'</div>'; });
@@ -1335,7 +1339,7 @@
 
   function projectTab(){
     var yScope=state.projScope==='year';
-    var pool=TXNS.filter(function(t){return t.type==='支出'&&t.tag&&(!yScope||t.y===NOW.year);});
+    var pool=TXNS.filter(function(t){return isConsumption(t)&&t.tag&&(!yScope||t.y===NOW.year);});
     var pm={}; pool.forEach(function(t){ if(!pm[t.tag])pm[t.tag]={total:0,count:0,byMonth:{},byCat:{},txns:[],thisMonth:0}; var p=pm[t.tag]; p.total+=t.amount; p.count++; var k=t.y+'-'+('0'+t.m).slice(-2); p.byMonth[k]=(p.byMonth[k]||0)+t.amount; p.byCat[t.cat]=(p.byCat[t.cat]||0)+t.amount; p.txns.push(t); if(t.y===NOW.year&&t.m===NOW.month) p.thisMonth+=t.amount; });
     var projs=Object.keys(pm).map(function(k){return {name:k,d:pm[k]};}).sort(function(a,b){return b.d.total-a.d.total;});
     var grand=projs.reduce(function(s,p){return s+p.d.total;},0), scopeLbl=yScope?NOW.year+' 年':'全部累計', top=projs[0];
