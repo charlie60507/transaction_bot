@@ -24,3 +24,11 @@ build/
 # unaffected by these rules.
 .claude/commands/opsx/
 .claude/skills/openspec-*/
+
+# Codex harness runtime + local agent config. `.codex/config.toml` holds a
+# personal PAT; this repo is PUBLIC, so these must never be committed.
+.codex/
+.agents/
+
+# Local Git worktrees created inside this project.
+.worktrees/
