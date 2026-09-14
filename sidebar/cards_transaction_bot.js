@@ -161,7 +161,7 @@ function appendLast7DaysToSheet() {
             last4 || '',     // D payee account last digits
             amount || '',    // E amount NTD (轉出金額)
             merchant || '',  // F merchant/note (editable)
-            category || '',  // G category — '轉帳', which drives column J
+            category || '',  // G transfer metadata; accounting type is assigned separately in J
             link,            // H Gmail link
             id               // I MessageId
           ];
@@ -307,15 +307,13 @@ function appendLast7DaysToSheet() {
         sh.getRange(startRow, 3, finalLastRow - startRow + 1, 1).setNumberFormat('yyyy/mm/dd hh:mm:ss');
       }
 
-      // For newly appended rows, set column J (收支別) when empty: 轉帳 for transfer
-      // rows (category G === '轉帳'), otherwise default to 支出. The dashboard
-      // identifies transfers solely by J === '轉帳'.
+      // Every newly imported email defaults to an expense. Column G remains the
+      // source/category metadata and does not determine accounting semantics in J.
       const jRange = sh.getRange(startRow, 10, newRows.length, 1); // column J
       const jVals = jRange.getValues();
       for (let i = 0; i < jVals.length; i++) {
         if (jVals[i][0] === "" || jVals[i][0] === null) {
-          const cat = String(newRows[i][6] || '').trim(); // column G (category)
-          jVals[i][0] = (cat === '轉帳') ? '轉帳' : '支出';
+          jVals[i][0] = '支出';
         }
       }
       jRange.setValues(jVals);
