@@ -148,6 +148,8 @@ function getAllTxns() {
     const dt = raw instanceof Date ? raw : new Date(raw);
     if (isNaN(dt.getTime())) continue;           // skip blank / unparseable rows
     const inout = String(row[CFG.IDX_INOUT] || '').trim();
+    const type = inout === '轉帳' ? '轉帳' : (inout === '收入' ? '收入' : '支出');
+    const isTransfer = type === '轉帳';
     // A transfer is money moved between the user's own accounts — identified
     // ONLY by the 收支別 (J) column reading '轉帳', never by the merchant
     // category. Anything else transferred out still counts as normal spend.
@@ -160,16 +162,16 @@ function getAllTxns() {
       // lexicographic order on 'HH:mm' IS chronological order with '' sorting first — which
       // is exactly where a row with no known time belongs. See rowHM_ for what "no time" means.
       hm: rowHM_(dt),
-      type: inout === '轉帳' ? '轉帳' : (inout === '收入' ? '收入' : '支出'),
-      // `amount` is MY CONSUMPTION, already netted of anything fronted for other people.
-      // Normalising here rather than in the page is deliberate: every one of the dashboard's
-      // dozen aggregation sites sums t.amount, so doing it at the source makes them all
-      // correct at once instead of relying on twelve edits none of which fail loudly.
+      type: type,
+      // Expense `amount` is MY CONSUMPTION, already netted of anything fronted for other
+      // people. A transfer has no personal-consumption meaning, so it always keeps the raw
+      // amount and ignores any stale value in that column. Normalising here rather than in the
+      // page is deliberate: every one of the dashboard's dozen aggregation sites sums t.amount.
       // `charged` keeps the real card amount for display; `mine` is the raw cell so the
       // editor knows whether the row is split at all (null ⇒ not split).
-      amount: rowMine_(row, mineIdx),
+      amount: isTransfer ? (Number(row[CFG.IDX_AMOUNT]) || 0) : rowMine_(row, mineIdx),
       charged: Number(row[CFG.IDX_AMOUNT]) || 0,
-      mine: (mineIdx === -1 || row[mineIdx] === '' || row[mineIdx] === null || row[mineIdx] === undefined)
+      mine: (isTransfer || mineIdx === -1 || row[mineIdx] === '' || row[mineIdx] === null || row[mineIdx] === undefined)
         ? null : (isNaN(Number(row[mineIdx])) ? null : Number(row[mineIdx])),
       cat: rowCategory_(row) || '未分類',
       merchant: String(row[CFG.IDX_MERCHANT] || ''),
@@ -190,6 +192,11 @@ function getAllTxns() {
   return out;
 }
 
+/** Transaction types that may correct the displayed amount in the shared editor. */
+function isAmountCorrectionType_(type) {
+  return ['支出', '轉帳'].indexOf(type) !== -1;
+}
+
 /**
  * Write edits back to one Transactions row, located by MessageId (col I) so it
  * is safe against the bot re-sorting rows. `patch` may contain any of:
@@ -198,7 +205,7 @@ function getAllTxns() {
  *   type   -> J (收支別; must be 支出/收入/轉帳)
  *   tag    -> TAG column (by header)
  *   mine   -> 我的消費 column (by header); '' or null clears it (⇒ whole charge is mine)
- *   amount -> displayed amount: 我的消費 for split rows, 金額 for non-split rows
+ *   amount -> raw 金額 for transfers; displayed amount for expenses (我的消費 when split)
  *   posted -> A (已記帳 checkbox; boolean)
  * Returns { ok:true }; throws a clear error the frontend surfaces.
  *
@@ -222,14 +229,18 @@ function updateTxn(messageId, patch, wantTxns) {
   const rowNum = findRowByKey_(sh, messageId);
   if (rowNum === -1) throw new Error('找不到該筆交易 (key=' + messageId + ')');
 
-  if ('amount' in patch) {
+  const editsAmount = 'amount' in patch;
+  const editsMine = 'mine' in patch;
+  const rowType = (editsAmount || editsMine)
+    ? String(sh.getRange(rowNum, CFG.IDX_INOUT + 1).getValue() || '支出').trim()
+    : null;
+
+  if (editsAmount) {
     const amount = Number(patch.amount);
     if (!isFinite(amount) || amount <= 0) throw new Error('金額需大於 0');
-    // Amount correction is intentionally scoped to expense rows. Income and transfer
-    // rows retain their existing editor contract and must not gain a charged-amount write.
-    const rowType = String(sh.getRange(rowNum, CFG.IDX_INOUT + 1).getValue() || '支出');
-    if (rowType !== '支出') throw new Error('只有支出交易可以修正金額');
+    if (!isAmountCorrectionType_(rowType)) throw new Error('只有支出或轉帳交易可以修正金額');
   }
+  if (editsMine && rowType === '轉帳') throw new Error('轉帳交易不能設定我的消費');
 
   if ('merchant' in patch) {
     sh.getRange(rowNum, CFG.IDX_MERCHANT + 1).setValue(String(patch.merchant || ''));
@@ -247,17 +258,17 @@ function updateTxn(messageId, patch, wantTxns) {
     if (tagIdx === -1) throw new Error('找不到 TAG 欄');
     sh.getRange(rowNum, tagIdx + 1).setValue(String(patch.tag || ''));
   }
-  if ('amount' in patch) {
-    // The dashboard's displayed amount is `我的消費` for split rows and `金額` for
-    // ordinary rows. Keep the charged amount untouched when correcting only a split
-    // row's displayed consumption.
-    const mineIdx = getMineColIndex_(sh);
+  if (editsAmount) {
+    // A transfer always corrects raw 金額 without consulting 我的消費. For expenses, the
+    // displayed amount is 我的消費 on split rows and raw 金額 on ordinary rows, preserving
+    // the existing destination and leaving a split row's charged amount untouched.
+    const mineIdx = rowType === '支出' ? getMineColIndex_(sh) : -1;
     const currentMine = mineIdx === -1 ? '' : sh.getRange(rowNum, mineIdx + 1).getValue();
-    const amountIdx = mineIdx !== -1 && currentMine !== '' && currentMine !== null && currentMine !== undefined
+    const amountIdx = rowType === '支出' && mineIdx !== -1 && currentMine !== '' && currentMine !== null && currentMine !== undefined
       ? mineIdx : CFG.IDX_AMOUNT;
     sh.getRange(rowNum, amountIdx + 1).setValue(Number(patch.amount));
   }
-  if ('mine' in patch) {
+  if (editsMine) {
     const mineIdx = ensureMineColIndex_(sh);
     const raw = patch.mine;
     if (raw === '' || raw === null || raw === undefined) {
