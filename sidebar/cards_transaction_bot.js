@@ -307,13 +307,13 @@ function appendLast7DaysToSheet() {
         sh.getRange(startRow, 3, finalLastRow - startRow + 1, 1).setNumberFormat('yyyy/mm/dd hh:mm:ss');
       }
 
-      // Every newly imported email defaults to an expense. Column G remains the
-      // source/category metadata and does not determine accounting semantics in J.
+      // Preserve bank transfers as transfers. For every other imported email,
+      // column G remains source metadata and the accounting type defaults to expense.
       const jRange = sh.getRange(startRow, 10, newRows.length, 1); // column J
       const jVals = jRange.getValues();
       for (let i = 0; i < jVals.length; i++) {
         if (jVals[i][0] === "" || jVals[i][0] === null) {
-          jVals[i][0] = '支出';
+          jVals[i][0] = String(newRows[i][6] || '').trim() === '轉帳' ? '轉帳' : '支出';
         }
       }
       jRange.setValues(jVals);
@@ -979,9 +979,13 @@ function autoCategorizeRows_(ss, sh, startRow, numRows) {
       return;
     }
 
-    // Read merchant (col F=6) and existing K (col 11) for target rows
+    // Read merchant (col F=6), accounting type (col J=10), and existing K (col 11).
+    // Transfers stay uncategorized until the user decides that the retained row is
+    // consumption and assigns its manual category.
     const merchantRange = sh.getRange(startRow, 6, numRows, 1);
     const merchants = merchantRange.getValues();
+    const typeRange = sh.getRange(startRow, 10, numRows, 1);
+    const types = typeRange.getValues();
     const kRange = sh.getRange(startRow, 11, numRows, 1);
     const kVals = kRange.getValues();
 
@@ -991,6 +995,7 @@ function autoCategorizeRows_(ss, sh, startRow, numRows) {
     for (let i = 0; i < numRows; i++) {
       // Only fill if K is blank
       if (newKVals[i][0] !== '' && newKVals[i][0] !== null) continue;
+      if (String(types[i][0] || '').trim() === '轉帳') continue;
 
       const merchant = String(merchants[i][0] || '').trim();
       if (!merchant) continue;

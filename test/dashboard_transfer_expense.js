@@ -171,9 +171,15 @@ function loadServer(spreadsheet) {
 
 function run() {
   const historical = [false, '現金', new Date('2026-08-01T04:00:00Z'), '', 500, '歷史轉帳', '', '', 'historical-transfer', '轉帳', '其他', '', ''];
-  const transactions = new Sheet('Transactions', [HEADERS, historical]);
+  const expense = [true, '富邦', new Date('2026-08-02T04:00:00Z'), '7788', 200, '一般支出', '', '', 'historical-expense', '支出', '飲食', '', ''];
+  const transactions = new Sheet('Transactions', [HEADERS, historical, expense]);
   const deleted = new Sheet('Deleted', [HEADERS]);
-  const spreadsheet = new Spreadsheet([transactions, deleted]);
+  const meta = new Sheet('META', [
+    ['交易關鍵字', '種類', '', '種類清單'],
+    ['理髮', '個人', '', '個人'],
+    ['租金', '居家', '', '居家']
+  ]);
+  const spreadsheet = new Spreadsheet([transactions, deleted, meta]);
 
   const cathay = message(
     'cathay-transfer-1', 'CUBE App轉帳通知',
@@ -212,22 +218,64 @@ function run() {
   assert.strictEqual(imported.length, 2, 'both transfer paths append one row');
   const cathayRow = imported.find(row => row[8] === 'cathay-transfer-1');
   const fubonRow = imported.find(row => row[8] === 'fubon-transfer-success');
-  assert.deepStrictEqual(cathayRow.slice(1, 10), ['國泰', cathayParsed.dt, '2345', 1200, '理髮', '轉帳', cathayParsed.link, 'cathay-transfer-1', '支出']);
-  assert.deepStrictEqual(fubonRow.slice(1, 10), ['富邦', fubonParsed.dt, '3057', 2345, '租金', '轉帳', fubonParsed.link, 'fubon-transfer-success', '支出']);
+  assert.deepStrictEqual(cathayRow.slice(1, 10), ['國泰', cathayParsed.dt, '2345', 1200, '理髮', '轉帳', cathayParsed.link, 'cathay-transfer-1', '轉帳']);
+  assert.deepStrictEqual(fubonRow.slice(1, 10), ['富邦', fubonParsed.dt, '3057', 2345, '租金', '轉帳', fubonParsed.link, 'fubon-transfer-success', '轉帳']);
+  assert.strictEqual(cathayRow[10], '', 'Cathay transfer bypasses automatic manual categorization');
+  assert.strictEqual(fubonRow[10], '', 'Fubon transfer bypasses automatic manual categorization');
   assert.ok(!transactions.rows.some(row => row[8] === 'fubon-transfer-init'), 'richer Fubon success notice remains preferred');
 
   const server = loadServer(spreadsheet);
   assert.strictEqual(server.getAllTxns().find(txn => txn.id.startsWith('historical-transfer|')).type, '轉帳', 'historical transfer remains unchanged');
 
   let retained = server.getAllTxns().find(txn => txn.id.startsWith('cathay-transfer-1|'));
-  assert.strictEqual(retained.type, '支出');
+  assert.strictEqual(retained.type, '轉帳');
+  assert.strictEqual(retained.cat, '未分類');
   server.updateTxn(retained.id, { amount: 1500, cat: '個人' }, true);
   retained = server.getAllTxns().find(txn => txn.id.startsWith('cathay-transfer-1|'));
-  assert.strictEqual(retained.amount, 1500, 'retained transfer uses the existing expense amount editor path');
-  assert.strictEqual(retained.cat, '個人', 'retained transfer uses the existing expense category editor path');
-  const totals = loadFns(['inScope', 'sumScope'], { TXNS: server.getAllTxns() });
-  assert.strictEqual(totals.sumScope(txn => txn.type === '支出', { level: 'all' }), 3845,
-    'production dashboard expense predicate includes retained imports');
+  assert.strictEqual(retained.type, '轉帳', 'manual categorization never changes payment type');
+  assert.strictEqual(retained.amount, 1500, 'transfer amount correction writes the raw transfer amount');
+  assert.strictEqual(retained.mine, null, 'transfer amount ignores the expense-only split field');
+  assert.strictEqual(retained.cat, '個人');
+
+  let fubonRetained = server.getAllTxns().find(txn => txn.id.startsWith('fubon-transfer-success|'));
+  server.updateTxn(fubonRetained.id, { cat: '飲食' }, true);
+  fubonRetained = server.getAllTxns().find(txn => txn.id.startsWith('fubon-transfer-success|'));
+
+  let dashboardTxns = server.getAllTxns();
+  let dashboard = loadFns(
+    ['isConsumption', 'inScope', 'sumScope', 'daysInMonth', 'sum', 'median', 'projectMonth', 'isIncome', 'heatDaysForMonth', 'trendData'],
+    { TXNS: dashboardTxns, NOW: { year: 2026, month: 9, day: 30 } }
+  );
+  assert.strictEqual(dashboard.isConsumption(retained), true);
+  assert.strictEqual(dashboard.isConsumption(fubonRetained), true);
+  assert.strictEqual(dashboard.isConsumption(dashboardTxns.find(txn => txn.id.startsWith('historical-transfer|'))), true,
+    'historical categorized transfer is eligible without migration');
+  assert.strictEqual(dashboard.sumScope(dashboard.isConsumption, { level: 'all' }), 4545,
+    'expenses and categorized transfers contribute to overall consumption');
+
+  const septemberHeat = dashboard.heatDaysForMonth(dashboardTxns, 2026, 9, dashboard.NOW, dashboard.isConsumption);
+  assert.deepStrictEqual(
+    { kind: septemberHeat[12].kind, value: septemberHeat[12].v },
+    { kind: 'spend-hit', value: 3845 },
+    'categorized transfers contribute to heatmap intensity'
+  );
+  const trend = dashboard.trendData({ level: 'year', year: 2026 }, {}, 0);
+  assert.strictEqual(trend[7].exp, 700, 'historical categorized transfer contributes to its month trend');
+  assert.strictEqual(trend[8].exp, 3845, 'current categorized transfers contribute to trend totals');
+
+  const cardRows = dashboardTxns.filter(txn => txn.type === '支出');
+  assert.strictEqual(cardRows.map(txn => txn.id.split('|')[0]).join(','), 'historical-expense',
+    'credit-card analysis remains restricted to actual expense rows');
+
+  server.updateTxn(retained.id, { cat: '' }, true);
+  retained = server.getAllTxns().find(txn => txn.id.startsWith('cathay-transfer-1|'));
+  dashboardTxns = server.getAllTxns();
+  dashboard = loadFns(['isConsumption', 'inScope', 'sumScope'], { TXNS: dashboardTxns });
+  assert.strictEqual(retained.type, '轉帳');
+  assert.strictEqual(retained.cat, '未分類');
+  assert.strictEqual(dashboard.isConsumption(retained), false);
+  assert.strictEqual(dashboard.sumScope(dashboard.isConsumption, { level: 'all' }), 3045,
+    'clearing the manual category reverses consumption inclusion');
 
   const manual = server.addTxn({ date: '2026-09-12', amount: 80, type: '轉帳', source: '現金', merchant: '手動轉帳' });
   assert.strictEqual(manual.type, '轉帳', 'manual creation still accepts transfer type');
