@@ -4,18 +4,26 @@ A personal credit-card transaction tracker: a Gmail auto-record + auto-classify
 bot and a dark-theme web dashboard, both Google Apps Script bound to one Google
 Sheet (the single source of truth) and deployed via `clasp` as a Web App.
 
-## Ticketing — PERSONAL Linear only
+## Ticketing — GitHub Issues (Linear is retired)
 
-Tickets (team **CT**) live in the user's **personal** Linear workspace, reachable
-ONLY via `node scripts/linear.js` (personal API key in the gitignored
-`.linear-key`). The company Linear MCP (`mcp__claude_ai_Linear__*`) is a DIFFERENT
-workspace, cannot see these tickets, and is **blocked at the harness level** here
-(`.claude/settings.local.json` → `permissions.deny`). Never use it in this repo.
+Tickets are **GitHub Issues** on `charlie60507/transaction_bot`; use `gh issue`.
+See the GitHub section below for the personal/company auth split that makes `gh`
+work here.
 
-    read one:   node scripts/linear.js --get "CT-<n>"
-    list:       node scripts/linear.js --list
-    set status: node scripts/linear.js --set "CT-<n>=<State>"   (states: Backlog / Todo / In Progress / In Review / Done)
-    create:     node scripts/linear.js --title "..." [--desc-file f.md] [--priority 0..4] [--labels "Bug"]
+**Linear was retired on 2026-09-14.** The personal Linear workspace (team **CT**,
+CT-1…CT-26) is history only — never open new tickets there. `scripts/linear.js`
+and the gitignored `.linear-key` stay in the repo so those old tickets can still
+be read (`node scripts/linear.js --get "CT-<n>"`). The company Linear MCP
+(`mcp__claude_ai_Linear__*`) is a different workspace, is **blocked at the harness
+level** (`.claude/settings.local.json` → `permissions.deny`), and must never be
+used in this repo.
+
+Longer-form records that outlive one ticket live in `docs/` as plain Markdown
+(e.g. `docs/engineer-note-issue-<n>.md`, `docs/plan-*.md`).
+
+**Stale config:** `.gogox-claude.yaml` still declares `ticket_system: linear`, so
+a GGC pipeline (`/route`, `/ggx-work`, `/dev:ff`) run here would still route to
+Linear. Fix that before running one.
 
 ## GitHub — PERSONAL account only
 
