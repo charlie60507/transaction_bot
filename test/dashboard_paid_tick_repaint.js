@@ -88,23 +88,28 @@ function domStub(fields) {
 
 const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isStale', 'settle',
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
-  'applySplit', 'bulkPost', 'submitAdd', 'confirmDelete', 'closeDelModal', 'closeAddModal',
-  'chargedOf', 'isSplitTxn', 'fmt'];
+  'draftKey', 'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
+  'beginComposition', 'endComposition', 'saveTextDraft', 'commitRow', 'applySplit', 'bulkPost',
+  'submitAdd', 'confirmDelete', 'closeDelModal', 'closeAddModal', 'chargedOf', 'isSplitTxn', 'fmt'];
 
 function harness(initial, opts) {
   opts = opts || {};
   const renders = { n: 0 };
   const toasts = [];
   const scrolls = [];
+  const timers = [];
   const rec = { calls: [], deletes: [], adds: [], reads: [] };
   const doc = opts.document || domStub(ADD_FORM);
   const fns = loadFns(PANEL_FNS, {
     TXNS: serverCopy(initial || []),
     MUTATION_SEQ: 0, INFLIGHT: 0, STALE_DROPPED: false, REFRESHING: false,
+    TEXT_DRAFTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
+    COMPOSITION_FLUSH_SCHEDULED: false,
     pendingDelId: null, delBusy: false, openSplit: null,
     google: { script: { run: recordingRun(rec) } },
     render: function () { renders.n++; if (opts.onRender) opts.onRender(); },
     toast: function (msg, isErr) { toasts.push({ msg: msg, err: !!isErr }); },
+    setTimeout: function (fn) { timers.push(fn); return timers.length; },
     document: doc,
     window: {
       pageXOffset: opts.pageX || 0, pageYOffset: opts.pageY || 0,
@@ -118,6 +123,7 @@ function harness(initial, opts) {
   fns.deletes = rec.deletes;
   fns.adds = rec.adds;
   fns.reads = rec.reads;
+  fns.flushTimers = function () { while (timers.length) timers.shift()(); };
   return fns;
 }
 
@@ -318,6 +324,94 @@ function run() {
   assert.strictEqual(num.renders.n, 1, 'render() still runs — the probe must not abort the repaint');
   assert.strictEqual(numAfter[0].focused, 1, 'focus is still restored');
   assert.deepStrictEqual(numAfter[0].ranges, [], 'no caret is written when none could be read');
+
+  // ---- IME-aware drafts: composition defers destructive repaint and flushes once ----
+  ['merchant', 'tag'].forEach(function (field) {
+    const h = harness(base);
+    const initial = field === 'merchant' ? '買晚餐' : '生活';
+    const finalValue = initial + '餐廳';
+    h.beginComposition(base[0].id, field, initial);
+    h.captureDraft(base[0].id, field, finalValue);
+    h.repaint();
+    h.repaint();
+    assert.strictEqual(h.renders.n, 0, field + ': repaint is deferred while composition is active');
+    assert.strictEqual(h.PENDING_REPAINT, true, field + ': repeated repaint requests coalesce');
+    h.endComposition(base[0].id, field, finalValue);
+    assert.strictEqual(h.renders.n, 0, field + ': compositionend does not detach the input synchronously');
+    h.flushTimers();
+    assert.strictEqual(h.renders.n, 1, field + ': the queued repaint flushes exactly once');
+    assert.strictEqual(h.draftValue(base[0], field), finalValue,
+      field + ': rebuilt copies resolve the same logical draft value');
+    assert.strictEqual(h.draftValue(Object.assign({}, base[0]), field), finalValue,
+      field + ': draft identity is transaction plus field, not a DOM-copy index');
+  });
+
+  // A trailing input after compositionend runs before the queued repaint and becomes the value
+  // rendered into every copy, rather than being lost with the detached native input.
+  const trailing = harness(base);
+  trailing.beginComposition(base[0].id, 'merchant', '買晚餐');
+  trailing.repaint();
+  trailing.endComposition(base[0].id, 'merchant', '買晚餐餐');
+  trailing.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
+  trailing.flushTimers();
+  assert.strictEqual(trailing.draftValue(base[0], 'merchant'), '買晚餐餐廳',
+    'the final post-composition input is captured before the queued repaint');
+
+  // ---- an old save acknowledgement cannot clear characters typed while it was in flight ----
+  ['merchant', 'tag'].forEach(function (field) {
+    const h = harness(base);
+    h.captureDraft(base[0].id, field, '第一版');
+    h.saveTextDraft(base[0].id, field);
+    h.captureDraft(base[0].id, field, '第二版');
+    const ack = serverCopy(base); ack[0][field] = '第一版';
+    h.calls[0].success({ ok: true, txns: ack });
+    assert.strictEqual(h.textDraft(base[0].id, field).value, '第二版',
+      field + ': an older acknowledgement leaves the newer draft dirty');
+    assert.strictEqual(h.draftValue(base[0], field), '第二版',
+      field + ': the newer draft overlays the adopted server value');
+  });
+
+  const supersededFailure = harness(base);
+  supersededFailure.captureDraft(base[0].id, 'merchant', '第一版');
+  supersededFailure.saveTextDraft(base[0].id, 'merchant');
+  supersededFailure.captureDraft(base[0].id, 'merchant', '第二版');
+  supersededFailure.calls[0].failure(new Error('old request failed'));
+  assert.strictEqual(supersededFailure.TXNS[0].merchant, '第一版',
+    'a superseded failure does not roll back the newer edit lifecycle');
+  assert.strictEqual(supersededFailure.draftValue(base[0], 'merchant'), '第二版',
+    'a superseded failure leaves newer typing visible');
+  assert.strictEqual(supersededFailure.toasts.length, 0,
+    'a superseded failure does not surface a stale error after newer work');
+
+  // ---- immediate Record includes both dirty text fields in its one authoritative patch ----
+  const record = harness(base);
+  record.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
+  record.captureDraft(base[0].id, 'tag', '約會');
+  record.commitRow(base[0].id, true);
+  assert.strictEqual(record.calls.length, 1, 'Record issues one request');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(record.calls[0].patch)), {
+    posted: true, merchant: '買晚餐餐廳', tag: '約會'
+  }, 'Record combines posted, merchant and TAG in one patch');
+  assert.strictEqual(record.TXNS[0].merchant, '買晚餐餐廳', 'Record applies merchant optimistically');
+  assert.strictEqual(record.TXNS[0].tag, '約會', 'Record applies TAG optimistically');
+
+  // A failed save reverts only the optimistic server-backed value. The draft remains the value
+  // every rebuilt editor shows, so the owner can retry without retyping it.
+  const failedDraft = harness(base);
+  failedDraft.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
+  failedDraft.saveTextDraft(base[0].id, 'merchant');
+  failedDraft.calls[0].failure(new Error('offline'));
+  assert.strictEqual(failedDraft.TXNS[0].merchant, base[0].merchant, 'failure reverts the optimistic model');
+  assert.strictEqual(failedDraft.draftValue(base[0], 'merchant'), '買晚餐餐廳',
+    'failure keeps the typed draft available for retry');
+  assert.ok(failedDraft.toasts[failedDraft.toasts.length - 1].err, 'failure remains visible');
+
+  // Binding coverage: the production attach() wires both editable field kinds to the same input
+  // and composition lifecycle and routes Record through the combined commit helper.
+  assert.ok(/oncompositionstart[\s\S]*beginComposition/.test(attachSrc), 'attach binds compositionstart');
+  assert.ok(/oncompositionend[\s\S]*endComposition/.test(attachSrc), 'attach binds compositionend');
+  assert.ok(/oninput[\s\S]*captureDraft/.test(attachSrc), 'attach captures live input');
+  assert.ok(/commitRow\(id,!t\.posted\)/.test(attachSrc), 'Record uses the combined row commit');
 
   // ---- a list discarded by the sequence guard is refetched, not lost ----
   // applySplit, bulkPost and submitAdd bump the counter and adopt no list of their own. When one

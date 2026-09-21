@@ -780,6 +780,41 @@
   // re-books itself if a mutation supersedes it too, so the debt survives an arbitrarily long run
   // of writes. Convergence is that refetch, not the guard.
   var MUTATION_SEQ=0, INFLIGHT=0, STALE_DROPPED=false, REFRESHING=false;
+  // Merchant and TAG are logical row fields, even when editRow() mounts the same transaction
+  // more than once. Keep their unsaved value outside the DOM so a whole-panel rebuild cannot
+  // make the server snapshot overwrite what the owner is still typing.
+  var TEXT_DRAFTS={}, ACTIVE_COMPOSITIONS={}, PENDING_REPAINT=false,
+      COMPOSITION_FLUSH_SCHEDULED=false;
+  function draftKey(id,field){ return String(id)+'\u001f'+String(field); }
+  function textDraft(id,field){ return TEXT_DRAFTS[draftKey(id,field)]||null; }
+  function draftValue(t,field){ var d=t&&textDraft(t.id,field); return d?d.value:((t&&t[field])||''); }
+  function captureDraft(id,field,value){
+    var key=draftKey(id,field), prev=TEXT_DRAFTS[key], next=String(value==null?'':value);
+    if(prev&&prev.value===next) return prev;
+    var d={ value:next, revision:(prev?prev.revision:0)+1, dirty:true };
+    TEXT_DRAFTS[key]=d; return d;
+  }
+  function hasActiveComposition(){
+    for(var key in ACTIVE_COMPOSITIONS){
+      if(Object.prototype.hasOwnProperty.call(ACTIVE_COMPOSITIONS,key)) return true;
+    }
+    return false;
+  }
+  function beginComposition(id,field,value){
+    captureDraft(id,field,value); ACTIVE_COMPOSITIONS[draftKey(id,field)]=true;
+  }
+  function endComposition(id,field,value){
+    captureDraft(id,field,value); delete ACTIVE_COMPOSITIONS[draftKey(id,field)];
+    // Chromium may dispatch a final input event after compositionend. Flush on the next task so
+    // that event updates the app-owned draft before render() detaches the native IME node.
+    if(!hasActiveComposition()&&PENDING_REPAINT&&!COMPOSITION_FLUSH_SCHEDULED){
+      COMPOSITION_FLUSH_SCHEDULED=true;
+      setTimeout(function(){
+        COMPOSITION_FLUSH_SCHEDULED=false;
+        if(!hasActiveComposition()&&PENDING_REPAINT){ PENDING_REPAINT=false; repaint(); }
+      },0);
+    }
+  }
   function nextMutation(){ MUTATION_SEQ++; INFLIGHT++; return MUTATION_SEQ; }
   function isStale(seq){ return seq!==MUTATION_SEQ; }
 
@@ -873,6 +908,7 @@
    * today, and so does one whose copy count changed under it — the first match is the fallback.
    */
   function repaint(){
+    if(hasActiveComposition()){ PENDING_REPAINT=true; return; }
     var doc=(typeof document!=='undefined')?document:null;
     var el=doc?doc.activeElement:null;
     var key=focusKey(el), sel=null;
@@ -912,6 +948,11 @@
 
   // optimistic edit: update local state now, write back, revert on failure
   function applyEdit(id,field,value){
+    if(field==='merchant'||field==='tag'){
+      captureDraft(id,field,value);
+      saveTextDraft(id,field);
+      return;
+    }
     var t=txnById(id); if(!t) return;
     var prev=t[field]; t[field]=value;
     if(field==='amount'){
@@ -919,17 +960,9 @@
       if(!isFinite(amount)||amount<=0){ t[field]=prev; render(); toast('金額需大於 0', true); return; }
       t[field]=amount;
     }
-    // A title edit commits on blur, which on a touch device happens as part of the SAME tap
-    // that is heading for another control. Re-rendering here would replace the DOM before
-    // that tap lands, so 已記帳 pressed straight after typing was silently dropped. The input
-    // already shows the new text, so there is nothing to repaint — other views pick it up on
-    // the next natural render.
-    // A free-text field commits on blur, which on a touch device is part of the SAME tap that is
-    // already heading for another control; re-rendering here replaces the DOM before that tap
-    // lands, which is how 已記帳 pressed straight after typing used to be dropped (CT-16). The
-    // input already shows the new value, so there is nothing to repaint. Applies to every
-    // free-text field — merchant and now tag, which became an input so new projects can be typed.
-    if (field !== 'merchant' && field !== 'tag') render();
+    // Free-text fields returned above to the draft-aware path. The remaining controls own
+    // discrete values and can render their optimistic state immediately.
+    render();
     // The message belongs to the tap that caused it. It used to wait for a second round trip —
     // the same beat that produced the stray repaint — so it landed after the row had already
     // gone. After this change a successful write is silent apart from this message; only a
@@ -953,6 +986,58 @@
       })
       .withFailureHandler(function(err){ settle(seq, null); revertTxn(id, undo); toast('寫入失敗:'+((err&&err.message)||err), true); })
       .updateTxn(id, patch, true);
+  }
+
+  /** Save one free-text draft without surrendering newer typing to an older acknowledgement. */
+  function saveTextDraft(id,field){
+    var t=txnById(id), d=textDraft(id,field); if(!t||!d||!d.dirty) return;
+    var revision=d.revision, value=d.value, prev=t[field]; t[field]=value;
+    var seq=nextMutation(), patch={}; patch[field]=value;
+    google.script.run
+      .withSuccessHandler(function(res){
+        var current=textDraft(id,field);
+        if(current&&current.revision===revision&&current.value===value) delete TEXT_DRAFTS[draftKey(id,field)];
+        if(settle(seq,res&&res.txns)) repaint();
+      })
+      .withFailureHandler(function(err){
+        var current=textDraft(id,field);
+        settle(seq,null);
+        // A later draft/save (including the combined Record patch) supersedes this request.
+        // Its failure must not roll the newer optimistic value back or show a stale error.
+        if(current&&current.revision===revision&&current.value===value){
+          var undo={}; undo[field]=prev;
+          revertTxn(id,undo);
+          toast('寫入失敗:'+((err&&err.message)||err),true);
+        }
+      })
+      .updateTxn(id,patch,true);
+  }
+
+  /** Record a row and any dirty text as one authoritative patch. */
+  function commitRow(id,posted){
+    var t=txnById(id); if(!t) return;
+    var patch={posted:posted}, undo={posted:t.posted}, saved=[];
+    ['merchant','tag'].forEach(function(field){
+      var d=textDraft(id,field); if(!d||!d.dirty) return;
+      patch[field]=d.value; undo[field]=t[field]; t[field]=d.value;
+      saved.push({field:field,revision:d.revision,value:d.value});
+    });
+    t.posted=posted; render();
+    toast(posted?'已記帳 · 從清單移除':'已取回待記帳');
+    var seq=nextMutation();
+    google.script.run
+      .withSuccessHandler(function(res){
+        saved.forEach(function(s){
+          var current=textDraft(id,s.field);
+          if(current&&current.revision===s.revision&&current.value===s.value) delete TEXT_DRAFTS[draftKey(id,s.field)];
+        });
+        if(settle(seq,res&&res.txns)) repaint();
+      })
+      .withFailureHandler(function(err){
+        settle(seq,null); revertTxn(id,undo);
+        toast('寫入失敗:'+((err&&err.message)||err),true);
+      })
+      .updateTxn(id,patch,true);
   }
   // ---------- manual add / delete ----------
   function isManual(t){ return !!(t && t.id && String(t.id).indexOf('manual-')===0); }
@@ -1132,6 +1217,13 @@
   }
   function editRow(t){
     function canCorrectAmount(row){ return !!(row && ['支出','轉帳'].indexOf(row.type)!==-1); }
+    // Keep editRow() extractable for the small offline fixtures that render it in isolation.
+    // In the real panel TEXT_DRAFTS exists; an isolated fixture intentionally has no drafts.
+    function currentText(field){
+      var drafts=(typeof TEXT_DRAFTS==='undefined')?{}:TEXT_DRAFTS;
+      var d=drafts[String(t.id)+'\u001f'+field];
+      return d?d.value:(t[field]||'');
+    }
     var tc=typeColor(t.type);
     var compactAmount=(t.type==='轉帳')
       ? '<span class="amt num" style="color:'+tc+'">$'+fmt(t.amount)+'</span>'
@@ -1145,7 +1237,7 @@
       // a day that holds more than one. Rendered only when the row actually has a time, so the
       // pre-June rows look exactly as they do today. Shown to the minute: 富邦 gives seconds and
       // 國泰 does not, so seconds would advertise a precision most timed rows do not have.
-      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false">'+mailLink(t)+compactAmount+'</div>'
+      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(currentText('merchant'))+'" placeholder="(無說明)" spellcheck="false">'+mailLink(t)+compactAmount+'</div>'
       +(t.type==='支出' && openSplit===t.id ? splitBox(t) : '')
       +'<div class="er2">'
         +(canCorrectAmount(t)?'<div class="fld"><span class="lb">金額</span><input class="amtcor num" type="number" inputmode="decimal" min="0.01" step="0.01" data-ef="amount" data-id="'+esc(t.id)+'" value="'+esc(t.amount)+'" aria-label="金額"></div>':'')
@@ -1155,7 +1247,7 @@
         // transaction carries it, so if the picker can only offer values already in the sheet
         // there is no way to start a new one from the web at all. 類別 stays a closed <select>
         // on purpose — that taxonomy was just cleaned up and should not fragment.
-        +'<div class="fld"><span class="lb">TAG</span><input class="tagin" list="taglist" data-ef="tag" data-id="'+esc(t.id)+'" value="'+esc(t.tag)+'" placeholder="（無）· 可直接打新專案" spellcheck="false"></div>'
+        +'<div class="fld"><span class="lb">TAG</span><input class="tagin" list="taglist" data-ef="tag" data-id="'+esc(t.id)+'" value="'+esc(currentText('tag'))+'" placeholder="（無）· 可直接打新專案" spellcheck="false"></div>'
         +'<button class="erec" data-erec="'+esc(t.id)+'">'+(t.posted?'↩ 取消記帳':'✓ 記帳')+'</button>'+delBtn(t)
       +'</div></div>';
   }
@@ -1412,14 +1504,24 @@
     app.querySelectorAll('.cell[data-hday]').forEach(function(c){ c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); }; });
     app.querySelectorAll('[data-hadd]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); openAddModal(this.getAttribute('data-hadd')); }; });
     app.querySelectorAll('[data-ef]').forEach(function(el){
-      el.onchange=function(e){ e.stopPropagation(); applyEdit(this.getAttribute('data-id'), this.getAttribute('data-ef'), this.value.trim()); };
+      var field=el.getAttribute('data-ef'), id=el.getAttribute('data-id');
+      if(field==='tag'){
+        el.oninput=function(e){ e.stopPropagation(); captureDraft(id,field,this.value); };
+        el.oncompositionstart=function(e){ e.stopPropagation(); beginComposition(id,field,this.value); };
+        el.oncompositionend=function(e){ e.stopPropagation(); endComposition(id,field,this.value); };
+      }
+      el.onchange=function(e){ e.stopPropagation(); applyEdit(id,field,this.value); };
       if(el.tagName==='INPUT'){ el.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } }; }
     });
     app.querySelectorAll('[data-emer]').forEach(function(i){
-      i.onchange=function(e){ e.stopPropagation(); applyEdit(this.getAttribute('data-emer'),'merchant',this.value.trim()); };
+      var id=i.getAttribute('data-emer');
+      i.oninput=function(e){ e.stopPropagation(); captureDraft(id,'merchant',this.value); };
+      i.oncompositionstart=function(e){ e.stopPropagation(); beginComposition(id,'merchant',this.value); };
+      i.oncompositionend=function(e){ e.stopPropagation(); endComposition(id,'merchant',this.value); };
+      i.onchange=function(e){ e.stopPropagation(); applyEdit(id,'merchant',this.value); };
       i.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } };
     });
-    app.querySelectorAll('[data-erec]').forEach(function(b){ b.onclick=function(){ var id=this.getAttribute('data-erec'); var t=txnById(id); if(t) applyEdit(id,'posted',!t.posted); }; });
+    app.querySelectorAll('[data-erec]').forEach(function(b){ b.onclick=function(){ var id=this.getAttribute('data-erec'); var t=txnById(id); if(t) commitRow(id,!t.posted); }; });
     // 我的消費: tapping the amount toggles the split editor open. Commit is Enter or 確定 only —
     // never blur, which on touch is part of the same tap heading for another control (CT-16).
     // Only ONE split box is ever open (openSplit is a single id), so every lookup below is a
