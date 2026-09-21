@@ -89,7 +89,8 @@ function domStub(fields) {
 const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isStale', 'settle',
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'draftKey', 'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
-  'beginComposition', 'endComposition', 'saveTextDraft', 'commitRow', 'applySplit', 'bulkPost',
+  'nextTextRequestToken', 'ownsTextRequest', 'beginComposition', 'endComposition',
+  'isImeKeyEvent', 'handleTextKeydown', 'saveTextDraft', 'commitRow', 'applySplit', 'bulkPost',
   'submitAdd', 'confirmDelete', 'closeDelModal', 'closeAddModal', 'chargedOf', 'isSplitTxn', 'fmt'];
 
 function harness(initial, opts) {
@@ -103,7 +104,8 @@ function harness(initial, opts) {
   const fns = loadFns(PANEL_FNS, {
     TXNS: serverCopy(initial || []),
     MUTATION_SEQ: 0, INFLIGHT: 0, STALE_DROPPED: false, REFRESHING: false,
-    TEXT_DRAFTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
+    TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_PENDING: {},
+    ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
     COMPOSITION_FLUSH_SCHEDULED: false,
     pendingDelId: null, delBusy: false, openSplit: null,
     google: { script: { run: recordingRun(rec) } },
@@ -357,6 +359,27 @@ function run() {
   assert.strictEqual(trailing.draftValue(base[0], 'merchant'), '買晚餐餐廳',
     'the final post-composition input is captured before the queued repaint');
 
+  // Enter/Escape belong to the IME while composition is active. keyCode 229 is the fallback
+  // used by browsers that do not expose KeyboardEvent.isComposing reliably.
+  [
+    { key: 'Enter', isComposing: true },
+    { key: 'Escape', keyCode: 229 }
+  ].forEach(function (event) {
+    let prevented = 0, blurred = 0;
+    const input = { value: '組字中', defaultValue: '原值', blur: function () { blurred++; } };
+    event.preventDefault = function () { prevented++; };
+    trailing.handleTextKeydown(event, input);
+    assert.strictEqual(prevented, 0, event.key + ': IME keydown is not intercepted');
+    assert.strictEqual(blurred, 0, event.key + ': IME keydown does not blur the editor');
+    assert.strictEqual(input.value, '組字中', event.key + ': IME keydown does not reset the draft');
+  });
+  let normalPrevented = 0, normalBlurred = 0;
+  const normalInput = { value: 'edited', defaultValue: 'saved', blur: function () { normalBlurred++; } };
+  trailing.handleTextKeydown({ key: 'Escape', preventDefault: function () { normalPrevented++; } }, normalInput);
+  assert.strictEqual(normalPrevented, 1, 'ordinary Escape is still handled');
+  assert.strictEqual(normalBlurred, 1, 'ordinary Escape still blurs');
+  assert.strictEqual(normalInput.value, 'saved', 'ordinary Escape still restores defaultValue');
+
   // ---- an old save acknowledgement cannot clear characters typed while it was in flight ----
   ['merchant', 'tag'].forEach(function (field) {
     const h = harness(base);
@@ -380,8 +403,28 @@ function run() {
     'a superseded failure does not roll back the newer edit lifecycle');
   assert.strictEqual(supersededFailure.draftValue(base[0], 'merchant'), '第二版',
     'a superseded failure leaves newer typing visible');
-  assert.strictEqual(supersededFailure.toasts.length, 0,
-    'a superseded failure does not surface a stale error after newer work');
+  assert.strictEqual(supersededFailure.toasts.length, 1,
+    'typing alone does not hide a current request failure; only a newer request supersedes it');
+
+  // ---- draft revisions and request tokens never repeat after delete/recreate (ABA) ----
+  const aba = harness(base);
+  const firstDraft = aba.captureDraft(base[0].id, 'merchant', '相同文字');
+  const key = aba.draftKey(base[0].id, 'merchant');
+  aba.saveTextDraft(base[0].id, 'merchant');                 // request token 1
+  aba.commitRow(base[0].id, true);                           // superseding token 2
+  const committed = serverCopy(base);
+  committed[0].merchant = '相同文字'; committed[0].posted = true;
+  aba.calls[1].success({ ok: true, txns: committed });        // deletes the exact committed draft
+  assert.strictEqual(aba.textDraft(base[0].id, 'merchant'), null, 'Record success clears its exact draft');
+  const recreatedDraft = aba.captureDraft(base[0].id, 'merchant', '相同文字');
+  assert.ok(recreatedDraft.revision > firstDraft.revision,
+    'recreating the same value receives a newer logical revision');
+  aba.saveTextDraft(base[0].id, 'merchant');                 // token 3 for the recreated draft
+  assert.ok(aba.TEXT_REQUEST_TOKENS[key] > 2,
+    'request tokens remain monotonic independently of draft lifetime');
+  aba.calls[0].success({ ok: true, txns: committed });        // late token-1 acknowledgement
+  assert.strictEqual(aba.textDraft(base[0].id, 'merchant').revision, recreatedDraft.revision,
+    'late acknowledgement cannot clear an ABA-recreated same-value draft');
 
   // ---- immediate Record includes both dirty text fields in its one authoritative patch ----
   const record = harness(base);
@@ -395,6 +438,21 @@ function run() {
   assert.strictEqual(record.TXNS[0].merchant, '買晚餐餐廳', 'Record applies merchant optimistically');
   assert.strictEqual(record.TXNS[0].tag, '約會', 'Record applies TAG optimistically');
 
+  // Blur/change can issue a text save immediately before the Record click. The combined Record
+  // request supersedes it, so a late failure from that older save cannot revert or toast.
+  const blurThenRecord = harness(base);
+  blurThenRecord.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
+  blurThenRecord.saveTextDraft(base[0].id, 'merchant');
+  blurThenRecord.commitRow(base[0].id, true);
+  const combined = serverCopy(base);
+  combined[0].merchant = '買晚餐餐廳'; combined[0].posted = true;
+  blurThenRecord.calls[1].success({ ok: true, txns: combined });
+  blurThenRecord.calls[0].failure(new Error('late blur failure'));
+  assert.strictEqual(blurThenRecord.TXNS[0].merchant, '買晚餐餐廳',
+    'late blur failure cannot revert the combined Record value');
+  assert.deepStrictEqual(blurThenRecord.toasts.map(function (t) { return t.msg; }),
+    ['已記帳 · 從清單移除'], 'late blur failure cannot add a stale error toast');
+
   // A failed save reverts only the optimistic server-backed value. The draft remains the value
   // every rebuilt editor shows, so the owner can retry without retyping it.
   const failedDraft = harness(base);
@@ -405,12 +463,24 @@ function run() {
   assert.strictEqual(failedDraft.draftValue(base[0], 'merchant'), '買晚餐餐廳',
     'failure keeps the typed draft available for retry');
   assert.ok(failedDraft.toasts[failedDraft.toasts.length - 1].err, 'failure remains visible');
+  const callsAfterFailure = failedDraft.calls.length;
+  failedDraft.saveTextDraft(base[0].id, 'merchant');
+  assert.strictEqual(failedDraft.calls.length, callsAfterFailure + 1,
+    'blurring unchanged failed text retries without requiring another input event');
+  assert.strictEqual(failedDraft.calls[1].patch.merchant, '買晚餐餐廳',
+    'the retry resends the preserved dirty draft');
 
   // Binding coverage: the production attach() wires both editable field kinds to the same input
   // and composition lifecycle and routes Record through the combined commit helper.
   assert.ok(/oncompositionstart[\s\S]*beginComposition/.test(attachSrc), 'attach binds compositionstart');
   assert.ok(/oncompositionend[\s\S]*endComposition/.test(attachSrc), 'attach binds compositionend');
   assert.ok(/oninput[\s\S]*captureDraft/.test(attachSrc), 'attach captures live input');
+  assert.strictEqual((attachSrc.match(/handleTextKeydown\(e,this\)/g) || []).length, 2,
+    'merchant and TAG keydown both use the IME-aware handler');
+  assert.ok(/field==='tag'[\s\S]*onblur=function\(\)\{ saveTextDraft\(id,field\); \}/.test(attachSrc),
+    'TAG blur retries a preserved dirty draft');
+  assert.ok(/data-emer[\s\S]*onblur=function\(\)\{ saveTextDraft\(id,'merchant'\); \}/.test(attachSrc),
+    'merchant blur retries a preserved dirty draft');
   assert.ok(/commitRow\(id,!t\.posted\)/.test(attachSrc), 'Record uses the combined row commit');
 
   // ---- a list discarded by the sequence guard is refetched, not lost ----

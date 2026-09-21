@@ -783,7 +783,8 @@
   // Merchant and TAG are logical row fields, even when editRow() mounts the same transaction
   // more than once. Keep their unsaved value outside the DOM so a whole-panel rebuild cannot
   // make the server snapshot overwrite what the owner is still typing.
-  var TEXT_DRAFTS={}, ACTIVE_COMPOSITIONS={}, PENDING_REPAINT=false,
+  var TEXT_DRAFTS={}, TEXT_DRAFT_REVISIONS={}, TEXT_REQUEST_TOKENS={}, TEXT_PENDING={},
+      ACTIVE_COMPOSITIONS={}, PENDING_REPAINT=false,
       COMPOSITION_FLUSH_SCHEDULED=false;
   function draftKey(id,field){ return String(id)+'\u001f'+String(field); }
   function textDraft(id,field){ return TEXT_DRAFTS[draftKey(id,field)]||null; }
@@ -791,9 +792,16 @@
   function captureDraft(id,field,value){
     var key=draftKey(id,field), prev=TEXT_DRAFTS[key], next=String(value==null?'':value);
     if(prev&&prev.value===next) return prev;
-    var d={ value:next, revision:(prev?prev.revision:0)+1, dirty:true };
+    var revision=(TEXT_DRAFT_REVISIONS[key]||0)+1;
+    TEXT_DRAFT_REVISIONS[key]=revision;
+    var d={ value:next, revision:revision, dirty:true };
     TEXT_DRAFTS[key]=d; return d;
   }
+  function nextTextRequestToken(id,field){
+    var key=draftKey(id,field), token=(TEXT_REQUEST_TOKENS[key]||0)+1;
+    TEXT_REQUEST_TOKENS[key]=token; return token;
+  }
+  function ownsTextRequest(id,field,token){ return TEXT_REQUEST_TOKENS[draftKey(id,field)]===token; }
   function hasActiveComposition(){
     for(var key in ACTIVE_COMPOSITIONS){
       if(Object.prototype.hasOwnProperty.call(ACTIVE_COMPOSITIONS,key)) return true;
@@ -814,6 +822,12 @@
         if(!hasActiveComposition()&&PENDING_REPAINT){ PENDING_REPAINT=false; repaint(); }
       },0);
     }
+  }
+  function isImeKeyEvent(e){ return !!(e&&(e.isComposing||e.keyCode===229)); }
+  function handleTextKeydown(e,el){
+    if(isImeKeyEvent(e)) return;
+    if(e.key==='Enter'){ e.preventDefault(); el.blur(); }
+    else if(e.key==='Escape'){ e.preventDefault(); el.value=el.defaultValue; el.blur(); }
   }
   function nextMutation(){ MUTATION_SEQ++; INFLIGHT++; return MUTATION_SEQ; }
   function isStale(seq){ return seq!==MUTATION_SEQ; }
@@ -991,12 +1005,18 @@
   /** Save one free-text draft without surrendering newer typing to an older acknowledgement. */
   function saveTextDraft(id,field){
     var t=txnById(id), d=textDraft(id,field); if(!t||!d||!d.dirty) return;
-    var revision=d.revision, value=d.value, prev=t[field]; t[field]=value;
+    var key=draftKey(id,field), pending=TEXT_PENDING[key];
+    if(pending&&pending.revision===d.revision&&pending.value===d.value) return;
+    var revision=d.revision, value=d.value, prev=t[field], token=nextTextRequestToken(id,field);
+    TEXT_PENDING[key]={token:token,revision:revision,value:value}; t[field]=value;
     var seq=nextMutation(), patch={}; patch[field]=value;
     google.script.run
       .withSuccessHandler(function(res){
         var current=textDraft(id,field);
-        if(current&&current.revision===revision&&current.value===value) delete TEXT_DRAFTS[draftKey(id,field)];
+        if(ownsTextRequest(id,field,token)){
+          delete TEXT_PENDING[key];
+          if(current&&current.revision===revision&&current.value===value) delete TEXT_DRAFTS[key];
+        }
         if(settle(seq,res&&res.txns)) repaint();
       })
       .withFailureHandler(function(err){
@@ -1004,9 +1024,12 @@
         settle(seq,null);
         // A later draft/save (including the combined Record patch) supersedes this request.
         // Its failure must not roll the newer optimistic value back or show a stale error.
-        if(current&&current.revision===revision&&current.value===value){
-          var undo={}; undo[field]=prev;
-          revertTxn(id,undo);
+        if(ownsTextRequest(id,field,token)){
+          delete TEXT_PENDING[key];
+          if(current&&current.revision===revision&&current.value===value){
+            var undo={}; undo[field]=prev;
+            revertTxn(id,undo);
+          }
           toast('寫入失敗:'+((err&&err.message)||err),true);
         }
       })
@@ -1019,8 +1042,10 @@
     var patch={posted:posted}, undo={posted:t.posted}, saved=[];
     ['merchant','tag'].forEach(function(field){
       var d=textDraft(id,field); if(!d||!d.dirty) return;
+      var key=draftKey(id,field), token=nextTextRequestToken(id,field);
+      TEXT_PENDING[key]={token:token,revision:d.revision,value:d.value};
       patch[field]=d.value; undo[field]=t[field]; t[field]=d.value;
-      saved.push({field:field,revision:d.revision,value:d.value});
+      saved.push({field:field,key:key,token:token,revision:d.revision,value:d.value});
     });
     t.posted=posted; render();
     toast(posted?'已記帳 · 從清單移除':'已取回待記帳');
@@ -1029,12 +1054,19 @@
       .withSuccessHandler(function(res){
         saved.forEach(function(s){
           var current=textDraft(id,s.field);
-          if(current&&current.revision===s.revision&&current.value===s.value) delete TEXT_DRAFTS[draftKey(id,s.field)];
+          if(!ownsTextRequest(id,s.field,s.token)) return;
+          delete TEXT_PENDING[s.key];
+          if(current&&current.revision===s.revision&&current.value===s.value) delete TEXT_DRAFTS[s.key];
         });
         if(settle(seq,res&&res.txns)) repaint();
       })
       .withFailureHandler(function(err){
-        settle(seq,null); revertTxn(id,undo);
+        var currentUndo={posted:undo.posted};
+        saved.forEach(function(s){
+          if(!ownsTextRequest(id,s.field,s.token)) return;
+          delete TEXT_PENDING[s.key]; currentUndo[s.field]=undo[s.field];
+        });
+        settle(seq,null); revertTxn(id,currentUndo);
         toast('寫入失敗:'+((err&&err.message)||err),true);
       })
       .updateTxn(id,patch,true);
@@ -1511,7 +1543,8 @@
         el.oncompositionend=function(e){ e.stopPropagation(); endComposition(id,field,this.value); };
       }
       el.onchange=function(e){ e.stopPropagation(); applyEdit(id,field,this.value); };
-      if(el.tagName==='INPUT'){ el.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } }; }
+      if(field==='tag') el.onblur=function(){ saveTextDraft(id,field); };
+      if(el.tagName==='INPUT'){ el.onkeydown=function(e){ handleTextKeydown(e,this); }; }
     });
     app.querySelectorAll('[data-emer]').forEach(function(i){
       var id=i.getAttribute('data-emer');
@@ -1519,7 +1552,8 @@
       i.oncompositionstart=function(e){ e.stopPropagation(); beginComposition(id,'merchant',this.value); };
       i.oncompositionend=function(e){ e.stopPropagation(); endComposition(id,'merchant',this.value); };
       i.onchange=function(e){ e.stopPropagation(); applyEdit(id,'merchant',this.value); };
-      i.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } };
+      i.onblur=function(){ saveTextDraft(id,'merchant'); };
+      i.onkeydown=function(e){ handleTextKeydown(e,this); };
     });
     app.querySelectorAll('[data-erec]').forEach(function(b){ b.onclick=function(){ var id=this.getAttribute('data-erec'); var t=txnById(id); if(t) commitRow(id,!t.posted); }; });
     // 我的消費: tapping the amount toggles the split editor open. Commit is Enter or 確定 only —
