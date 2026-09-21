@@ -783,25 +783,43 @@
   // Merchant and TAG are logical row fields, even when editRow() mounts the same transaction
   // more than once. Keep their unsaved value outside the DOM so a whole-panel rebuild cannot
   // make the server snapshot overwrite what the owner is still typing.
-  var TEXT_DRAFTS={}, TEXT_DRAFT_REVISIONS={}, TEXT_REQUEST_TOKENS={}, TEXT_PENDING={},
-      ACTIVE_COMPOSITIONS={}, PENDING_REPAINT=false,
+  var TEXT_DRAFTS={}, TEXT_DRAFT_REVISIONS={}, TEXT_REQUEST_TOKENS={}, TEXT_WRITE_QUEUES={},
+      TEXT_CANCEL_BLURS={}, ROW_COMMIT_INTENTS={}, ACTIVE_COMPOSITIONS={}, PENDING_REPAINT=false,
       COMPOSITION_FLUSH_SCHEDULED=false;
   function draftKey(id,field){ return String(id)+'\u001f'+String(field); }
   function textDraft(id,field){ return TEXT_DRAFTS[draftKey(id,field)]||null; }
   function draftValue(t,field){ var d=t&&textDraft(t.id,field); return d?d.value:((t&&t[field])||''); }
+  function textWriteQueue(id,field){
+    var key=draftKey(id,field);
+    if(!TEXT_WRITE_QUEUES[key]) TEXT_WRITE_QUEUES[key]={active:null,pending:null};
+    return TEXT_WRITE_QUEUES[key];
+  }
+  function textInputMatches(id,field){
+    if(typeof document==='undefined'||!document.querySelectorAll) return [];
+    var attr=field==='merchant'?'[data-emer="'+id+'"]':'[data-ef="tag"][data-id="'+id+'"]';
+    try{ return document.querySelectorAll(attr)||[]; }catch(e){ return []; }
+  }
+  function syncTextCopies(id,field,value,committed,keepValue){
+    var all=textInputMatches(id,field);
+    for(var i=0;i<all.length;i++){
+      if(committed) all[i].defaultValue=value;
+      if(!keepValue) all[i].value=value;
+    }
+  }
   function captureDraft(id,field,value){
     var key=draftKey(id,field), prev=TEXT_DRAFTS[key], next=String(value==null?'':value);
     if(prev&&prev.value===next) return prev;
     var revision=(TEXT_DRAFT_REVISIONS[key]||0)+1;
     TEXT_DRAFT_REVISIONS[key]=revision;
-    var d={ value:next, revision:revision, dirty:true };
-    TEXT_DRAFTS[key]=d; return d;
+    var t=txnById(id);
+    var d={ value:next, revision:revision, dirty:true,
+      baseValue:prev?prev.baseValue:String((t&&t[field])||'') };
+    TEXT_DRAFTS[key]=d; syncTextCopies(id,field,next,false,false); return d;
   }
   function nextTextRequestToken(id,field){
     var key=draftKey(id,field), token=(TEXT_REQUEST_TOKENS[key]||0)+1;
     TEXT_REQUEST_TOKENS[key]=token; return token;
   }
-  function ownsTextRequest(id,field,token){ return TEXT_REQUEST_TOKENS[draftKey(id,field)]===token; }
   function hasActiveComposition(){
     for(var key in ACTIVE_COMPOSITIONS){
       if(Object.prototype.hasOwnProperty.call(ACTIVE_COMPOSITIONS,key)) return true;
@@ -823,11 +841,30 @@
       },0);
     }
   }
+  function cancelTextDraft(id,field){
+    var key=draftKey(id,field), d=TEXT_DRAFTS[key], t=txnById(id);
+    var value=d?d.baseValue:String((t&&t[field])||'');
+    var q=textWriteQueue(id,field);
+    delete TEXT_DRAFTS[key]; q.pending=null;
+    if(q.active){
+      var revision=(TEXT_DRAFT_REVISIONS[key]||0)+1;
+      TEXT_DRAFT_REVISIONS[key]=revision;
+      q.pending={revision:revision,value:value,cancel:true};
+    }
+    TEXT_CANCEL_BLURS[key]=true;
+    setTimeout(function(){ delete TEXT_CANCEL_BLURS[key]; },0);
+    syncTextCopies(id,field,value,false,false);
+    return value;
+  }
+  function consumeTextCancel(id,field){
+    var key=draftKey(id,field);
+    return !!TEXT_CANCEL_BLURS[key];
+  }
   function isImeKeyEvent(e){ return !!(e&&(e.isComposing||e.keyCode===229)); }
-  function handleTextKeydown(e,el){
+  function handleTextKeydown(e,el,id,field){
     if(isImeKeyEvent(e)) return;
     if(e.key==='Enter'){ e.preventDefault(); el.blur(); }
-    else if(e.key==='Escape'){ e.preventDefault(); el.value=el.defaultValue; el.blur(); }
+    else if(e.key==='Escape'){ e.preventDefault(); el.value=cancelTextDraft(id,field); el.blur(); }
   }
   function nextMutation(){ MUTATION_SEQ++; INFLIGHT++; return MUTATION_SEQ; }
   function isStale(seq){ return seq!==MUTATION_SEQ; }
@@ -1002,74 +1039,111 @@
       .updateTxn(id, patch, true);
   }
 
-  /** Save one free-text draft without surrendering newer typing to an older acknowledgement. */
-  function saveTextDraft(id,field){
-    var t=txnById(id), d=textDraft(id,field); if(!t||!d||!d.dirty) return;
-    var key=draftKey(id,field), pending=TEXT_PENDING[key];
-    if(pending&&pending.revision===d.revision&&pending.value===d.value) return;
-    var revision=d.revision, value=d.value, prev=t[field], token=nextTextRequestToken(id,field);
-    TEXT_PENDING[key]={token:token,revision:revision,value:value}; t[field]=value;
+  function normalizedTextValue(value){ return String(value==null?'':value).trim(); }
+
+  /** Issue exactly one field write. A newer blur is retained as one coalesced pending revision. */
+  function issueTextSave(id,field,revision,rawValue,isCancel){
+    var t=txnById(id); if(!t) return;
+    var key=draftKey(id,field), q=textWriteQueue(id,field), value=normalizedTextValue(rawValue);
+    var token=nextTextRequestToken(id,field), prev=t[field];
+    q.active={token:token,revision:revision,rawValue:rawValue,value:value,prev:prev,cancel:!!isCancel};
+    t[field]=value;
     var seq=nextMutation(), patch={}; patch[field]=value;
     google.script.run
       .withSuccessHandler(function(res){
-        var current=textDraft(id,field);
-        if(ownsTextRequest(id,field,token)){
-          delete TEXT_PENDING[key];
-          if(current&&current.revision===revision&&current.value===value) delete TEXT_DRAFTS[key];
+        var active=q.active, current=textDraft(id,field), rowIntent=ROW_COMMIT_INTENTS[id];
+        if(active&&active.token===token) q.active=null;
+        if(!rowIntent){
+          if(current&&current.revision===revision){
+            delete TEXT_DRAFTS[key]; syncTextCopies(id,field,value,true,false);
+          } else if(!q.pending) syncTextCopies(id,field,value,true,true);
         }
         if(settle(seq,res&&res.txns)) repaint();
+        drainTextWrite(id,field);
       })
       .withFailureHandler(function(err){
-        var current=textDraft(id,field);
+        var active=q.active, current=textDraft(id,field), rowIntent=ROW_COMMIT_INTENTS[id];
+        if(active&&active.token===token) q.active=null;
         settle(seq,null);
-        // A later draft/save (including the combined Record patch) supersedes this request.
-        // Its failure must not roll the newer optimistic value back or show a stale error.
-        if(ownsTextRequest(id,field,token)){
-          delete TEXT_PENDING[key];
-          if(current&&current.revision===revision&&current.value===value){
-            var undo={}; undo[field]=prev;
-            revertTxn(id,undo);
+        if(!rowIntent&&!q.pending){
+          if((current&&current.revision===revision)||isCancel){
+            var undo={}; undo[field]=prev; revertTxn(id,undo);
           }
           toast('寫入失敗:'+((err&&err.message)||err),true);
         }
+        drainTextWrite(id,field);
       })
       .updateTxn(id,patch,true);
   }
 
-  /** Record a row and any dirty text as one authoritative patch. */
-  function commitRow(id,posted){
-    var t=txnById(id); if(!t) return;
-    var patch={posted:posted}, undo={posted:t.posted}, saved=[];
-    ['merchant','tag'].forEach(function(field){
-      var d=textDraft(id,field); if(!d||!d.dirty) return;
-      var key=draftKey(id,field), token=nextTextRequestToken(id,field);
-      TEXT_PENDING[key]={token:token,revision:d.revision,value:d.value};
-      patch[field]=d.value; undo[field]=t[field]; t[field]=d.value;
-      saved.push({field:field,key:key,token:token,revision:d.revision,value:d.value});
+  function drainTextWrite(id,field){
+    var q=textWriteQueue(id,field); if(q.active) return;
+    if(ROW_COMMIT_INTENTS[id]){ trySendRowCommit(id); return; }
+    var pending=q.pending; q.pending=null;
+    if(!pending) return;
+    if(pending.cancel){ issueTextSave(id,field,pending.revision,pending.value,true); return; }
+    var current=textDraft(id,field);
+    if(current&&current.revision>=pending.revision) issueTextSave(id,field,current.revision,current.value);
+  }
+
+  /** Save one free-text draft, serialising all requests for this logical field. */
+  function saveTextDraft(id,field){
+    var d=textDraft(id,field); if(!d||!d.dirty||ROW_COMMIT_INTENTS[id]) return;
+    var q=textWriteQueue(id,field);
+    if(q.active){ q.pending={revision:d.revision,value:d.value}; return; }
+    issueTextSave(id,field,d.revision,d.value);
+  }
+
+  /** Send a queued Record only after older per-field writes have completed on the server. */
+  function trySendRowCommit(id){
+    var intent=ROW_COMMIT_INTENTS[id]; if(!intent||intent.sent) return;
+    for(var i=0;i<intent.saved.length;i++){
+      if(textWriteQueue(id,intent.saved[i].field).active) return;
+    }
+    intent.sent=true;
+    intent.saved.forEach(function(s){
+      var q=textWriteQueue(id,s.field);
+      s.token=nextTextRequestToken(id,s.field);
+      q.active={token:s.token,revision:s.revision,rawValue:s.rawValue,value:s.value,record:true};
     });
-    t.posted=posted; render();
-    toast(posted?'已記帳 · 從清單移除':'已取回待記帳');
     var seq=nextMutation();
     google.script.run
       .withSuccessHandler(function(res){
-        saved.forEach(function(s){
-          var current=textDraft(id,s.field);
-          if(!ownsTextRequest(id,s.field,s.token)) return;
-          delete TEXT_PENDING[s.key];
-          if(current&&current.revision===s.revision&&current.value===s.value) delete TEXT_DRAFTS[s.key];
+        intent.saved.forEach(function(s){
+          var q=textWriteQueue(id,s.field), current=textDraft(id,s.field);
+          if(q.active&&q.active.token===s.token) q.active=null;
+          if(current&&current.revision===s.revision){
+            delete TEXT_DRAFTS[s.key]; syncTextCopies(id,s.field,s.value,true,false);
+          }
         });
+        delete ROW_COMMIT_INTENTS[id];
         if(settle(seq,res&&res.txns)) repaint();
       })
       .withFailureHandler(function(err){
-        var currentUndo={posted:undo.posted};
-        saved.forEach(function(s){
-          if(!ownsTextRequest(id,s.field,s.token)) return;
-          delete TEXT_PENDING[s.key]; currentUndo[s.field]=undo[s.field];
+        intent.saved.forEach(function(s){
+          var q=textWriteQueue(id,s.field); if(q.active&&q.active.token===s.token) q.active=null;
         });
-        settle(seq,null); revertTxn(id,currentUndo);
+        delete ROW_COMMIT_INTENTS[id];
+        settle(seq,null); revertTxn(id,intent.undo);
         toast('寫入失敗:'+((err&&err.message)||err),true);
       })
-      .updateTxn(id,patch,true);
+      .updateTxn(id,intent.patch,true);
+  }
+
+  /** Record a row and any dirty text as one authoritative patch. */
+  function commitRow(id,posted){
+    var t=txnById(id); if(!t||ROW_COMMIT_INTENTS[id]) return;
+    var intent={patch:{posted:posted},undo:{posted:t.posted},saved:[],sent:false};
+    ['merchant','tag'].forEach(function(field){
+      var d=textDraft(id,field); if(!d||!d.dirty) return;
+      var key=draftKey(id,field), value=normalizedTextValue(d.value), q=textWriteQueue(id,field);
+      q.pending=null;
+      intent.patch[field]=value; intent.undo[field]=t[field]; t[field]=value;
+      intent.saved.push({field:field,key:key,revision:d.revision,rawValue:d.value,value:value});
+    });
+    ROW_COMMIT_INTENTS[id]=intent; t.posted=posted; render();
+    toast(posted?'已記帳 · 從清單移除':'已取回待記帳');
+    trySendRowCommit(id);
   }
   // ---------- manual add / delete ----------
   function isManual(t){ return !!(t && t.id && String(t.id).indexOf('manual-')===0); }
@@ -1542,18 +1616,18 @@
         el.oncompositionstart=function(e){ e.stopPropagation(); beginComposition(id,field,this.value); };
         el.oncompositionend=function(e){ e.stopPropagation(); endComposition(id,field,this.value); };
       }
-      el.onchange=function(e){ e.stopPropagation(); applyEdit(id,field,this.value); };
-      if(field==='tag') el.onblur=function(){ saveTextDraft(id,field); };
-      if(el.tagName==='INPUT'){ el.onkeydown=function(e){ handleTextKeydown(e,this); }; }
+      el.onchange=function(e){ e.stopPropagation(); if(field==='tag'&&consumeTextCancel(id,field)) return; applyEdit(id,field,this.value); };
+      if(field==='tag') el.onblur=function(){ if(consumeTextCancel(id,field)) return; saveTextDraft(id,field); };
+      if(el.tagName==='INPUT'){ el.onkeydown=function(e){ handleTextKeydown(e,this,id,field); }; }
     });
     app.querySelectorAll('[data-emer]').forEach(function(i){
       var id=i.getAttribute('data-emer');
       i.oninput=function(e){ e.stopPropagation(); captureDraft(id,'merchant',this.value); };
       i.oncompositionstart=function(e){ e.stopPropagation(); beginComposition(id,'merchant',this.value); };
       i.oncompositionend=function(e){ e.stopPropagation(); endComposition(id,'merchant',this.value); };
-      i.onchange=function(e){ e.stopPropagation(); applyEdit(id,'merchant',this.value); };
-      i.onblur=function(){ saveTextDraft(id,'merchant'); };
-      i.onkeydown=function(e){ handleTextKeydown(e,this); };
+      i.onchange=function(e){ e.stopPropagation(); if(consumeTextCancel(id,'merchant')) return; applyEdit(id,'merchant',this.value); };
+      i.onblur=function(){ if(consumeTextCancel(id,'merchant')) return; saveTextDraft(id,'merchant'); };
+      i.onkeydown=function(e){ handleTextKeydown(e,this,id,'merchant'); };
     });
     app.querySelectorAll('[data-erec]').forEach(function(b){ b.onclick=function(){ var id=this.getAttribute('data-erec'); var t=txnById(id); if(t) commitRow(id,!t.posted); }; });
     // 我的消費: tapping the amount toggles the split editor open. Commit is Enter or 確定 only —
