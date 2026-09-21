@@ -88,23 +88,32 @@ function domStub(fields) {
 
 const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isStale', 'settle',
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
-  'applySplit', 'bulkPost', 'submitAdd', 'confirmDelete', 'closeDelModal', 'closeAddModal',
-  'chargedOf', 'isSplitTxn', 'fmt'];
+  'draftKey', 'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
+  'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
+  'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
+  'isImeKeyEvent', 'handleTextKeydown', 'normalizedTextValue', 'issueTextSave', 'drainTextWrite',
+  'saveTextDraft', 'trySendRowCommit', 'commitRow', 'applySplit', 'bulkPost',
+  'submitAdd', 'confirmDelete', 'closeDelModal', 'closeAddModal', 'chargedOf', 'isSplitTxn', 'fmt'];
 
 function harness(initial, opts) {
   opts = opts || {};
   const renders = { n: 0 };
   const toasts = [];
   const scrolls = [];
+  const timers = [];
   const rec = { calls: [], deletes: [], adds: [], reads: [] };
   const doc = opts.document || domStub(ADD_FORM);
   const fns = loadFns(PANEL_FNS, {
     TXNS: serverCopy(initial || []),
     MUTATION_SEQ: 0, INFLIGHT: 0, STALE_DROPPED: false, REFRESHING: false,
+    TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_WRITE_QUEUES: {},
+    TEXT_CANCEL_BLURS: {}, ROW_COMMIT_INTENTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
+    COMPOSITION_FLUSH_SCHEDULED: false,
     pendingDelId: null, delBusy: false, openSplit: null,
     google: { script: { run: recordingRun(rec) } },
     render: function () { renders.n++; if (opts.onRender) opts.onRender(); },
     toast: function (msg, isErr) { toasts.push({ msg: msg, err: !!isErr }); },
+    setTimeout: function (fn) { timers.push(fn); return timers.length; },
     document: doc,
     window: {
       pageXOffset: opts.pageX || 0, pageYOffset: opts.pageY || 0,
@@ -118,6 +127,7 @@ function harness(initial, opts) {
   fns.deletes = rec.deletes;
   fns.adds = rec.adds;
   fns.reads = rec.reads;
+  fns.flushTimers = function () { while (timers.length) timers.shift()(); };
   return fns;
 }
 
@@ -156,6 +166,20 @@ function rebuildingDom(key, before, after) {
     rebuild: function () { dom.matches = after; dom.activeElement = null; }
   };
   return dom;
+}
+
+function duplicateTextDom(id, field, initial) {
+  const selector = field === 'merchant'
+    ? '[data-emer="' + id + '"]'
+    : '[data-ef="tag"][data-id="' + id + '"]';
+  const nodes = [0, 1].map(function () { return { value: initial, defaultValue: initial }; });
+  return {
+    nodes: nodes,
+    activeElement: null,
+    getElementById: function () { return null; },
+    querySelector: function () { return null; },
+    querySelectorAll: function (sel) { return sel === selector ? nodes : []; }
+  };
 }
 
 function run() {
@@ -318,6 +342,242 @@ function run() {
   assert.strictEqual(num.renders.n, 1, 'render() still runs — the probe must not abort the repaint');
   assert.strictEqual(numAfter[0].focused, 1, 'focus is still restored');
   assert.deepStrictEqual(numAfter[0].ranges, [], 'no caret is written when none could be read');
+
+  // ---- IME-aware drafts: composition defers destructive repaint and flushes once ----
+  ['merchant', 'tag'].forEach(function (field) {
+    const h = harness(base);
+    const initial = field === 'merchant' ? '買晚餐' : '生活';
+    const finalValue = initial + '餐廳';
+    h.beginComposition(base[0].id, field, initial);
+    h.captureDraft(base[0].id, field, finalValue);
+    h.repaint();
+    h.repaint();
+    assert.strictEqual(h.renders.n, 0, field + ': repaint is deferred while composition is active');
+    assert.strictEqual(h.PENDING_REPAINT, true, field + ': repeated repaint requests coalesce');
+    h.endComposition(base[0].id, field, finalValue);
+    assert.strictEqual(h.renders.n, 0, field + ': compositionend does not detach the input synchronously');
+    h.flushTimers();
+    assert.strictEqual(h.renders.n, 1, field + ': the queued repaint flushes exactly once');
+    assert.strictEqual(h.draftValue(base[0], field), finalValue,
+      field + ': rebuilt copies resolve the same logical draft value');
+    assert.strictEqual(h.draftValue(Object.assign({}, base[0]), field), finalValue,
+      field + ': draft identity is transaction plus field, not a DOM-copy index');
+  });
+
+  // A trailing input after compositionend runs before the queued repaint and becomes the value
+  // rendered into every copy, rather than being lost with the detached native input.
+  const trailing = harness(base);
+  trailing.beginComposition(base[0].id, 'merchant', '買晚餐');
+  trailing.repaint();
+  trailing.endComposition(base[0].id, 'merchant', '買晚餐餐');
+  trailing.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
+  trailing.flushTimers();
+  assert.strictEqual(trailing.draftValue(base[0], 'merchant'), '買晚餐餐廳',
+    'the final post-composition input is captured before the queued repaint');
+
+  // Enter/Escape belong to the IME while composition is active. keyCode 229 is the fallback
+  // used by browsers that do not expose KeyboardEvent.isComposing reliably.
+  [
+    { key: 'Enter', isComposing: true },
+    { key: 'Escape', keyCode: 229 }
+  ].forEach(function (event) {
+    let prevented = 0, blurred = 0;
+    const input = { value: '組字中', defaultValue: '原值', blur: function () { blurred++; } };
+    event.preventDefault = function () { prevented++; };
+    trailing.handleTextKeydown(event, input, base[0].id, 'merchant');
+    assert.strictEqual(prevented, 0, event.key + ': IME keydown is not intercepted');
+    assert.strictEqual(blurred, 0, event.key + ': IME keydown does not blur the editor');
+    assert.strictEqual(input.value, '組字中', event.key + ': IME keydown does not reset the draft');
+  });
+  let normalPrevented = 0, normalBlurred = 0;
+  trailing.captureDraft(base[0].id, 'merchant', 'edited');
+  const normalInput = { value: 'edited', defaultValue: base[0].merchant, blur: function () { normalBlurred++; } };
+  trailing.handleTextKeydown({ key: 'Escape', preventDefault: function () { normalPrevented++; } }, normalInput,
+    base[0].id, 'merchant');
+  assert.strictEqual(normalPrevented, 1, 'ordinary Escape is still handled');
+  assert.strictEqual(normalBlurred, 1, 'ordinary Escape still blurs');
+  assert.strictEqual(normalInput.value, base[0].merchant, 'ordinary Escape restores the committed value');
+
+  // Escape cancels the logical draft, not just the visible node. The synthetic change/blur that
+  // follows browser blur must therefore have nothing left to save.
+  ['merchant', 'tag'].forEach(function (field) {
+    const original = base[0][field];
+    const dom = duplicateTextDom(base[0].id, field, original);
+    const h = harness(base, { document: dom });
+    h.captureDraft(base[0].id, field, '  不要儲存  ');
+    const input = dom.nodes[0]; input.blur = function () {};
+    h.handleTextKeydown({ key: 'Escape', preventDefault: function () {} }, input, base[0].id, field);
+    if (!h.consumeTextCancel(base[0].id, field)) h.applyEdit(base[0].id, field, input.value);
+    if (!h.consumeTextCancel(base[0].id, field)) h.saveTextDraft(base[0].id, field);
+    assert.strictEqual(h.textDraft(base[0].id, field), null, field + ': Escape deletes the dirty draft');
+    assert.strictEqual(h.calls.length, 0, field + ': following change/blur does not save the cancelled value');
+    assert.ok(dom.nodes.every(function (node) { return node.value === original; }),
+      field + ': every mounted copy returns to the committed value');
+  });
+
+  const activeCancelDom = duplicateTextDom(base[0].id, 'merchant', base[0].merchant);
+  const activeCancel = harness(base, { document: activeCancelDom });
+  activeCancel.captureDraft(base[0].id, 'merchant', '先送出的值');
+  activeCancel.saveTextDraft(base[0].id, 'merchant');
+  const activeInput = activeCancelDom.nodes[0]; activeInput.blur = function () {};
+  activeCancel.handleTextKeydown({ key: 'Escape', preventDefault: function () {} }, activeInput,
+    base[0].id, 'merchant');
+  const firstAck = serverCopy(base); firstAck[0].merchant = '先送出的值';
+  activeCancel.calls[0].success({ ok: true, txns: firstAck });
+  assert.strictEqual(activeCancel.calls.length, 2,
+    'Escape queues a compensating restore when the dirty value is already in flight');
+  assert.strictEqual(activeCancel.calls[1].patch.merchant, base[0].merchant,
+    'the compensating write restores the pre-draft committed value');
+
+  // ---- an old save acknowledgement cannot clear characters typed while it was in flight ----
+  ['merchant', 'tag'].forEach(function (field) {
+    const h = harness(base);
+    h.captureDraft(base[0].id, field, '第一版');
+    h.saveTextDraft(base[0].id, field);
+    h.captureDraft(base[0].id, field, '第二版');
+    const ack = serverCopy(base); ack[0][field] = '第一版';
+    h.calls[0].success({ ok: true, txns: ack });
+    assert.strictEqual(h.textDraft(base[0].id, field).value, '第二版',
+      field + ': an older acknowledgement leaves the newer draft dirty');
+    assert.strictEqual(h.draftValue(base[0], field), '第二版',
+      field + ': the newer draft overlays the adopted server value');
+  });
+
+  const supersededFailure = harness(base);
+  supersededFailure.captureDraft(base[0].id, 'merchant', '第一版');
+  supersededFailure.saveTextDraft(base[0].id, 'merchant');
+  supersededFailure.captureDraft(base[0].id, 'merchant', '第二版');
+  supersededFailure.calls[0].failure(new Error('old request failed'));
+  assert.strictEqual(supersededFailure.TXNS[0].merchant, '第一版',
+    'a superseded failure does not roll back the newer edit lifecycle');
+  assert.strictEqual(supersededFailure.draftValue(base[0], 'merchant'), '第二版',
+    'a superseded failure leaves newer typing visible');
+  assert.strictEqual(supersededFailure.toasts.length, 1,
+    'typing alone does not hide a current request failure; only a newer request supersedes it');
+
+  // ---- field writes are serial and intermediate pending revisions are coalesced ----
+  const serial = harness(base);
+  serial.captureDraft(base[0].id, 'merchant', ' 第一版 ');
+  serial.saveTextDraft(base[0].id, 'merchant');
+  serial.captureDraft(base[0].id, 'merchant', ' 第二版 ');
+  serial.saveTextDraft(base[0].id, 'merchant');
+  serial.captureDraft(base[0].id, 'merchant', ' 最終版 ');
+  serial.saveTextDraft(base[0].id, 'merchant');
+  assert.strictEqual(serial.calls.length, 1, 'only one Apps Script field write is active at a time');
+  assert.strictEqual(serial.calls[0].patch.merchant, '第一版', 'field commits preserve trimming semantics');
+  const firstSaved = serverCopy(base); firstSaved[0].merchant = '第一版';
+  serial.calls[0].success({ ok: true, txns: firstSaved });
+  assert.strictEqual(serial.calls.length, 2, 'the queue drains after the active write completes');
+  assert.strictEqual(serial.calls[1].patch.merchant, '最終版', 'intermediate revisions coalesce to the newest value');
+  assert.ok(!serial.calls.some(function (call) { return call.patch.merchant === '第二版'; }),
+    'the superseded middle revision is never sent');
+
+  // ---- draft revisions and request tokens never repeat after delete/recreate (ABA) ----
+  const aba = harness(base);
+  const firstDraft = aba.captureDraft(base[0].id, 'merchant', '相同文字');
+  const key = aba.draftKey(base[0].id, 'merchant');
+  aba.saveTextDraft(base[0].id, 'merchant');                 // request token 1
+  aba.commitRow(base[0].id, true);                           // waits behind token 1
+  assert.strictEqual(aba.calls.length, 1, 'Record does not race an active field write');
+  const committed = serverCopy(base);
+  committed[0].merchant = '相同文字'; committed[0].posted = true;
+  aba.calls[0].success({ ok: true, txns: committed });        // drains the field queue
+  assert.strictEqual(aba.calls.length, 2, 'Record is issued only after the older field write settles');
+  aba.calls[1].success({ ok: true, txns: committed });        // deletes the exact committed draft
+  assert.strictEqual(aba.textDraft(base[0].id, 'merchant'), null, 'Record success clears its exact draft');
+  const recreatedDraft = aba.captureDraft(base[0].id, 'merchant', '相同文字');
+  assert.ok(recreatedDraft.revision > firstDraft.revision,
+    'recreating the same value receives a newer logical revision');
+  aba.saveTextDraft(base[0].id, 'merchant');                 // token 3 for the recreated draft
+  assert.ok(aba.TEXT_REQUEST_TOKENS[key] > 2,
+    'request tokens remain monotonic independently of draft lifetime');
+  assert.strictEqual(aba.textDraft(base[0].id, 'merchant').revision, recreatedDraft.revision,
+    'an ABA-recreated same-value draft retains its new identity');
+
+  // ---- immediate Record includes both dirty text fields in its one authoritative patch ----
+  const record = harness(base);
+  record.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
+  record.captureDraft(base[0].id, 'tag', '約會');
+  record.commitRow(base[0].id, true);
+  assert.strictEqual(record.calls.length, 1, 'Record issues one request');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(record.calls[0].patch)), {
+    posted: true, merchant: '買晚餐餐廳', tag: '約會'
+  }, 'Record combines posted, merchant and TAG in one patch');
+  assert.strictEqual(record.TXNS[0].merchant, '買晚餐餐廳', 'Record applies merchant optimistically');
+  assert.strictEqual(record.TXNS[0].tag, '約會', 'Record applies TAG optimistically');
+
+  const trimmedRecord = harness(base);
+  trimmedRecord.captureDraft(base[0].id, 'merchant', '  晚餐  ');
+  trimmedRecord.captureDraft(base[0].id, 'tag', '  約會  ');
+  trimmedRecord.commitRow(base[0].id, true);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(trimmedRecord.calls[0].patch)), {
+    posted: true, merchant: '晚餐', tag: '約會'
+  }, 'Record trims merchant and TAG only when building the committed patch');
+
+  // ---- actual duplicate DOM copies share drafts and acknowledged values ----
+  ['merchant', 'tag'].forEach(function (field) {
+    const dom = duplicateTextDom(base[0].id, field, base[0][field]);
+    const h = harness(base, { document: dom });
+    dom.nodes[0].value = '  同步新值  ';
+    h.captureDraft(base[0].id, field, dom.nodes[0].value);
+    assert.strictEqual(dom.nodes[1].value, '  同步新值  ', field + ': input mirrors into the other mounted copy');
+    h.applyEdit(base[0].id, field, dom.nodes[1].value);       // stale copy commits its mirrored value
+    assert.strictEqual(h.calls[0].patch[field], '同步新值', field + ': stale copy cannot overwrite the new value');
+    const ack = serverCopy(base); ack[0][field] = '同步新值';
+    h.calls[0].success({ ok: true, txns: ack });
+    assert.ok(dom.nodes.every(function (node) {
+      return node.value === '同步新值' && node.defaultValue === '同步新值';
+    }), field + ': save acknowledgement updates value and defaultValue on every mounted copy');
+  });
+
+  // Blur/change can issue a text save immediately before the Record click. The combined Record
+  // request supersedes it, so a late failure from that older save cannot revert or toast.
+  const blurThenRecord = harness(base);
+  blurThenRecord.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
+  blurThenRecord.saveTextDraft(base[0].id, 'merchant');
+  blurThenRecord.commitRow(base[0].id, true);
+  assert.strictEqual(blurThenRecord.calls.length, 1,
+    'combined Record waits instead of racing the earlier blur save');
+  blurThenRecord.calls[0].failure(new Error('older blur failure'));
+  assert.strictEqual(blurThenRecord.calls.length, 2,
+    'combined Record drains after the older blur save settles');
+  const combined = serverCopy(base);
+  combined[0].merchant = '買晚餐餐廳'; combined[0].posted = true;
+  blurThenRecord.calls[1].success({ ok: true, txns: combined });
+  assert.strictEqual(blurThenRecord.TXNS[0].merchant, '買晚餐餐廳',
+    'older blur failure cannot revert the combined Record value');
+  assert.deepStrictEqual(blurThenRecord.toasts.map(function (t) { return t.msg; }),
+    ['已記帳 · 從清單移除'], 'superseded blur failure cannot add a stale error toast');
+
+  // A failed save reverts only the optimistic server-backed value. The draft remains the value
+  // every rebuilt editor shows, so the owner can retry without retyping it.
+  const failedDraft = harness(base);
+  failedDraft.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
+  failedDraft.saveTextDraft(base[0].id, 'merchant');
+  failedDraft.calls[0].failure(new Error('offline'));
+  assert.strictEqual(failedDraft.TXNS[0].merchant, base[0].merchant, 'failure reverts the optimistic model');
+  assert.strictEqual(failedDraft.draftValue(base[0], 'merchant'), '買晚餐餐廳',
+    'failure keeps the typed draft available for retry');
+  assert.ok(failedDraft.toasts[failedDraft.toasts.length - 1].err, 'failure remains visible');
+  const callsAfterFailure = failedDraft.calls.length;
+  failedDraft.saveTextDraft(base[0].id, 'merchant');
+  assert.strictEqual(failedDraft.calls.length, callsAfterFailure + 1,
+    'blurring unchanged failed text retries without requiring another input event');
+  assert.strictEqual(failedDraft.calls[1].patch.merchant, '買晚餐餐廳',
+    'the retry resends the preserved dirty draft');
+
+  // Binding coverage: the production attach() wires both editable field kinds to the same input
+  // and composition lifecycle and routes Record through the combined commit helper.
+  assert.ok(/oncompositionstart[\s\S]*beginComposition/.test(attachSrc), 'attach binds compositionstart');
+  assert.ok(/oncompositionend[\s\S]*endComposition/.test(attachSrc), 'attach binds compositionend');
+  assert.ok(/oninput[\s\S]*captureDraft/.test(attachSrc), 'attach captures live input');
+  assert.strictEqual((attachSrc.match(/handleTextKeydown\(e,this,/g) || []).length, 2,
+    'merchant and TAG keydown both use the IME-aware handler');
+  assert.ok(/field==='tag'[\s\S]*onblur=function\(\)\{[^}]*saveTextDraft\(id,field\); \}/.test(attachSrc),
+    'TAG blur retries a preserved dirty draft');
+  assert.ok(/data-emer[\s\S]*onblur=function\(\)\{[^}]*saveTextDraft\(id,'merchant'\); \}/.test(attachSrc),
+    'merchant blur retries a preserved dirty draft');
+  assert.ok(/commitRow\(id,!t\.posted\)/.test(attachSrc), 'Record uses the combined row commit');
 
   // ---- a list discarded by the sequence guard is refetched, not lost ----
   // applySplit, bulkPost and submitAdd bump the counter and adopt no list of their own. When one
