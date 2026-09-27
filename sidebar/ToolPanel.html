@@ -403,6 +403,7 @@
   var TXNS = [];
   var ACCOUNT_SOURCES = [];
   var PREFERRED_SOURCE = null;
+  var ACCOUNT_CREATE_PENDING = false;
 
   var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all',
                 inboxScope:'all', inboxDone:false };
@@ -1085,18 +1086,19 @@
   }
   function createAccountSource(){
     var input=document.getElementById('settings-account-name'), button=document.getElementById('settings-account-create');
+    if(ACCOUNT_CREATE_PENDING) return;
     var name=input.value.trim();
     if(!name){ input.classList.add('bad'); input.focus(); return; }
-    input.classList.remove('bad'); button.disabled=true;
+    input.classList.remove('bad'); ACCOUNT_CREATE_PENDING=true; button.disabled=true;
     google.script.run
       .withSuccessHandler(function(accounts){
         ACCOUNT_SOURCES=accounts||[];
         var chosen=ACCOUNT_SOURCES.filter(function(account){ return account.toLocaleLowerCase()===name.toLocaleLowerCase(); })[0]||name;
         PREFERRED_SOURCE=chosen;
-        button.disabled=false; input.value=''; renderSettingsAccounts(); toast('已新增帳戶：'+chosen);
+        ACCOUNT_CREATE_PENDING=false; button.disabled=false; input.value=''; renderSettingsAccounts(); toast('已新增帳戶：'+chosen);
       })
       .withFailureHandler(function(err){
-        button.disabled=false;
+        ACCOUNT_CREATE_PENDING=false; button.disabled=false;
         toast('新增帳戶失敗：'+((err&&err.message)?err.message:String(err)),true);
       })
       .addAccountSource(name);
