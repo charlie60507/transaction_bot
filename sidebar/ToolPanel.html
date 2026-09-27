@@ -28,6 +28,7 @@
   .head-top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp3); margin-bottom: var(--sp3); }
   .title-row { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
   .title { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+  .head-actions { display: flex; align-items: center; gap: var(--sp2); flex-shrink: 0; }
   .sheet-link { color: var(--text-muted); display: inline-flex; align-items: center; flex-shrink: 0;
     line-height: 0; text-decoration: none; }
   .sheet-link:hover { color: var(--accent); }
@@ -265,9 +266,11 @@
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.err { border-color: var(--spend); color: var(--spend); }
 
-  /* add-transaction button + modal */
+  /* header actions + modal */
   .addbtn { display: inline-flex; align-items: center; gap: 5px; background: var(--accent); color: #0e1220; border: none; border-radius: var(--r-ctl); padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
   .addbtn:hover { filter: brightness(1.08); }
+  .settingsbtn { display: inline-flex; align-items: center; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-primary); border-radius: var(--r-ctl); padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .settingsbtn:hover { border-color: var(--accent); color: var(--accent); }
   .txdel, .erdel { background: none; border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; width: 26px; height: 24px; cursor: pointer; flex-shrink: 0; font-size: 12px; }
   .txdel:hover, .erdel:hover { border-color: var(--spend); color: var(--spend); }
   .overlay { position: fixed; inset: 0; background: rgba(8,10,14,.6); display: none; align-items: flex-start; justify-content: center; padding: 6vh var(--sp4); z-index: 30; }
@@ -292,6 +295,12 @@
   .source-new button { border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-primary); border-radius: 6px; padding: 7px 11px; cursor: pointer; }
   .source-new button.primary { border-color: var(--accent); color: var(--accent); }
   .source-new button[disabled] { opacity: .5; cursor: default; }
+  .settings-section { margin-top: var(--sp3); }
+  .settings-section h4 { font-size: 12px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: .07em; margin-bottom: var(--sp2); }
+  .account-list { list-style: none; border: 1px solid var(--border); border-radius: var(--r-ctl); overflow: hidden; margin-bottom: var(--sp3); }
+  .account-list li { padding: 8px 10px; background: var(--bg-raised); border-bottom: 1px solid var(--border); }
+  .account-list li:last-child { border-bottom: none; }
+  .account-list .account-empty { color: var(--text-muted); }
   .minfo { grid-column: 1/-1; font-size: 12px; color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 8px 10px; }
   .minfo b { color: var(--text-primary); }
   .macts { display: flex; gap: var(--sp2); justify-content: flex-end; margin-top: var(--sp4); }
@@ -320,6 +329,16 @@
   .footer { text-align: center; padding: var(--sp4); font-size: 12px; color: var(--text-muted); }
   .loading, .error { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
   .error { color: var(--spend); }
+  @media (max-width: 520px) {
+    .head-top { align-items: flex-start; }
+    .head-actions { gap: 6px; }
+    .head-actions .period { display: none; }
+    .settingsbtn, .addbtn { padding: 7px 10px; }
+    .overlay { padding: var(--sp3); overflow-y: auto; }
+    .modal { margin: auto 0; }
+    .source-new { flex-wrap: wrap; }
+    .source-new input { flex-basis: 100%; }
+  }
 </style>
 </head>
 <body>
@@ -341,8 +360,7 @@
            distinctBanks() into a closed <select> — the previous datalist was
            pre-filled and never showed the other accounts on tap. -->
       <div class="mfld full"><label>來源</label>
-        <div class="source-row"><select id="a-source"></select><button type="button" class="source-add" id="a-source-add">＋新增帳戶</button></div>
-        <div class="source-new" id="a-source-new" hidden><input id="a-source-name" maxlength="50" placeholder="例：中信" spellcheck="false"><button type="button" class="primary" id="a-source-create">加入</button><button type="button" id="a-source-abort">取消</button></div>
+        <div class="source-row"><select id="a-source"></select></div>
       </div>
       <div class="mfld full"><label>商店 / 說明</label><input type="text" id="a-mer" placeholder="例：路邊攤晚餐"></div>
       <div class="mfld"><label>類別</label><select id="a-cat"></select></div>
@@ -350,6 +368,18 @@
       <div class="minfo">儲存後 <b>已記帳 ✓</b> · 可在明細裡刪除</div>
     </div>
     <div class="macts"><button class="mbtn" id="a-cancel">取消</button><button class="mbtn primary" id="a-save">新增</button></div>
+  </div>
+</div>
+<div class="overlay" id="settingsOverlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <h3 id="settings-title">設定</h3>
+    <div class="msub">管理獨立於單筆交易的長期設定。</div>
+    <section class="settings-section" aria-labelledby="accounts-title">
+      <h4 id="accounts-title">帳戶</h4>
+      <ul class="account-list" id="settings-account-list"></ul>
+      <div class="source-new"><input id="settings-account-name" maxlength="50" placeholder="新增帳戶，例如：中信" aria-label="新帳戶名稱" spellcheck="false"><button type="button" class="primary" id="settings-account-create">加入</button></div>
+    </section>
+    <div class="macts"><button type="button" class="mbtn" id="settings-close">關閉</button></div>
   </div>
 </div>
 <div class="overlay" id="delOverlay">
@@ -372,6 +402,7 @@
 
   var TXNS = [];
   var ACCOUNT_SOURCES = [];
+  var PREFERRED_SOURCE = null;
 
   var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all',
                 inboxScope:'all', inboxDone:false };
@@ -1028,32 +1059,41 @@
     var banks=distinctBanks();
     var src=document.getElementById('a-source');
     src.innerHTML=banks.map(function(b){return '<option value="'+esc(b)+'">'+esc(b)+'</option>';}).join('');
-    src.value=banks[0]||'';
-    showAccountInput(false);
+    var preferred=(typeof PREFERRED_SOURCE==='undefined')?null:PREFERRED_SOURCE;
+    var wanted=String(preferred||'').toLocaleLowerCase(), chosen=banks[0]||'';
+    for(var i=0;i<banks.length;i++) if(banks[i].toLocaleLowerCase()===wanted){ chosen=banks[i]; break; }
+    src.value=chosen;
+    if(typeof PREFERRED_SOURCE!=='undefined') PREFERRED_SOURCE=null;
     document.getElementById('a-amt').value=''; document.getElementById('a-mer').value='';
     document.getElementById('a-amt').classList.remove('bad'); di.classList.remove('bad');
     ov.classList.add('on');
   }
-  function showAccountInput(show){
-    var box=document.getElementById('a-source-new'), input=document.getElementById('a-source-name');
-    if(!box||!input) return;
-    box.hidden=!show;
-    if(!show){ input.value=''; input.classList.remove('bad'); }
-    else { input.focus(); }
+  function renderSettingsAccounts(){
+    var list=document.getElementById('settings-account-list'); if(!list) return;
+    var banks=distinctBanks();
+    list.innerHTML=banks.length
+      ? banks.map(function(name){ return '<li>'+esc(name)+'</li>'; }).join('')
+      : '<li class="account-empty">尚無帳戶</li>';
+  }
+  function openSettingsModal(){
+    var ov=document.getElementById('settingsOverlay'), input=document.getElementById('settings-account-name');
+    if(!ov||!input) return;
+    input.value=''; input.classList.remove('bad'); renderSettingsAccounts(); ov.classList.add('on'); input.focus();
+  }
+  function closeSettingsModal(){
+    var ov=document.getElementById('settingsOverlay'); if(ov) ov.classList.remove('on');
   }
   function createAccountSource(){
-    var input=document.getElementById('a-source-name'), button=document.getElementById('a-source-create');
+    var input=document.getElementById('settings-account-name'), button=document.getElementById('settings-account-create');
     var name=input.value.trim();
     if(!name){ input.classList.add('bad'); input.focus(); return; }
     input.classList.remove('bad'); button.disabled=true;
     google.script.run
       .withSuccessHandler(function(accounts){
         ACCOUNT_SOURCES=accounts||[];
-        var src=document.getElementById('a-source'), banks=distinctBanks();
         var chosen=ACCOUNT_SOURCES.filter(function(account){ return account.toLocaleLowerCase()===name.toLocaleLowerCase(); })[0]||name;
-        src.innerHTML=banks.map(function(b){return '<option value="'+esc(b)+'">'+esc(b)+'</option>';}).join('');
-        src.value=chosen;
-        button.disabled=false; showAccountInput(false); toast('已新增帳戶：'+chosen);
+        PREFERRED_SOURCE=chosen;
+        button.disabled=false; input.value=''; renderSettingsAccounts(); toast('已新增帳戶：'+chosen);
       })
       .withFailureHandler(function(err){
         button.disabled=false;
@@ -1437,7 +1477,7 @@
                   : esc(periodLabel(r));
     function tb(id,tt,sub){ return '<button data-tab="'+id+'" class="'+(tab===id?'active':'')+'"><span class="tt">'+tt+'</span><span class="tsub">'+sub+'</span></button>'; }
     var inboxSub = nPend ? '<span class="cnt">'+nPend+'</span>筆待處理' : '已全部記帳';
-    var h='<div class="head"><div class="head-top"><span class="title-row"><span class="title">交易 Dashboard</span>'+sheetLink()+'</span><span style="display:flex;align-items:center;gap:var(--sp3);flex-shrink:0"><span class="period">'+periodTxt+'</span><button class="addbtn" data-add>＋ 新增</button></span></div>'
+    var h='<div class="head"><div class="head-top"><span class="title-row"><span class="title">交易 Dashboard</span>'+sheetLink()+'</span><span class="head-actions"><span class="period">'+periodTxt+'</span><button class="settingsbtn" data-settings aria-label="開啟設定">設定</button><button class="addbtn" data-add>＋ 新增</button></span></div>'
       +'<div class="tabs">'+tb('analysis','分析','這段期間花在哪、哪天花的?')+tb('trend','趨勢','幾個月下來的變化?')+tb('project','項目 (TAG)','某個目標累計花了多少?')+tb('inbox','待記帳',inboxSub)+'</div>';
     if(isInbox){
       h+='<div class="controls"><span class="clabel">範圍</span><button class="ctl'+(state.inboxScope==='all'?' active':'')+'" data-iscope="all">全部</button><button class="ctl'+(state.inboxScope==='year'?' active':'')+'" data-iscope="year">本年</button>'
@@ -1504,6 +1544,7 @@
       };
     });
     var addB=app.querySelector('[data-add]'); if(addB) addB.onclick=function(){ openAddModal(null); };
+    var settingsB=app.querySelector('[data-settings]'); if(settingsB) settingsB.onclick=openSettingsModal;
     app.querySelectorAll('[data-del]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); deleteTxnRow(this.getAttribute('data-del')); }; });
     app.querySelectorAll('.ctl[data-pscope]').forEach(function(b){ b.onclick=function(){ state.projScope=this.getAttribute('data-pscope'); openProj=null; render(); }; });
     app.querySelectorAll('.ctl[data-iscope]').forEach(function(b){ b.onclick=function(){ state.inboxScope=this.getAttribute('data-iscope'); render(); }; });
@@ -1561,13 +1602,16 @@
   }
   document.getElementById('a-cancel').onclick=closeAddModal;
   document.getElementById('a-save').onclick=submitAdd;
-  document.getElementById('a-source-add').onclick=function(){ showAccountInput(true); };
-  document.getElementById('a-source-abort').onclick=function(){ showAccountInput(false); };
-  document.getElementById('a-source-create').onclick=createAccountSource;
-  document.getElementById('a-source-name').onkeydown=function(e){
+  document.getElementById('settings-close').onclick=closeSettingsModal;
+  document.getElementById('settings-account-create').onclick=createAccountSource;
+  document.getElementById('settings-account-name').onkeydown=function(e){
     if(e.key==='Enter'){ e.preventDefault(); createAccountSource(); }
-    else if(e.key==='Escape'){ e.preventDefault(); showAccountInput(false); }
+    else if(e.key==='Escape'){ e.preventDefault(); closeSettingsModal(); }
   };
+  document.getElementById('settingsOverlay').onclick=function(e){ if(e.target===this) closeSettingsModal(); };
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape'&&document.getElementById('settingsOverlay').classList.contains('on')){ e.preventDefault(); closeSettingsModal(); }
+  });
   document.getElementById('addOverlay').onclick=function(e){ if(e.target===this) closeAddModal(); };
   document.getElementById('d-cancel').onclick=closeDelModal;
   document.getElementById('d-ok').onclick=confirmDelete;
