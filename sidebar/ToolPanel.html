@@ -282,6 +282,16 @@
   .modal input, .modal select { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 8px 9px; font-size: 14px; font-family: inherit; }
   .modal input:focus, .modal select:focus { outline: none; border-color: var(--accent); }
   .modal input.bad { border-color: var(--spend); }
+  .source-row { display: flex; gap: var(--sp2); }
+  .source-row select { flex: 1; min-width: 0; }
+  .source-add { border: 1px solid var(--border); background: var(--bg-raised); color: var(--accent); border-radius: 6px; padding: 8px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .source-add:hover { border-color: var(--accent); }
+  .source-new { display: flex; gap: var(--sp2); margin-top: 3px; }
+  .source-new[hidden] { display: none; }
+  .source-new input { flex: 1; min-width: 0; }
+  .source-new button { border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-primary); border-radius: 6px; padding: 7px 11px; cursor: pointer; }
+  .source-new button.primary { border-color: var(--accent); color: var(--accent); }
+  .source-new button[disabled] { opacity: .5; cursor: default; }
   .minfo { grid-column: 1/-1; font-size: 12px; color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 8px 10px; }
   .minfo b { color: var(--text-primary); }
   .macts { display: flex; gap: var(--sp2); justify-content: flex-end; margin-top: var(--sp4); }
@@ -330,7 +340,10 @@
            does not leave a hole in front of 商店/說明. Options come from
            distinctBanks() into a closed <select> — the previous datalist was
            pre-filled and never showed the other accounts on tap. -->
-      <div class="mfld full"><label>來源</label><select id="a-source"></select></div>
+      <div class="mfld full"><label>來源</label>
+        <div class="source-row"><select id="a-source"></select><button type="button" class="source-add" id="a-source-add">＋新增帳戶</button></div>
+        <div class="source-new" id="a-source-new" hidden><input id="a-source-name" maxlength="50" placeholder="例：中信" spellcheck="false"><button type="button" class="primary" id="a-source-create">加入</button><button type="button" id="a-source-abort">取消</button></div>
+      </div>
       <div class="mfld full"><label>商店 / 說明</label><input type="text" id="a-mer" placeholder="例：路邊攤晚餐"></div>
       <div class="mfld"><label>類別</label><select id="a-cat"></select></div>
       <div class="mfld"><label>TAG（專案）</label><input id="a-tag" list="taglist" placeholder="（無）· 可直接打新專案" spellcheck="false"></div>
@@ -358,6 +371,7 @@
   var PROJ_COLOR = { '重機':'#5f9aa0','房子':'#6f88a8','汽車':'#9a8bb0','旅遊':'#b39a68','進修':'#6d8f9e' };
 
   var TXNS = [];
+  var ACCOUNT_SOURCES = [];
 
   var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'', projScope:'all',
                 inboxScope:'all', inboxDone:false };
@@ -731,12 +745,20 @@
       if(all[b]===undefined){ all[b]=0; man[b]=0; seq[b]=names.length; names.push(b); }
       all[b]++; if(isManual(t)) man[b]++;
     });
-    return names.sort(function(a,b){
+    names.sort(function(a,b){
       if((man[a]>0)!==(man[b]>0)) return man[a]>0?-1:1;       // 手動輸入過的整組在前
       var d=(man[a]>0) ? man[b]-man[a] : all[b]-all[a];
       // 平手時退回第一次出現的順序:比 0 穩定,清單不會在每次 render 之間洗牌。
       return d || seq[a]-seq[b];
     });
+    // Configured sources lead in the owner's chosen order. Historical sources remain as a
+    // fallback so adopting settings can never make an existing account disappear.
+    var out=[], seen={};
+    ACCOUNT_SOURCES.concat(names).forEach(function(name){
+      name=String(name||'').trim(); var key=name.toLocaleLowerCase();
+      if(name&&!seen[key]){seen[key]=1;out.push(name);}
+    });
+    return out;
   }
   function selOpts(list,cur,blankLabel){
     var arr=list.slice(); if(blankLabel!=null && arr.indexOf('')<0) arr.unshift('');
@@ -1007,9 +1029,37 @@
     var src=document.getElementById('a-source');
     src.innerHTML=banks.map(function(b){return '<option value="'+esc(b)+'">'+esc(b)+'</option>';}).join('');
     src.value=banks[0]||'';
+    showAccountInput(false);
     document.getElementById('a-amt').value=''; document.getElementById('a-mer').value='';
     document.getElementById('a-amt').classList.remove('bad'); di.classList.remove('bad');
     ov.classList.add('on');
+  }
+  function showAccountInput(show){
+    var box=document.getElementById('a-source-new'), input=document.getElementById('a-source-name');
+    if(!box||!input) return;
+    box.hidden=!show;
+    if(!show){ input.value=''; input.classList.remove('bad'); }
+    else { input.focus(); }
+  }
+  function createAccountSource(){
+    var input=document.getElementById('a-source-name'), button=document.getElementById('a-source-create');
+    var name=input.value.trim();
+    if(!name){ input.classList.add('bad'); input.focus(); return; }
+    input.classList.remove('bad'); button.disabled=true;
+    google.script.run
+      .withSuccessHandler(function(accounts){
+        ACCOUNT_SOURCES=accounts||[];
+        var src=document.getElementById('a-source'), banks=distinctBanks();
+        var chosen=ACCOUNT_SOURCES.filter(function(account){ return account.toLocaleLowerCase()===name.toLocaleLowerCase(); })[0]||name;
+        src.innerHTML=banks.map(function(b){return '<option value="'+esc(b)+'">'+esc(b)+'</option>';}).join('');
+        src.value=chosen;
+        button.disabled=false; showAccountInput(false); toast('已新增帳戶：'+chosen);
+      })
+      .withFailureHandler(function(err){
+        button.disabled=false;
+        toast('新增帳戶失敗：'+((err&&err.message)?err.message:String(err)),true);
+      })
+      .addAccountSource(name);
   }
   function closeAddModal(){ addHeatDate=null; var ov=document.getElementById('addOverlay'); if(ov) ov.classList.remove('on'); }
   function submitAdd(){
@@ -1498,16 +1548,26 @@
   function boot(){
     document.getElementById('app').innerHTML = '<div class="loading">載入中…</div>';
     google.script.run
-      .withSuccessHandler(function(data){ adoptTxns(data); render(); })
+      .withSuccessHandler(function(data){
+        ACCOUNT_SOURCES=(data&&data.accounts)||[];
+        adoptTxns(data&&data.txns); render();
+      })
       .withFailureHandler(function(err){
         var msg = (err && err.message) ? err.message : String(err);
         document.getElementById('app').innerHTML =
           '<div class="error">載入失敗:' + esc(msg) + '<br>請重新整理再試。</div>';
       })
-      .getAllTxns();
+      .getDashboardData();
   }
   document.getElementById('a-cancel').onclick=closeAddModal;
   document.getElementById('a-save').onclick=submitAdd;
+  document.getElementById('a-source-add').onclick=function(){ showAccountInput(true); };
+  document.getElementById('a-source-abort').onclick=function(){ showAccountInput(false); };
+  document.getElementById('a-source-create').onclick=createAccountSource;
+  document.getElementById('a-source-name').onkeydown=function(e){
+    if(e.key==='Enter'){ e.preventDefault(); createAccountSource(); }
+    else if(e.key==='Escape'){ e.preventDefault(); showAccountInput(false); }
+  };
   document.getElementById('addOverlay').onclick=function(e){ if(e.target===this) closeAddModal(); };
   document.getElementById('d-cancel').onclick=closeDelModal;
   document.getElementById('d-ok').onclick=confirmDelete;

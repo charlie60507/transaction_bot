@@ -63,6 +63,7 @@ function run() {
   const modal = loadFns(['openAddModal', 'closeAddModal'], {
     document: modalDoc, addHeatDate: null, NOW: { year: 2026, month: 8, day: 14 },
     realCats: function () { return ['飲食']; }, distinctBanks: function () { return ['現金']; },
+    showAccountInput: function () {},
     esc: function (x) { return String(x); }
   });
   modal.openAddModal('2026-08-20');

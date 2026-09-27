@@ -1101,7 +1101,9 @@ function bootstrapCategoryRules() {
 }
 
 /** One-time migration: merge the `category` sheet + vertical META into a single META page.
- *  New layout: A 交易關鍵字 | B 種類 (rules) | C spacer | D 種類清單 | E TAG清單 (vocab).
+ *  New layout: A 交易關鍵字 | B 種類 (rules) | C spacer | D 種類清單 | E TAG清單 (vocab)
+ *  | F spacer | G 帳戶清單. An existing account list is preserved if this legacy
+ *  migration is invoked after the dashboard account settings have been used.
  *  Rebuilds the dropdowns and deletes the old `category` sheet. Run once from the editor. */
 function migrateMetaCategoryToMerged() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -1123,6 +1125,8 @@ function migrateMetaCategoryToMerged() {
   // Current META vertical lists: A = 種類, B = TAG
   const catList = [];
   const tagList = [];
+  const accountList = [];
+  const hadAccountConfig = meta.getLastColumn() >= 7 && String(meta.getRange(1, 7).getValue() || '').trim() === '帳戶清單';
   if (meta.getLastRow() >= 2) {
     const mvals = meta.getRange(2, 1, meta.getLastRow() - 1, 2).getValues();
     for (const row of mvals) {
@@ -1130,6 +1134,13 @@ function migrateMetaCategoryToMerged() {
       const t = String(row[1] || '').trim();
       if (c) catList.push([c]);
       if (t) tagList.push([t]);
+    }
+  }
+  if (hadAccountConfig && meta.getLastRow() >= 2) {
+    const accounts = meta.getRange(2, 7, meta.getLastRow() - 1, 1).getValues();
+    for (const row of accounts) {
+      const account = String(row[0] || '').trim();
+      if (account) accountList.push([account]);
     }
   }
 
@@ -1152,6 +1163,10 @@ function migrateMetaCategoryToMerged() {
   if (rules.length) meta.getRange(2, 1, rules.length, 2).setValues(rules);
   if (catList.length) meta.getRange(2, 4, catList.length, 1).setValues(catList);
   if (tagList.length) meta.getRange(2, 5, tagList.length, 1).setValues(tagList);
+  if (hadAccountConfig) {
+    meta.getRange(1, 7).setValue('帳戶清單');
+    if (accountList.length) meta.getRange(2, 7, accountList.length, 1).setValues(accountList);
+  }
 
   // --- 4. Rebuild data-validation dropdowns ---
   const catRule = SpreadsheetApp.newDataValidation()

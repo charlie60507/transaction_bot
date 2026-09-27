@@ -19,6 +19,14 @@ const CFG = {
   IDX_MESSAGEID: 8, IDX_INOUT: 9, IDX_CATEGORY_MANUAL: 10, HDR_MINE: '我的消費'
 };
 
+// Keep the rolling seven-day importer deterministic. Using the host clock makes this fixture
+// expire as soon as its sample messages become more than a week old.
+const NativeDate = Date;
+class FixtureDate extends NativeDate {
+  constructor(...args) { super(...(args.length ? args : ['2026-09-14T04:00:00Z'])); }
+  static now() { return new NativeDate('2026-09-14T04:00:00Z').getTime(); }
+}
+
 function cloneRows(rows) { return rows.map(row => row.slice()); }
 
 class Range {
@@ -120,7 +128,7 @@ function loadBot(spreadsheet, threads) {
     FUBON_TRANSFER_QUERY: 'fixture-fubon-transfer'
   };
   const sandbox = {
-    console: { log: () => {} }, Logger: { log: () => {} }, Date,
+    console: { log: () => {} }, Logger: { log: () => {} }, Date: FixtureDate,
     CFG, Set, Map,
     PropertiesService: { getScriptProperties: () => ({ getProperty: key => props[key] || null }) },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {}, waitLock: () => true }) },

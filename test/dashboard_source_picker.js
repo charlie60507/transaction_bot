@@ -15,6 +15,7 @@ function run() {
   assert.ok(html.indexOf('id="taglist"') >= 0, 'TAG datalist is untouched');
 
   const fns = loadFns(['distinctBanks', 'isManual'], {
+    ACCOUNT_SOURCES: [],
     TXNS: [
       txn('國泰', 'msg-1'),
       txn('國泰', 'msg-2'),
@@ -31,6 +32,13 @@ function run() {
 
   // distinctBanks() returns a vm-realm Array; compare contents, not identity.
   assert.strictEqual(fns.distinctBanks().join('|'), ['現金', '國泰', '富邦', '臺新'].join('|'));
+
+  fns.ACCOUNT_SOURCES = ['中信', '國泰'];
+  assert.strictEqual(
+    fns.distinctBanks().join('|'),
+    ['中信', '國泰', '現金', '富邦', '臺新'].join('|'),
+    'configured accounts lead, duplicates collapse, and historical sources remain'
+  );
 }
 
 if (require.main === module) {
