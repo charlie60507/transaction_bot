@@ -2,7 +2,7 @@
 
 `deleteTxn` currently refuses any id that does not start with `manual-`. The dashboard mirrors that with `isManual` / `manualDelBtn`, so auto-recorded rows have no delete control. The sheet is the bot's only "already handled this mail" memory: `appendLast7DaysToSheet` builds three dedup sets (`existingKeySet`, `existingLooseKeySet`, `existingMessageIds`) from `Transactions` rows A–I. Delete a row inside the 7-day Gmail window and the next scheduled run records the mail again. Observed on a row deleted two days after its transaction.
 
-The page already has an `.overlay` + `.modal` pattern (the add dialog). Row identity is the composite `txnKey_` (MessageId|time|amount|last4|occurrence), not bare MessageId — CT-16. Duplicate rows, the main reason this feature exists, share a base key and are numbered by occurrence; deleting one member of a group renumbers the rest.
+The page already has an `.overlay` + `.modal` pattern (the add dialog). Row identity uses the established composite `txnKey_` (MessageId|time|amount|last4|occurrence), not bare MessageId. Duplicate rows, the main reason this feature exists, share a base key and are numbered by occurrence; deleting one member of a group renumbers the rest.
 
 `Transactions` is wider than the bot's `HEADER` (TAG, 我的消費 live past I). The bot reads `lastCol = HEADER.length`.
 
@@ -60,7 +60,7 @@ That snapshot is returned from `deleteTxn` itself (`{ ok, txns }`), not from a n
 
 ### D5 — `findRowByKey_` is the locate; unknown ids fail closed; already-deleted ids succeed
 
-`deleteTxn` locates with the existing composite key. A key that matches nothing in `Transactions` and nothing in `Deleted` fails closed — does not hit a neighbour. That is the invariant to protect: an edit landing on the wrong transaction has already happened (CT-16), and a delete is not recoverable from the UI.
+`deleteTxn` locates with the existing composite key. A key that matches nothing in `Transactions` and nothing in `Deleted` fails closed — does not hit a neighbour. That is the invariant to protect: the earlier composite-identity fix established that bare MessageId can target the wrong transaction, and a delete is not recoverable from the UI.
 
 A key already on `Deleted` (same base: MessageId|time|amount|last4) and gone from `Transactions` is a retry after success, not a miss: return success and the current snapshot, do not toast 找不到.
 

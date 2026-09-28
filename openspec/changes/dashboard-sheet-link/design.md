@@ -1,6 +1,6 @@
 ## Context
 
-The dashboard is a standing tab served by `doGet` from `sidebar/程式碼.js`. The bound spreadsheet is the source of truth (`CFG.SPREADSHEET_ID` via `getSpreadsheet_()`), but the page has no in-page control to open it. The heading **交易 Dashboard** is already sticky (`.head { position: sticky }`). The page sets `<base target="_top">`, so a plain `<a>` would navigate the Web App iframe away from the dashboard. CT-21 already added a Gmail envelope on `editRow` (`.mail`); this control is a different destination and must use a different glyph.
+The dashboard is a standing tab served by `doGet` from `sidebar/程式碼.js`. The bound spreadsheet is the source of truth (`CFG.SPREADSHEET_ID` via `getSpreadsheet_()`), but the page has no in-page control to open it. The heading **交易 Dashboard** is already sticky (`.head { position: sticky }`). The page sets `<base target="_top">`, so a plain `<a>` would navigate the Web App iframe away from the dashboard. The transaction editor already has a Gmail envelope on `editRow` (`.mail`); this control is a different destination and must use a different glyph.
 
 ## Goals / Non-Goals
 
@@ -14,7 +14,7 @@ The dashboard is a standing tab served by `doGet` from `sidebar/程式碼.js`. T
 **Non-Goals:**
 - Hard-coding a `gid` (Google remembers the last tab).
 - Changing the footer "即時讀取自 Transactions".
-- Reusing the CT-21 envelope glyph or putting this control on `editRow`.
+- Reusing the Gmail envelope glyph or putting this control on `editRow`.
 - Opening the sheet inside the dashboard, or a `google.script.run` hop.
 
 ## Decisions
@@ -23,11 +23,11 @@ The dashboard is a standing tab served by `doGet` from `sidebar/程式碼.js`. T
 
 **D2 — Inject `sheetUrl` from `doGet`.** `t.sheetUrl = getSpreadsheet_().getUrl()` and `var SHEET_URL = '<?= sheetUrl ?>';` mirrors `t.now` / `NOW`. The frontend never mentions `CFG.SPREADSHEET_ID`. No hard-coded `gid`.
 
-**D3 — Sheet-grid SVG, not the CT-21 envelope.** Two destinations stay visually distinct. Class `.sheet-link` (not `.mail`). `title` / `aria-label`: "Open spreadsheet". Muted (`--text-muted`), accent on hover.
+**D3 — Sheet-grid SVG, not the Gmail envelope.** Two destinations stay visually distinct. Class `.sheet-link` (not `.mail`). `title` / `aria-label`: "Open spreadsheet". Muted (`--text-muted`), accent on hover.
 
 **D4 — Immediately right of `.title`, not a second CTA.** Wrap title + icon in `.title-row` (`inline-flex`, centered). The right cluster (period + `＋ 新增`) keeps `flex-shrink: 0` so the add button is not shoved off a narrow row.
 
-**D5 — Helper `sheetLink()` next to `mailLink()`.** `render()` concatenates it after the title text. The Node fixture extracts that helper (and asserts `render`'s title HTML contains the anchor) the same way CT-21 extracts `mailLink` / `editRow`.
+**D5 — Helper `sheetLink()` next to `mailLink()`.** `render()` concatenates it after the title text. The Node fixture extracts that helper (and asserts `render`'s title HTML contains the anchor) the same way the Gmail-link fixture extracts `mailLink` / `editRow`.
 
 ## Risks / Trade-offs
 

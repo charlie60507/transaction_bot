@@ -2,7 +2,7 @@
 
 ### Requirement: Spreadsheet icon next to the sticky title
 
-The sticky heading **交易 Dashboard** SHALL have a quiet spreadsheet-grid icon immediately to its right. The control SHALL be a real `<a class="sheet-link">` whose `href` is the URL injected from `doGet` (`getSpreadsheet_().getUrl()` → `t.sheetUrl` → `SHEET_URL`). The anchor SHALL have `target="_blank"` and `rel="noopener"`. Its `title` and `aria-label` SHALL be "Open spreadsheet". The icon SHALL be muted (`--text-muted`) and use the accent color on hover. It SHALL NOT be a second primary button — `＋ 新增` remains the only CTA in that row. The SVG SHALL be a sheet grid (or similarly spreadsheet-like), not an emoji and not the CT-21 Gmail envelope. The href SHALL NOT hard-code a `gid`.
+The sticky heading **交易 Dashboard** SHALL have a quiet spreadsheet-grid icon immediately to its right. The control SHALL be a real `<a class="sheet-link">` whose `href` is the URL injected from `doGet` (`getSpreadsheet_().getUrl()` → `t.sheetUrl` → `SHEET_URL`). The anchor SHALL have `target="_blank"` and `rel="noopener"`. Its `title` and `aria-label` SHALL be "Open spreadsheet". The icon SHALL be muted (`--text-muted`) and use the accent color on hover. It SHALL NOT be a second primary button — `＋ 新增` remains the only CTA in that row. The SVG SHALL be a sheet grid (or similarly spreadsheet-like), not an emoji and not the Gmail envelope used for original-message links. The href SHALL NOT hard-code a `gid`.
 
 #### Scenario: Title row contains a new-tab spreadsheet link
 
