@@ -915,13 +915,23 @@
   }
   function enqueueRowWrite(ref,start){
     var rowKey=textRowKey(ref), q=ROW_WRITE_FIFOS[rowKey]||(ROW_WRITE_FIFOS[rowKey]={active:false,items:[]});
-    q.items.push(start);
+    q.items.push({start:start,cancel:arguments.length>2?arguments[2]:null});
     function pump(){
       if(q.active||!q.items.length) return;
+      var current=textTxn(rowKey); if(current&&current._pendingAdd) return;
       q.active=true; beginRowWrite(rowKey);
-      q.items.shift()(function(){ q.active=false; pump(); endRowWrite(rowKey); },rowKey);
+      q.items.shift().start(function(){ q.active=false; pump(); endRowWrite(rowKey); },rowKey);
     }
+    q.pump=pump;
     pump();
+  }
+  function resumeRowWrites(ref){
+    var q=ROW_WRITE_FIFOS[textRowKey(ref)]; if(q&&q.pump) q.pump();
+  }
+  function cancelRowWrites(ref){
+    var rowKey=textRowKey(ref), q=ROW_WRITE_FIFOS[rowKey]; if(!q||q.active) return;
+    while(q.items.length){ var item=q.items.shift(); if(item.cancel) item.cancel(); }
+    delete ROW_WRITE_FIFOS[rowKey];
   }
   function textDraft(id,field){ return TEXT_DRAFTS[draftKey(id,field)]||null; }
   function draftValue(t,field){ var d=t&&textDraft(t._textKey||t.id,field); return d?d.value:((t&&t[field])||''); }
@@ -1184,7 +1194,7 @@
         toast('寫入失敗:'+((err&&err.message)||err), true); done();
       })
       .updateTxn(serverId, patch, true);
-    });
+    },function(){ settle(seq,null); });
   }
 
   function normalizedTextValue(value){ return String(value==null?'':value).trim(); }
@@ -1487,6 +1497,7 @@
           state.scope=temp.y+'-'+('0'+temp.m).slice(-2); state.selYear=temp.y; state.selMonth=temp.m;
           openHeatDay=temp.y+'-'+temp.m+'-'+temp.d;
         }
+        resumeRowWrites(tempTextRow);
         ['merchant','tag'].forEach(function(field){ drainTextWrite(tempTextRow,field); });
         trySendDelete(tempTextRow);
         settle(addSeq, null); toast('已新增 · 已記帳 ✓'); repaint();
@@ -1495,6 +1506,7 @@
         var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1);
         delete PENDING_ADD_ROWS[tempTextRow];
         if(ROW_DELETE_INTENTS[tempTextRow]) cancelDeleteIntent(tempTextRow);
+        cancelRowWrites(tempTextRow);
         dropTextRowState(ensureTextRowKey(temp));
         if(contextual){ state.scope=navBefore.scope; state.selYear=navBefore.selYear; state.selMonth=navBefore.selMonth; openHeatDay=navBefore.openHeatDay; }
         settle(addSeq, null); repaint(); toast('新增失敗:'+((err&&err.message)||err), true);
@@ -1560,7 +1572,7 @@
         toast('寫入失敗:'+((err&&err.message)||err), true); done();
       })
       .updateTxn(serverId, { mine: (v==null?'':v) });
-    });
+    },function(){ settle(seq,null); });
   }
 
   // Gmail permalink for auto-recorded rows. Empty link (manual rows) returns nothing — no

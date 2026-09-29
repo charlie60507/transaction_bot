@@ -49,6 +49,7 @@ function submitHarness(opts) {
     txnById: function (id) { return fns.TXNS.filter(function (t) { return t.id === id; })[0] || null; },
     settle: function () {},
     drainTextWrite: function () {}, dropTextRowState: function () {}, trySendDelete: function () {},
+    resumeRowWrites: function () {}, cancelRowWrites: function () {},
     render: function () { renders.push(true); },
     repaint: function () { renders.push(true); },
     toast: function (message, error) { toasts.push({ message: message, error: !!error }); },

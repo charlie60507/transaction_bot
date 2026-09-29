@@ -90,7 +90,7 @@ const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isS
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
   'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
-  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite',
+  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'resumeRowWrites', 'cancelRowWrites',
   'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
   'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
   'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
@@ -593,6 +593,46 @@ function run() {
   assert.deepStrictEqual(JSON.parse(JSON.stringify(addRecordBeforeAck.calls[0].patch)), {
     posted: false, tag: '待回覆標籤'
   });
+
+  const addEditBeforeAck = harness(base);
+  addEditBeforeAck.submitAdd();
+  const editPending = addEditBeforeAck.TXNS[addEditBeforeAck.TXNS.length - 1];
+  const editPendingKey = addEditBeforeAck.textRowKey(editPending.id);
+  addEditBeforeAck.applyEdit(editPendingKey, 'amount', 125);
+  assert.strictEqual(addEditBeforeAck.calls.length, 0,
+    'a discrete edit waits while the manual row has only a temporary id');
+  addEditBeforeAck.adds[0].success({
+    id: 'manual-13|3000|80||0', rowId: 'uuid-manual-13', hm: '', y: 2026, m: 8, d: 12
+  });
+  assert.strictEqual(addEditBeforeAck.calls.length, 1, 'the queued discrete edit resumes after add acknowledgement');
+  assert.strictEqual(addEditBeforeAck.calls[0].id, 'uuid-manual-13');
+  assert.strictEqual(addEditBeforeAck.calls[0].patch.amount, 125);
+
+  const addSplitBeforeAck = harness(base);
+  addSplitBeforeAck.submitAdd();
+  const splitPending = addSplitBeforeAck.TXNS[addSplitBeforeAck.TXNS.length - 1];
+  const splitPendingKey = addSplitBeforeAck.textRowKey(splitPending.id);
+  addSplitBeforeAck.applySplit(splitPendingKey, '25');
+  assert.strictEqual(addSplitBeforeAck.calls.length, 0,
+    'a split waits while the manual row has only a temporary id');
+  addSplitBeforeAck.adds[0].success({
+    id: 'manual-14|3000|80||0', rowId: 'uuid-manual-14', hm: '', y: 2026, m: 8, d: 12
+  });
+  assert.strictEqual(addSplitBeforeAck.calls.length, 1, 'the queued split resumes after add acknowledgement');
+  assert.strictEqual(addSplitBeforeAck.calls[0].id, 'uuid-manual-14');
+  assert.strictEqual(addSplitBeforeAck.calls[0].patch.mine, 25);
+
+  const addQueuedEditFailure = harness(base);
+  addQueuedEditFailure.submitAdd();
+  const failedEditPending = addQueuedEditFailure.TXNS[addQueuedEditFailure.TXNS.length - 1];
+  const failedEditKey = addQueuedEditFailure.textRowKey(failedEditPending.id);
+  addQueuedEditFailure.applyEdit(failedEditKey, 'cat', '交通');
+  assert.strictEqual(addQueuedEditFailure.INFLIGHT, 2, 'the add and queued edit are both tracked mutations');
+  addQueuedEditFailure.adds[0].failure(new Error('add failed'));
+  assert.strictEqual(addQueuedEditFailure.calls.length, 0, 'a failed add never dispatches its queued temp-id edit');
+  assert.strictEqual(addQueuedEditFailure.INFLIGHT, 0, 'cancelling a queued edit settles its mutation accounting');
+  assert.strictEqual(addQueuedEditFailure.ROW_WRITE_FIFOS[failedEditKey], undefined,
+    'a failed add discards its dormant row-write queue');
 
   // Another write can adopt a snapshot containing the final manual row before addTxn's own
   // callback runs. The pending-add map keeps the temp logical identity and joins it to that row.
