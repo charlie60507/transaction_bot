@@ -88,8 +88,8 @@ function domStub(fields) {
 
 const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isStale', 'settle',
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
-  'resolveTextRowId', 'rawDraftKey', 'draftKey', 'textRowLineage', 'hasTextRowState',
-  'moveTextState', 'rekeyTextRow', 'reconcileTextRowIds',
+  'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
+  'textRowLineage', 'reconcileTextRowIds',
   'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
   'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
   'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
@@ -110,7 +110,7 @@ function harness(initial, opts) {
     MUTATION_SEQ: 0, INFLIGHT: 0, STALE_DROPPED: false, REFRESHING: false,
     TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_WRITE_QUEUES: {},
     TEXT_CANCEL_BLURS: {}, ROW_COMMIT_INTENTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
-    COMPOSITION_FLUSH_SCHEDULED: false, TEXT_ROW_ALIASES: {},
+    COMPOSITION_FLUSH_SCHEDULED: false, TEXT_ROW_SERIAL: 0,
     pendingDelId: null, delBusy: false, openSplit: null,
     google: { script: { run: recordingRun(rec) } },
     render: function () { renders.n++; if (opts.onRender) opts.onRender(); },
@@ -180,7 +180,12 @@ function duplicateTextDom(id, field, initial) {
     activeElement: null,
     getElementById: function () { return null; },
     querySelector: function () { return null; },
-    querySelectorAll: function (sel) { return sel === selector ? nodes : []; }
+    querySelectorAll: function (sel) {
+      if (sel === selector) return nodes;
+      if (field === 'merchant' && sel.indexOf('[data-emer]') >= 0) return nodes;
+      if (field === 'tag' && sel.indexOf('[data-ef="tag"]') >= 0) return nodes;
+      return [];
+    }
   };
 }
 
@@ -381,23 +386,49 @@ function run() {
   // composition. The logical draft, composition lock and next save must follow that row identity.
   const rekeyDuringIme = harness(base);
   const REKEYED_ID = base[0].id.replace('|120|', '|999|');
-  rekeyDuringIme.beginComposition(base[0].id, 'merchant', '組字');
-  rekeyDuringIme.captureDraft(base[0].id, 'merchant', '組字完成');
+  const LOGICAL_ROW = rekeyDuringIme.textRowKey(base[0].id);
+  rekeyDuringIme.beginComposition(LOGICAL_ROW, 'merchant', '組字');
+  rekeyDuringIme.captureDraft(LOGICAL_ROW, 'merchant', '組字完成');
   const rekeyedRows = serverCopy(base);
   rekeyedRows[0].amount = 999; rekeyedRows[0].id = REKEYED_ID;
   assert.strictEqual(rekeyDuringIme.adoptTxns(rekeyedRows), true, 'the id-changing list is adopted');
-  assert.strictEqual(rekeyDuringIme.resolveTextRowId(base[0].id), REKEYED_ID,
-    'the old DOM id resolves to the server row that replaced it');
+  assert.strictEqual(rekeyDuringIme.resolveTextRowId(LOGICAL_ROW), REKEYED_ID,
+    'the DOM-bound logical row resolves to the server id that replaced it');
   assert.strictEqual(rekeyDuringIme.draftValue(rekeyDuringIme.TXNS[0], 'merchant'), '組字完成',
     'the live draft moves to the new composite id');
   rekeyDuringIme.repaint();
   assert.strictEqual(rekeyDuringIme.renders.n, 0, 'the migrated composition still defers repaint');
-  rekeyDuringIme.endComposition(base[0].id, 'merchant', '組字完成');
+  rekeyDuringIme.endComposition(LOGICAL_ROW, 'merchant', '組字完成');
   rekeyDuringIme.flushTimers();
   assert.strictEqual(rekeyDuringIme.renders.n, 1, 'ending composition through the old DOM id flushes once');
-  rekeyDuringIme.saveTextDraft(base[0].id, 'merchant');
+  rekeyDuringIme.saveTextDraft(LOGICAL_ROW, 'merchant');
   assert.strictEqual(rekeyDuringIme.calls[0].id, REKEYED_ID,
     'the next write uses the authoritative id rather than the detached DOM id');
+
+  // Occurrence ids can be recycled inside one duplicate group: after row 1 changes amount,
+  // row 2 may inherit row 1's old string id. Client-only keys preserve identity by sheet order.
+  const dupRows = [
+    row({ id: 'same|1000|100|1234|0', amount: 100, merchant: '第一列' }),
+    row({ id: 'same|1000|100|1234|1', amount: 100, merchant: '第二列' })
+  ];
+  const duplicateRekey = harness(dupRows);
+  const firstLogical = duplicateRekey.textRowKey(dupRows[0].id);
+  const secondLogical = duplicateRekey.textRowKey(dupRows[1].id);
+  duplicateRekey.captureDraft(firstLogical, 'merchant', '第一列草稿');
+  duplicateRekey.captureDraft(secondLogical, 'merchant', '第二列草稿');
+  const shifted = serverCopy(dupRows);
+  shifted[0].amount = 200; shifted[0].id = 'same|1000|200|1234|0';
+  shifted[1].id = 'same|1000|100|1234|0';
+  duplicateRekey.adoptTxns(shifted);
+  assert.strictEqual(duplicateRekey.TXNS[0]._textKey, firstLogical,
+    'the changed first duplicate keeps the first logical editor despite losing its old id');
+  assert.strictEqual(duplicateRekey.TXNS[1]._textKey, secondLogical,
+    'the second duplicate does not steal the first row identity when it inherits that id string');
+  assert.strictEqual(duplicateRekey.draftValue(duplicateRekey.TXNS[0], 'merchant'), '第一列草稿');
+  assert.strictEqual(duplicateRekey.draftValue(duplicateRekey.TXNS[1], 'merchant'), '第二列草稿');
+  duplicateRekey.saveTextDraft(secondLogical, 'merchant');
+  assert.strictEqual(duplicateRekey.calls[0].id, shifted[1].id,
+    'the second draft writes to the second row after occurrence renumbering');
 
   // Every asynchronous callback that can rebuild the transaction panel goes through repaint(),
   // so an unrelated add/delete/bulk response cannot detach an active native IME node.
@@ -422,6 +453,21 @@ function run() {
   }, function (h) { h.deletes[0].success({ ok: true, txns: serverCopy([base[0]]) }); });
   assertAsyncRepaintDefers('bulk failure', function (h) { h.bulkPost([base[1].id]); },
     function (h) { h.calls[0].failure(new Error('boom')); });
+
+  const addTyping = harness(base);
+  addTyping.submitAdd();
+  const optimistic = addTyping.TXNS[addTyping.TXNS.length - 1];
+  const optimisticLogical = addTyping.textRowKey(optimistic.id);
+  addTyping.beginComposition(optimisticLogical, 'merchant', '回覆前輸入');
+  addTyping.adds[0].success({ id: 'manual-9', hm: '' });
+  assert.strictEqual(addTyping.resolveTextRowId(optimisticLogical), 'manual-9',
+    'the optimistic manual row keeps its logical key when the server id arrives');
+  assert.strictEqual(addTyping.draftValue(optimistic, 'merchant'), '回覆前輸入',
+    'typing begun before add success survives the id replacement');
+  addTyping.endComposition(optimisticLogical, 'merchant', '回覆前輸入');
+  addTyping.flushTimers();
+  addTyping.saveTextDraft(optimisticLogical, 'merchant');
+  assert.strictEqual(addTyping.calls[0].id, 'manual-9', 'the preserved manual-row draft saves by the final id');
 
   // Enter/Escape belong to the IME while composition is active. keyCode 229 is the fallback
   // used by browsers that do not expose KeyboardEvent.isComposing reliably.
@@ -599,6 +645,27 @@ function run() {
   assert.strictEqual(cancelDuringRecord.calls.length, 2, 'Record success drains the queued cancellation');
   assert.strictEqual(cancelDuringRecord.calls[1].patch.merchant, base[0].merchant,
     'the compensation restores the value from before the cancelled draft');
+
+  // A different response may change the composite id while Record is in flight. The intent and
+  // draft are keyed by the stable client row, so the late callback still clears the right state.
+  const rekeyDuringRecord = harness(base);
+  const recordLogical = rekeyDuringRecord.textRowKey(base[0].id);
+  rekeyDuringRecord.captureDraft(recordLogical, 'merchant', '一起記帳');
+  rekeyDuringRecord.commitRow(recordLogical, true);
+  const recordRekeyed = serverCopy(base);
+  recordRekeyed[0].amount = 999; recordRekeyed[0].id = REKEYED_ID;
+  rekeyDuringRecord.adoptTxns(recordRekeyed);
+  const recordResponse = serverCopy(recordRekeyed);
+  recordResponse[0].merchant = '一起記帳'; recordResponse[0].posted = true;
+  rekeyDuringRecord.calls[0].success({ ok: true, txns: recordResponse });
+  assert.strictEqual(rekeyDuringRecord.ROW_COMMIT_INTENTS[recordLogical], undefined,
+    'a Record callback clears its intent after an in-flight id change');
+  assert.strictEqual(rekeyDuringRecord.textDraft(recordLogical, 'merchant'), null,
+    'the exact committed draft is cleared through the stable row key');
+  rekeyDuringRecord.captureDraft(recordLogical, 'merchant', '下一次');
+  rekeyDuringRecord.commitRow(recordLogical, false);
+  assert.strictEqual(rekeyDuringRecord.calls.length, 2, 'the row is not permanently blocked after rekeyed Record');
+  assert.strictEqual(rekeyDuringRecord.calls[1].id, REKEYED_ID, 'the next Record uses the current server id');
 
   // ---- actual duplicate DOM copies share drafts and acknowledged values ----
   ['merchant', 'tag'].forEach(function (field) {
