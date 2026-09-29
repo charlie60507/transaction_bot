@@ -284,6 +284,9 @@ function updateTxn(messageId, patch, wantTxns) {
   messageId = asTxnKey_(messageId);
   if (!messageId) throw new Error('缺少 MessageId');
   patch = patch || {};
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15 * 1000);
+  try {
   const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
   if (!sh) throw new Error('找不到 Transactions 工作表');
   const last = sh.getLastRow();
@@ -352,6 +355,9 @@ function updateTxn(messageId, patch, wantTxns) {
     return { ok: true, txns: getAllTxns() };
   }
   return { ok: true };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /**

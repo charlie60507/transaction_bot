@@ -89,13 +89,14 @@ function domStub(fields) {
 const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isStale', 'settle',
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
-  'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds',
+  'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
+  'beginRowWrite', 'endRowWrite',
   'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
   'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
   'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
   'isImeKeyEvent', 'handleTextKeydown', 'normalizedTextValue', 'issueTextSave', 'drainTextWrite',
   'saveTextDraft', 'trySendRowCommit', 'commitRow', 'applySplit', 'bulkPost',
-  'submitAdd', 'confirmDelete', 'closeDelModal', 'closeAddModal', 'chargedOf', 'isSplitTxn', 'fmt'];
+  'submitAdd', 'confirmDelete', 'trySendDelete', 'closeDelModal', 'closeAddModal', 'chargedOf', 'isSplitTxn', 'fmt'];
 
 function harness(initial, opts) {
   opts = opts || {};
@@ -111,7 +112,8 @@ function harness(initial, opts) {
     TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_WRITE_QUEUES: {},
     TEXT_CANCEL_BLURS: {}, ROW_COMMIT_INTENTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
     COMPOSITION_FLUSH_SCHEDULED: false, TEXT_ROW_SERIAL: 0, TEXT_REMOVED_ROW_KEYS: {},
-    pendingDelId: null, delBusy: false, openSplit: null,
+    PENDING_ADD_ROWS: {}, ROW_ACTIVE_WRITES: {}, ROW_DELETE_INTENTS: {},
+    pendingDelId: null, pendingDelRowKey: null, delBusy: false, openSplit: null,
     google: { script: { run: recordingRun(rec) } },
     render: function () { renders.n++; if (opts.onRender) opts.onRender(); },
     toast: function (msg, isErr) { toasts.push({ msg: msg, err: !!isErr }); },
@@ -441,6 +443,7 @@ function run() {
   deleteReconcile.captureDraft(keepSecond, 'merchant', '第二列草稿');
   deleteReconcile.captureDraft(keepThird, 'merchant', '第三列草稿');
   deleteReconcile.pendingDelId = threeDupes[0].id;
+  deleteReconcile.pendingDelRowKey = deleteReconcile.textRowKey(threeDupes[0].id);
   deleteReconcile.confirmDelete();
   const afterDelete = serverCopy(threeDupes.slice(1));
   afterDelete[0].id = 'del|1000|100|1234|0'; afterDelete[1].id = 'del|1000|100|1234|1';
@@ -451,6 +454,23 @@ function run() {
     'the last duplicate retains its own logical state after occurrence renumbering');
   assert.strictEqual(deleteReconcile.draftValue(deleteReconcile.TXNS[0], 'merchant'), '第二列草稿');
   assert.strictEqual(deleteReconcile.draftValue(deleteReconcile.TXNS[1], 'merchant'), '第三列草稿');
+
+  // Delete is bound to the client row, not the occurrence string visible when the modal opened,
+  // and waits for an in-flight amount write that can renumber every duplicate in the group.
+  const deleteAfterRekey = harness(threeDupes);
+  const deleteLogical = deleteAfterRekey.textRowKey(threeDupes[1].id);
+  deleteAfterRekey.applyEdit(deleteLogical, 'amount', 200);
+  deleteAfterRekey.pendingDelId = threeDupes[1].id;
+  deleteAfterRekey.pendingDelRowKey = deleteLogical;
+  deleteAfterRekey.confirmDelete();
+  assert.strictEqual(deleteAfterRekey.deletes.length, 0, 'delete waits for the row write already in flight');
+  const amountShifted = serverCopy(threeDupes);
+  amountShifted[1].amount = 200; amountShifted[1].id = 'del|1000|200|1234|0';
+  amountShifted[2].id = 'del|1000|100|1234|1';
+  deleteAfterRekey.calls[0].success({ ok: true, txns: amountShifted });
+  assert.strictEqual(deleteAfterRekey.deletes.length, 1, 'delete dispatches after the amount response is adopted');
+  assert.strictEqual(deleteAfterRekey.deletes[0].arg.id, 'del|1000|200|1234|0',
+    'delete resolves the intended logical row to its current server id, not the recycled occurrence id');
 
   // Every asynchronous callback that can rebuild the transaction panel goes through repaint(),
   // so an unrelated add/delete/bulk response cannot detach an active native IME node.
@@ -471,7 +491,7 @@ function run() {
   assertAsyncRepaintDefers('add failure', function (h) { h.submitAdd(); },
     function (h) { h.adds[0].failure(new Error('boom')); });
   assertAsyncRepaintDefers('delete success', function (h) {
-    h.pendingDelId = base[1].id; h.confirmDelete();
+    h.pendingDelId = base[1].id; h.pendingDelRowKey = h.textRowKey(base[1].id); h.confirmDelete();
   }, function (h) { h.deletes[0].success({ ok: true, txns: serverCopy([base[0]]) }); });
   assertAsyncRepaintDefers('bulk failure', function (h) { h.bulkPost([base[1].id]); },
     function (h) { h.calls[0].failure(new Error('boom')); });
@@ -518,6 +538,28 @@ function run() {
   assert.deepStrictEqual(JSON.parse(JSON.stringify(addRecordBeforeAck.calls[0].patch)), {
     posted: false, tag: '待回覆標籤'
   });
+
+  // Another write can adopt a snapshot containing the final manual row before addTxn's own
+  // callback runs. The pending-add map keeps the temp logical identity and joins it to that row.
+  const addSnapshotRace = harness(base);
+  addSnapshotRace.submitAdd();
+  const racedTemp = addSnapshotRace.TXNS[addSnapshotRace.TXNS.length - 1];
+  const racedTempKey = addSnapshotRace.textRowKey(racedTemp.id);
+  addSnapshotRace.captureDraft(racedTempKey, 'merchant', '快照期間輸入');
+  addSnapshotRace.saveTextDraft(racedTempKey, 'merchant');
+  const snapshotWithFinal = serverCopy(base).concat([
+    row({ id: 'manual-12|3000|80||0', y: 2026, m: 8, d: 18, amount: 80, charged: 80,
+      merchant: '午餐', bank: '現金', last4: '', posted: true })
+  ]);
+  addSnapshotRace.adoptTxns(snapshotWithFinal);
+  assert.ok(addSnapshotRace.TXNS.some(function (t) { return t._textKey === racedTempKey; }),
+    'an unrelated authoritative snapshot cannot evict the pending optimistic identity');
+  addSnapshotRace.adds[0].success({ id: 'manual-12|3000|80||0', hm: '', y: 2026, m: 8, d: 18 });
+  assert.strictEqual(addSnapshotRace.calls.length, 1, 'queued text drains after the callback joins the final row');
+  assert.strictEqual(addSnapshotRace.calls[0].id, 'manual-12|3000|80||0');
+  assert.strictEqual(addSnapshotRace.calls[0].patch.merchant, '快照期間輸入');
+  assert.strictEqual(addSnapshotRace.TXNS.filter(function (t) { return t.id === 'manual-12|3000|80||0'; }).length, 1,
+    'joining the acknowledged row removes the detached optimistic duplicate');
 
   // Enter/Escape belong to the IME while composition is active. keyCode 229 is the fallback
   // used by browsers that do not expose KeyboardEvent.isComposing reliably.
@@ -889,7 +931,7 @@ function run() {
     function (h) { h.submitAdd(); },
     function (h) { boom(h, function (x) { return x.adds[0]; })(); });
   debtPaidByFailedMutation('confirmDelete',
-    function (h) { h.pendingDelId = base[1].id; h.confirmDelete(); },
+    function (h) { h.pendingDelId = base[1].id; h.pendingDelRowKey = h.textRowKey(base[1].id); h.confirmDelete(); },
     function (h) { boom(h, function (x) { return x.deletes[0]; })(); });
 
   // ---- the refetch's own bookkeeping: one read at a time, re-booked when it cannot be used ----
@@ -989,6 +1031,7 @@ function run() {
   // ---- a superseded delete response neither resurrects rows nor strands the page ----
   const del = harness(base);
   del.pendingDelId = base[1].id;
+  del.pendingDelRowKey = del.textRowKey(base[1].id);
   del.confirmDelete();
   assert.strictEqual(del.deletes.length, 1, 'the delete is written');
   del.applyEdit(base[0].id, 'posted', true);
@@ -1014,11 +1057,11 @@ function run() {
   assert.strictEqual(arity.reads.length, 0, 'and an ordinary run of either pays for no extra read');
 
   const split = extractFunction(script, 'applySplit');
-  assert.ok(/\.updateTxn\(\s*id,\s*\{\s*mine:\s*\(v==null\?'':v\)\s*\}\s*\)/.test(split), 'applySplit still calls updateTxn with two arguments');
+  assert.ok(/\.updateTxn\(\s*serverId,\s*\{\s*mine:\s*\(v==null\?'':v\)\s*\}\s*\)/.test(split), 'applySplit still calls updateTxn with two arguments');
   assert.ok(!/getAllTxns/.test(split), 'applySplit does not fetch the full list');
-  assert.ok(/revertTxn\(\s*id,\s*\{\s*mine:prevMine,\s*amount:prevAmt\s*\}\s*\)/.test(split), 'applySplit reverts by re-resolving its row');
+  assert.ok(/revertTxn\(\s*current\.id,\s*\{\s*mine:prevMine,\s*amount:prevAmt\s*\}\s*\)/.test(split), 'applySplit reverts by re-resolving its row');
   const bulk = extractFunction(script, 'bulkPost');
-  assert.ok(/\.updateTxn\(\s*todo\[i\],\s*\{\s*posted:true\s*\}\s*\)/.test(bulk), 'bulkPost still calls updateTxn with two arguments');
+  assert.ok(/\.updateTxn\(\s*serverId,\s*\{\s*posted:true\s*\}\s*\)/.test(bulk), 'bulkPost still calls updateTxn with two arguments');
   assert.ok(!/getAllTxns/.test(bulk), 'a ten-row bulk post does not pull ten copies of the table');
   const edit = extractFunction(script, 'applyEdit');
   assert.ok(!/getAllTxns/.test(edit), 'the edit path no longer refetches after a successful write');

@@ -839,7 +839,8 @@
   // make the server snapshot overwrite what the owner is still typing.
   var TEXT_DRAFTS={}, TEXT_DRAFT_REVISIONS={}, TEXT_REQUEST_TOKENS={}, TEXT_WRITE_QUEUES={},
       TEXT_CANCEL_BLURS={}, ROW_COMMIT_INTENTS={}, ACTIVE_COMPOSITIONS={}, PENDING_REPAINT=false,
-      COMPOSITION_FLUSH_SCHEDULED=false, TEXT_ROW_SERIAL=0, TEXT_REMOVED_ROW_KEYS={};
+      COMPOSITION_FLUSH_SCHEDULED=false, TEXT_ROW_SERIAL=0, TEXT_REMOVED_ROW_KEYS={},
+      PENDING_ADD_ROWS={}, ROW_ACTIVE_WRITES={}, ROW_DELETE_INTENTS={};
   function ensureTextRowKey(t){
     if(t&&!t._textKey) t._textKey='text-row-'+(++TEXT_ROW_SERIAL);
     return t?t._textKey:'';
@@ -887,6 +888,24 @@
         dropTextRowState(removed); delete TEXT_REMOVED_ROW_KEYS[removed];
       }
     }
+  }
+  function preservePendingAddRows(list){
+    for(var key in PENDING_ADD_ROWS){
+      if(!Object.prototype.hasOwnProperty.call(PENDING_ADD_ROWS,key)) continue;
+      var pending=PENDING_ADD_ROWS[key], present=false;
+      for(var i=0;i<list.length;i++) if(list[i]===pending||list[i]._textKey===key){ present=true; break; }
+      if(!present) list.push(pending);
+    }
+    return list;
+  }
+  function beginRowWrite(ref){
+    var rowKey=textRowKey(ref); ROW_ACTIVE_WRITES[rowKey]=(ROW_ACTIVE_WRITES[rowKey]||0)+1; return rowKey;
+  }
+  function endRowWrite(ref){
+    var rowKey=textRowKey(ref);
+    if(ROW_ACTIVE_WRITES[rowKey]>1) ROW_ACTIVE_WRITES[rowKey]--;
+    else delete ROW_ACTIVE_WRITES[rowKey];
+    trySendDelete(rowKey);
   }
   function textDraft(id,field){ return TEXT_DRAFTS[draftKey(id,field)]||null; }
   function draftValue(t,field){ var d=t&&textDraft(t._textKey||t.id,field); return d?d.value:((t&&t[field])||''); }
@@ -1108,7 +1127,9 @@
       saveTextDraft(id,field);
       return;
     }
-    var t=txnById(id); if(!t) return;
+    var t=textTxn(id); if(!t) return;
+    var rowKey=ensureTextRowKey(t); if(ROW_DELETE_INTENTS[rowKey]) return;
+    var serverId=t.id;
     var prev=t[field]; t[field]=value;
     if(field==='amount'){
       var amount=Number(value);
@@ -1127,7 +1148,7 @@
     // 種類(手動). Clearing the category writes a blank cell, which is what 未分類 means.
     var patch={}; patch[field]=(field==='cat'&&value==='未分類')?'':value;
     var undo={}; undo[field]=prev;
-    var seq=nextMutation();
+    var seq=nextMutation(); beginRowWrite(rowKey);
     google.script.run
       .withSuccessHandler(function(res){
         // ONE round trip: the ack and the authoritative list arrive together, so the old
@@ -1138,9 +1159,13 @@
         // signature, so ticking 已記帳 stays this page's de facto refresh. settle() owns the
         // ordering: a snapshot a later mutation superseded is dropped AND booked for a refetch.
         if(settle(seq, res && res.txns)) repaint();
+        endRowWrite(rowKey);
       })
-      .withFailureHandler(function(err){ settle(seq, null); revertTxn(id, undo); toast('寫入失敗:'+((err&&err.message)||err), true); })
-      .updateTxn(id, patch, true);
+      .withFailureHandler(function(err){
+        settle(seq, null); var current=textTxn(rowKey); if(current) revertTxn(current.id, undo); else repaint();
+        toast('寫入失敗:'+((err&&err.message)||err), true); endRowWrite(rowKey);
+      })
+      .updateTxn(serverId, patch, true);
   }
 
   function normalizedTextValue(value){ return String(value==null?'':value).trim(); }
@@ -1154,6 +1179,7 @@
     q.active={token:token,revision:revision,rawValue:rawValue,value:value,prev:prev,cancel:!!isCancel};
     t[field]=value;
     var seq=nextMutation(), patch={}; patch[field]=value;
+    beginRowWrite(rowKey);
     google.script.run
       .withSuccessHandler(function(res){
         var active=q.active, current=textDraft(rowKey,field), rowIntent=ROW_COMMIT_INTENTS[rowKey];
@@ -1165,6 +1191,7 @@
         }
         if(settle(seq,res&&res.txns)) repaint();
         drainTextWrite(rowKey,field);
+        endRowWrite(rowKey);
       })
       .withFailureHandler(function(err){
         var active=q.active, current=textDraft(rowKey,field), rowIntent=ROW_COMMIT_INTENTS[rowKey];
@@ -1178,6 +1205,7 @@
           toast('寫入失敗:'+((err&&err.message)||err),true);
         }
         drainTextWrite(rowKey,field);
+        endRowWrite(rowKey);
       })
       .updateTxn(t.id,patch,true);
   }
@@ -1185,6 +1213,7 @@
   function drainTextWrite(id,field){
     id=textRowKey(id);
     var q=textWriteQueue(id,field); if(q.active) return;
+    if(ROW_DELETE_INTENTS[id]) return;
     if(ROW_COMMIT_INTENTS[id]){ trySendRowCommit(id); return; }
     var pending=q.pending; q.pending=null;
     if(!pending) return;
@@ -1198,6 +1227,7 @@
     id=textRowKey(id);
     var d=textDraft(id,field); if(!d||!d.dirty) return;
     var q=textWriteQueue(id,field);
+    if(ROW_DELETE_INTENTS[id]) return;
     var t=textTxn(id);
     if(t&&t._pendingAdd){ q.pending={revision:d.revision,value:d.value}; return; }
     var intent=ROW_COMMIT_INTENTS[id];
@@ -1215,6 +1245,7 @@
   function trySendRowCommit(id){
     id=textRowKey(id);
     var intent=ROW_COMMIT_INTENTS[id]; if(!intent||intent.sent) return;
+    if(ROW_DELETE_INTENTS[id]) return;
     var t=textTxn(id); if(t&&t._pendingAdd) return;
     for(var i=0;i<intent.saved.length;i++){
       if(textWriteQueue(id,intent.saved[i].field).active) return;
@@ -1225,7 +1256,7 @@
       s.token=nextTextRequestToken(id,s.field);
       q.active={token:s.token,revision:s.revision,rawValue:s.rawValue,value:s.value,record:true};
     });
-    var seq=nextMutation();
+    var seq=nextMutation(); beginRowWrite(id);
     google.script.run
       .withSuccessHandler(function(res){
         intent.saved.forEach(function(s){
@@ -1238,6 +1269,7 @@
         delete ROW_COMMIT_INTENTS[id];
         if(settle(seq,res&&res.txns)) repaint();
         ['merchant','tag'].forEach(function(field){ drainTextWrite(id,field); });
+        endRowWrite(id);
       })
       .withFailureHandler(function(err){
         intent.saved.forEach(function(s){
@@ -1248,6 +1280,7 @@
         var currentTxn=textTxn(id); if(currentTxn) revertTxn(currentTxn.id,intent.undo); else repaint();
         toast('寫入失敗:'+((err&&err.message)||err),true);
         ['merchant','tag'].forEach(function(field){ drainTextWrite(id,field); });
+        endRowWrite(id);
       })
       .updateTxn(resolveTextRowId(id),intent.patch,true);
   }
@@ -1255,7 +1288,7 @@
   /** Record a row and any dirty text as one authoritative patch. */
   function commitRow(id,posted){
     var t=textTxn(id); if(!t) return;
-    id=ensureTextRowKey(t); if(ROW_COMMIT_INTENTS[id]) return;
+    id=ensureTextRowKey(t); if(ROW_COMMIT_INTENTS[id]||ROW_DELETE_INTENTS[id]) return;
     var intent={patch:{posted:posted},undo:{posted:t.posted},saved:[],sent:false};
     ['merchant','tag'].forEach(function(field){
       var d=textDraft(id,field); if(!d||!d.dirty) return;
@@ -1271,10 +1304,10 @@
   // ---------- manual add / delete ----------
   function isManual(t){ return !!(t && t.id && String(t.id).indexOf('manual-')===0); }
   function delBtn(t){ return '<button class="txdel" data-del="'+esc(t.id)+'" title="刪除">🗑</button>'; }
-  var pendingDelId=null, delBusy=false;
+  var pendingDelId=null, pendingDelRowKey=null, delBusy=false;
   function openDelModal(id){
     var t=txnById(id); if(!t) return;
-    pendingDelId=id;
+    pendingDelId=id; pendingDelRowKey=ensureTextRowKey(t);
     document.getElementById('d-mer').textContent=t.merchant||'(無說明)';
     document.getElementById('d-amt').textContent=(t.type==='收入'?'+':'')+'$'+fmt(t.amount);
     document.getElementById('d-date').textContent=t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2);
@@ -1282,31 +1315,39 @@
     document.getElementById('delOverlay').classList.add('on');
   }
   function closeDelModal(){
-    pendingDelId=null;
+    pendingDelId=null; pendingDelRowKey=null;
     var ov=document.getElementById('delOverlay'); if(ov) ov.classList.remove('on');
   }
   function deleteTxnRow(id){ openDelModal(id); }
   function confirmDelete(){
-    var id=pendingDelId; if(!id || delBusy) return;
-    var deletedTxn=txnById(id), deletedTextRow=deletedTxn?ensureTextRowKey(deletedTxn):null;
-    pendingDelId=null;
+    var rowKey=pendingDelRowKey; if(!rowKey || delBusy) return;
+    pendingDelId=null; pendingDelRowKey=null;
     delBusy=true;
     var ok=document.getElementById('d-ok'); if(ok) ok.disabled=true;
+    ROW_DELETE_INTENTS[rowKey]={sent:false,button:ok};
+    trySendDelete(rowKey);
+  }
+  function trySendDelete(rowKey){
+    rowKey=textRowKey(rowKey);
+    var intent=ROW_DELETE_INTENTS[rowKey]; if(!intent||intent.sent) return;
+    var t=textTxn(rowKey);
+    if(!t||t._pendingAdd||ROW_ACTIVE_WRITES[rowKey]||ROW_COMMIT_INTENTS[rowKey]) return;
+    intent.sent=true; var serverId=t.id;
     var delSeq=nextMutation();
     google.script.run
       .withSuccessHandler(function(res){
         delBusy=false;
-        if(deletedTextRow) TEXT_REMOVED_ROW_KEYS[deletedTextRow]=true;
+        delete ROW_DELETE_INTENTS[rowKey]; TEXT_REMOVED_ROW_KEYS[rowKey]=true;
         settle(delSeq, res && res.txns);
         closeDelModal(); repaint(); toast('已刪除');
       })
       .withFailureHandler(function(err){
-        delBusy=false; if(ok) ok.disabled=false;
+        delBusy=false; delete ROW_DELETE_INTENTS[rowKey]; if(intent.button) intent.button.disabled=false;
         settle(delSeq, null);
-        pendingDelId=id;
+        var current=textTxn(rowKey); pendingDelId=current?current.id:null; pendingDelRowKey=current?rowKey:null;
         toast('刪除失敗:'+((err&&err.message)||err), true);
       })
-      .deleteTxn({ id: id });
+      .deleteTxn({ id: serverId });
   }
   function openAddModal(date){
     var ov=document.getElementById('addOverlay'); if(!ov) return;
@@ -1388,6 +1429,7 @@
       state.scope=p[0]+'-'+('0'+(+p[1])).slice(-2); state.selYear=+p[0]; state.selMonth=+p[1];
       openHeatDay=(+p[0])+'-'+(+p[1])+'-'+(+p[2]);
     }
+    var tempTextRow=ensureTextRowKey(temp); PENDING_ADD_ROWS[tempTextRow]=temp;
     TXNS.push(temp); closeAddModal(); render();
     var addSeq=nextMutation();
     // The success handler adopts the server's hm as well as its id: the server decides what
@@ -1395,8 +1437,16 @@
     // identical to what the next reload will show, without restating that rule here.
     google.script.run
       .withSuccessHandler(function(nt){
-        if(nt&&nt.id) temp.id=String(nt.id);
+        var finalId=nt&&nt.id?String(nt.id):'';
+        var existing=finalId?txnById(finalId):null;
+        if(existing&&existing!==temp){
+          existing._textKey=tempTextRow; existing._pendingAdd=true;
+          var tempIndex=TXNS.indexOf(temp); if(tempIndex>=0) TXNS.splice(tempIndex,1);
+          temp=existing;
+        } else if(TXNS.indexOf(temp)<0) TXNS.push(temp);
+        if(finalId) temp.id=finalId;
         temp._pendingAdd=false;
+        delete PENDING_ADD_ROWS[tempTextRow];
         if(nt){
           temp.hm=(nt.hm==null)?'':String(nt.hm);
           if(nt.y!=null) temp.y=+nt.y; if(nt.m!=null) temp.m=+nt.m; if(nt.d!=null) temp.d=+nt.d;
@@ -1405,12 +1455,14 @@
           state.scope=temp.y+'-'+('0'+temp.m).slice(-2); state.selYear=temp.y; state.selMonth=temp.m;
           openHeatDay=temp.y+'-'+temp.m+'-'+temp.d;
         }
-        var tempTextRow=ensureTextRowKey(temp);
         ['merchant','tag'].forEach(function(field){ drainTextWrite(tempTextRow,field); });
+        trySendDelete(tempTextRow);
         settle(addSeq, null); toast('已新增 · 已記帳 ✓'); repaint();
       })
       .withFailureHandler(function(err){
         var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1);
+        delete PENDING_ADD_ROWS[tempTextRow];
+        delete ROW_DELETE_INTENTS[tempTextRow];
         dropTextRowState(ensureTextRowKey(temp));
         if(contextual){ state.scope=navBefore.scope; state.selYear=navBefore.selYear; state.selMonth=navBefore.selMonth; openHeatDay=navBefore.openHeatDay; }
         settle(addSeq, null); repaint(); toast('新增失敗:'+((err&&err.message)||err), true);
@@ -1428,11 +1480,12 @@
    */
   function splitBox(t){
     var chg=chargedOf(t);
+    var rowKey=ensureTextRowKey(t);
     return '<div class="split">'
       +'<span class="slb">這筆有多少是我自己的？</span>'
-      +'<input class="sin num" type="number" inputmode="decimal" min="0" step="1" value="'+(isSplitTxn(t)?t.mine:'')+'" placeholder="'+fmt(chg)+'" data-sin="'+esc(t.id)+'" aria-label="這筆有多少是我自己的">'
+      +'<input class="sin num" type="number" inputmode="decimal" min="0" step="1" value="'+(isSplitTxn(t)?t.mine:'')+'" placeholder="'+fmt(chg)+'" data-sin="'+esc(t.id)+'" data-trow="'+esc(rowKey)+'" aria-label="這筆有多少是我自己的">'
       +'<span class="shint num">刷卡 '+fmt(chg)+'</span>'
-      +'<button type="button" class="sbtn ok" data-sok="'+esc(t.id)+'">確定</button>'
+      +'<button type="button" class="sbtn ok" data-sok="'+esc(t.id)+'" data-trow="'+esc(rowKey)+'">確定</button>'
       +'<button type="button" class="sbtn" data-scancel="1">取消</button>'
       +'<span class="snote" data-snote="'+esc(t.id)+'" hidden></span>'
       +'</div>';
@@ -1447,7 +1500,9 @@
    * "all of it was mine" is what a blank cell already means.
    */
   function applySplit(id, raw){
-    var t=txnById(id); if(!t) return;
+    var t=textTxn(id); if(!t) return;
+    var rowKey=ensureTextRowKey(t); if(ROW_DELETE_INTENTS[rowKey]) return;
+    var serverId=t.id;
     var chg=chargedOf(t), prevMine=t.mine, prevAmt=t.amount;
     var v = (raw==='') ? null : Number(raw);
     if(v!==null && (!isFinite(v)||v<0)){ toast('請填 0 以上的數字', true); return; }
@@ -1457,16 +1512,21 @@
     // A split is a local mutation too: bumping the counter stops an edit response already in
     // flight from adopting a list that predates it, and settling through settle() is what makes
     // that dropped list come back as a refetch instead of stranding the page on a stale row id.
-    var seq=nextMutation();
+    var seq=nextMutation(); beginRowWrite(rowKey);
     google.script.run
       .withSuccessHandler(function(){
         settle(seq, null);
         if(v==null) toast('整筆都是你的 · $'+fmt(chg));
         else if(v>chg) toast('這筆你消費 $'+fmt(v)+'，比刷卡 $'+fmt(chg)+' 多 — 有人先幫你墊了 $'+fmt(v-chg));
         else toast('這筆算你 $'+fmt(v)+'，代墊 $'+fmt(chg-v)+' 不計入統計');
+        endRowWrite(rowKey);
       })
-      .withFailureHandler(function(err){ settle(seq, null); revertTxn(id, { mine:prevMine, amount:prevAmt }); toast('寫入失敗:'+((err&&err.message)||err), true); })
-      .updateTxn(id, { mine: (v==null?'':v) });
+      .withFailureHandler(function(err){
+        settle(seq, null); var current=textTxn(rowKey);
+        if(current) revertTxn(current.id, { mine:prevMine, amount:prevAmt }); else repaint();
+        toast('寫入失敗:'+((err&&err.message)||err), true); endRowWrite(rowKey);
+      })
+      .updateTxn(serverId, { mine: (v==null?'':v) });
   }
 
   // Gmail permalink for auto-recorded rows. Empty link (manual rows) returns nothing — no
@@ -1514,9 +1574,9 @@
       +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" value="'+esc(currentText('merchant'))+'" placeholder="(無說明)" spellcheck="false">'+mailLink(t)+compactAmount+'</div>'
       +(t.type==='支出' && openSplit===t.id ? splitBox(t) : '')
       +'<div class="er2">'
-        +(canCorrectAmount(t)?'<div class="fld"><span class="lb">金額</span><input class="amtcor num" type="number" inputmode="decimal" min="0.01" step="0.01" data-ef="amount" data-id="'+esc(t.id)+'" value="'+esc(t.amount)+'" aria-label="金額"></div>':'')
-        +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
-        +'<div class="fld"><span class="lb">收支</span><select data-ef="type" data-id="'+esc(t.id)+'" style="color:'+tc+'">'+selOpts(['支出','收入','轉帳'],t.type)+'</select></div>'
+        +(canCorrectAmount(t)?'<div class="fld"><span class="lb">金額</span><input class="amtcor num" type="number" inputmode="decimal" min="0.01" step="0.01" data-ef="amount" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" value="'+esc(t.amount)+'" aria-label="金額"></div>':'')
+        +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
+        +'<div class="fld"><span class="lb">收支</span><select data-ef="type" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" style="color:'+tc+'">'+selOpts(['支出','收入','轉帳'],t.type)+'</select></div>'
         // TAG is a type-or-pick field, not a closed list: a project only exists once a
         // transaction carries it, so if the picker can only offer values already in the sheet
         // there is no way to start a new one from the web at all. 類別 stays a closed <select>
@@ -1578,9 +1638,9 @@
   // Mark a whole day recorded. Writes are sequential, not parallel: Apps Script serializes
   // sheet writes anyway, and one at a time means a mid-way failure reverts exactly one row.
   function bulkPost(ids){
-    var todo = ids.filter(function(id){ var t=txnById(id); return t && !t.posted; });
+    var todo = ids.map(function(id){ var t=txnById(id); return t&&!t.posted?ensureTextRowKey(t):null; }).filter(Boolean);
     if(!todo.length) return;
-    todo.forEach(function(id){ var t=txnById(id); t.posted=true; });
+    todo.forEach(function(rowKey){ var t=textTxn(rowKey); t.posted=true; });
     render();
     var failed = 0;
     (function step(i){
@@ -1594,11 +1654,13 @@
       // cannot be adopted on top of the rows it just marked — and settling each row through
       // settle() is what turns that dropped list into one refetch rather than a stale row id.
       // Nothing is refetched on the ordinary run: the debt only exists after a real drop.
-      var seq=nextMutation();
+      var rowKey=todo[i], current=textTxn(rowKey);
+      if(!current||ROW_DELETE_INTENTS[rowKey]){ step(i+1); return; }
+      var serverId=current.id, seq=nextMutation(); beginRowWrite(rowKey);
       google.script.run
-        .withSuccessHandler(function(){ settle(seq, null); step(i+1); })
-        .withFailureHandler(function(){ settle(seq, null); var t=txnById(todo[i]); if(t) t.posted=false; failed++; step(i+1); })
-        .updateTxn(todo[i], { posted:true });
+        .withSuccessHandler(function(){ settle(seq, null); endRowWrite(rowKey); step(i+1); })
+        .withFailureHandler(function(){ settle(seq, null); var t=textTxn(rowKey); if(t) t.posted=false; failed++; endRowWrite(rowKey); step(i+1); })
+        .updateTxn(serverId, { posted:true });
     })(0);
   }
 
@@ -1778,9 +1840,8 @@
     app.querySelectorAll('.cell[data-hday]').forEach(function(c){ c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); }; });
     app.querySelectorAll('[data-hadd]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); openAddModal(this.getAttribute('data-hadd')); }; });
     app.querySelectorAll('[data-ef]').forEach(function(el){
-      var field=el.getAttribute('data-ef'), id=el.getAttribute('data-id');
+      var field=el.getAttribute('data-ef'), id=el.getAttribute('data-trow')||el.getAttribute('data-id');
       if(field==='tag'){
-        id=el.getAttribute('data-trow')||id;
         el.oninput=function(e){ e.stopPropagation(); captureDraft(id,field,this.value); };
         el.oncompositionstart=function(e){ e.stopPropagation(); beginComposition(id,field,this.value); };
         el.oncompositionend=function(e){ e.stopPropagation(); endComposition(id,field,this.value); };
@@ -1812,19 +1873,19 @@
     app.querySelectorAll('[data-sok]').forEach(function(b){ b.onclick=function(e){
       e.stopPropagation();
       var box=this.parentNode, inp=box?box.querySelector('.sin'):null;
-      applySplit(this.getAttribute('data-sok'), inp?inp.value.trim():'');
+      applySplit(this.getAttribute('data-trow')||this.getAttribute('data-sok'), inp?inp.value.trim():'');
     }; });
     app.querySelectorAll('[data-scancel]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); openSplit=null; render(); }; });
     app.querySelectorAll('[data-sin]').forEach(function(inp){
       inp.onclick=function(e){ e.stopPropagation(); };
       inp.onkeydown=function(e){
-        if(e.key==='Enter'){ e.preventDefault(); applySplit(this.getAttribute('data-sin'), this.value.trim()); }
+        if(e.key==='Enter'){ e.preventDefault(); applySplit(this.getAttribute('data-trow')||this.getAttribute('data-sin'), this.value.trim()); }
         else if(e.key==='Escape'){ e.preventDefault(); openSplit=null; render(); }
       };
       // Live, non-blocking note. Consuming more than the card was charged is legitimate —
       // someone else fronted part of my share — so it explains rather than blocks.
       inp.oninput=function(){
-        var t=txnById(this.getAttribute('data-sin')); if(!t) return;
+        var t=textTxn(this.getAttribute('data-trow')||this.getAttribute('data-sin')); if(!t) return;
         var note=this.parentNode?this.parentNode.querySelector('.snote'):null; if(!note) return;
         var chg=chargedOf(t), v=Number(this.value.trim());
         if(this.value.trim()!=='' && isFinite(v) && v>chg){
@@ -1873,7 +1934,7 @@
       // before times existed. No blank badge, no undefined on screen, no NaN in the comparator.
       t.hm = (t.hm==null) ? '' : String(t.hm);
       t.posted = (t.posted===true); t.id = String(t.id||''); return t; });
-    reconcileTextRowIds(TXNS,next); TXNS=next;
+    preservePendingAddRows(next); reconcileTextRowIds(TXNS,next); TXNS=next;
     return txnsSignature(TXNS)!==before;
   }
   function boot(){
