@@ -115,7 +115,7 @@ as part of product settings instead.
 ## GitHub Issue Harness
 
 Use the repository's GitHub Issue Harness for issue-to-PR work. Its configuration
-lives in `.codex/github-harness.yaml`; do not add a second ticket-routing profile.
+lives in `.harness/github-harness.yaml`; do not add a second ticket-routing profile.
 
 ## Deploy
 
