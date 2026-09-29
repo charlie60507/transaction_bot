@@ -32,7 +32,7 @@ User decisions taken during design: statistics only, no repayment tracking; the 
 
 **D7 — The amount is the entry point; nothing is added to `.er2`.** `editRow`'s control strip already carries 類別 / 收支 / TAG plus the 記帳 button. A fourth field would ask a question whose answer is "no" for 95% of rows. The amount becomes a button that renders as plain text, with a dashed underline on hover as the only affordance.
 
-**D8 — Commit on Enter or 確定 only, never on blur.** On touch, blur is part of the same tap already heading for another control; committing there is how a 已記帳 press straight after typing used to be swallowed (the CT-16 class of bug). Esc and 取消 close without writing.
+**D8 — Commit on Enter or 確定 only, never on blur.** On touch, blur is part of the same tap already heading for another control; committing there is how a 已記帳 press straight after typing used to be swallowed in the earlier mobile record-tap bug. Esc and 取消 close without writing.
 
 **D9 — Aggregate annotations appear only when the excluded amount is positive.** The reverse case makes `charged − mine` negative, and "代墊 −$2,000 未計入" is nonsense; `advOf()` clamps at 0 so those rows carry no note.
 

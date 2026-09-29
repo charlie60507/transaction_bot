@@ -4,33 +4,21 @@ A personal credit-card transaction tracker: a Gmail auto-record + auto-classify
 bot and a dark-theme web dashboard, both Google Apps Script bound to one Google
 Sheet (the single source of truth) and deployed via `clasp` as a Web App.
 
-## Ticketing — GitHub Issues (Linear is retired)
+## Ticketing — GitHub Issues
 
 Tickets are **GitHub Issues** on `charlie60507/transaction_bot`; use `gh issue`.
 See the GitHub section below for the personal/company auth split that makes `gh`
 work here.
 
-**Linear was retired on 2026-09-14.** The personal Linear workspace (team **CT**,
-CT-1…CT-26) is history only — never open new tickets there. `scripts/linear.js`
-and the gitignored `.linear-key` stay in the repo so those old tickets can still
-be read (`node scripts/linear.js --get "CT-<n>"`). The company Linear MCP
-(`mcp__claude_ai_Linear__*`) is a different workspace, is **blocked at the harness
-level** (`.claude/settings.local.json` → `permissions.deny`), and must never be
-used in this repo.
-
 Longer-form records that outlive one ticket live in `docs/` as plain Markdown
 (e.g. `docs/engineer-note-issue-<n>.md`, `docs/plan-*.md`).
-
-**Stale config:** `.gogox-claude.yaml` still declares `ticket_system: linear`, so
-a GGC pipeline (`/route`, `/ggx-work`, `/dev:ff`) run here would still route to
-Linear. Fix that before running one.
 
 ## GitHub — PERSONAL account only
 
 This repo is `charlie60507/transaction_bot`, on the user's **personal** GitHub. But
 `gh` on this machine is authenticated as the **company** account
 (`charlie-yang-gogox`, via a `GITHUB_TOKEN` env var), which gets **403** on this
-repo's secrets and settings. Same split as the Linear one above.
+repo's secrets and settings.
 
 The fix is already in place: `.claude/settings.local.json` sets `env.GH_TOKEN` to a
 personal PAT, and `GH_TOKEN` outranks `GITHUB_TOKEN` in `gh`'s resolution order — so
@@ -43,17 +31,10 @@ and no effect on other repos. Confirm with `gh api user --jq .login` when in dou
 - That file holds credentials and is gitignored **twice** (repo `.gitignore` and the
   user's global ignore). Never commit it, never print `env.GH_TOKEN`.
 
-## Running GGC pipelines here (`/ggx-work`, `/route`, `/dev:ff`)
+## GitHub Issue Harness
 
-- This repo carries `.gogox-claude.yaml` (`ticket_system: linear`) so `/route`
-  and `/ggx-work` resolve without the company `org.yaml`.
-- **All Linear I/O goes through `scripts/linear.js`** — never the Linear MCP
-  (it is denied). If a stage needs a Linear op `linear.js` lacks (assignee,
-  estimate, marker comment, label add/remove), STOP and extend `linear.js`;
-  do not fall back to the MCP.
-- **Prefer inline execution.** The company MCP is denied, so any sub-agent that
-  tries to reach company Linear fails closed. Run pipeline work in the main
-  session rather than spawning sub-agents where practical.
+Use the repository's GitHub Issue Harness for issue-to-PR work. Its configuration
+lives in `.harness/github-harness.yaml`; do not add a second ticket-routing profile.
 
 ## Deploy
 

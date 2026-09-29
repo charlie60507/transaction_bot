@@ -1,17 +1,41 @@
 ## Purpose
 
-Defines the categorization config data model: a single `META` sheet that holds both the keyword→種類 auto-classification rules and the 種類/TAG vocabulary lists, the runtime read/write contract over that sheet, and the data-validation dropdowns sourced from it.
+Defines the shared configuration data model: a single `META` sheet that holds the keyword→種類 auto-classification rules, the 種類/TAG vocabulary lists, and the manually configured account/source list, plus the runtime read/write contracts over that sheet.
 
 ## Requirements
 
 ### Requirement: Single merged META config layout
 
-The system SHALL store all categorization config in one sheet named `META` with this column layout: `A 交易關鍵字`, `B 種類` (the keyword→category rule table, which grows over time), a spacer column `C`, `D 種類清單` (the valid-category vocabulary), and `E TAG清單` (the valid-tag vocabulary). The rule columns (A:B) and the vocabulary columns (D:E) MUST be independent so appends to one never overwrite the other. The separate `category` sheet MUST no longer be used.
+The system SHALL store configuration in one sheet named `META` with this column layout: `A 交易關鍵字`, `B 種類` (the keyword→category rule table, which grows over time), a spacer column `C`, `D 種類清單` (the valid-category vocabulary), `E TAG清單` (the valid-tag vocabulary), a spacer column `F`, and `G 帳戶清單` (the manually configured transaction sources). The rule columns (A:B), vocabulary columns (D:E), and account column (G) MUST be independent so appends to one never overwrite another. The separate `category` sheet MUST no longer be used.
 
 #### Scenario: Rules and vocabulary coexist on one page
 
 - **WHEN** the merged `META` sheet holds rules in A:B and vocabulary in D:E of differing lengths
 - **THEN** reading rules ignores the vocabulary columns, and reading vocabulary ignores the rule columns
+
+### Requirement: Account sources are configured without fake transactions
+
+The dashboard SHALL read configured account/source names from `META` column G, starting at row 2, trimming whitespace and removing case-insensitive duplicates while preserving the first occurrence and configured order. Adding a new account SHALL append it after the last non-empty account cell in column G and SHALL NOT create or alter a `Transactions` row.
+
+The manual transaction source picker SHALL show configured accounts first, followed by any distinct historical `銀行` values not already configured. This fallback ensures that adopting account settings never hides a source already present in transaction history.
+
+#### Scenario: Add an account before its first transaction
+
+- **WHEN** the owner adds an account name in the manual transaction dialog
+- **THEN** the name is persisted under `META!G:G`
+- **AND** it is immediately selected as the transaction source
+- **AND** no placeholder transaction is created
+
+#### Scenario: Preserve historical sources
+
+- **WHEN** a historical transaction names a source that is absent from `META!G:G`
+- **THEN** that source remains available in the manual transaction source picker
+
+#### Scenario: Duplicate account add is idempotent
+
+- **WHEN** the owner adds a name that already exists in `META!G:G`, ignoring surrounding whitespace and letter case
+- **THEN** no duplicate row is appended
+- **AND** the existing configured spelling remains authoritative
 
 ### Requirement: Rule loading from merged META
 
@@ -54,6 +78,7 @@ The system SHALL provide a one-time `migrateMetaCategoryToMerged()` that reads t
 
 - **WHEN** `migrateMetaCategoryToMerged()` runs and the Transactions TAG column is found
 - **THEN** `META` is rewritten with rules in A:B and vocabulary in D:E
+- **AND** an existing account list in G is preserved
 - **AND** the old `category` sheet is deleted
 - **AND** the Transactions 種類 (K) dropdown points to `META!D2:D`, the Transactions TAG dropdown points to `META!E2:E`, and the rule 種類 column `META!B2:B` points to `META!D2:D`
 

@@ -7,6 +7,9 @@ const CFG = {
   // deleted auto-record does not come back on the next 7-day scan. Deleting the
   // tab resurrects anything still inside that window.
   DELETED_SHEET: 'Deleted',
+  META_SHEET: 'META',
+  META_ACCOUNT_COL: 7,      // G: 帳戶清單 (F stays a visual spacer)
+  META_ACCOUNT_HEADER: '帳戶清單',
   TZ: 'Asia/Taipei',
 
   // Transactions column indices (0-based)
@@ -190,6 +193,66 @@ function getAllTxns() {
     });
   }
   return out;
+}
+
+/** Initial dashboard payload. Account settings travel with the transaction snapshot so
+ *  the add dialog never has to race a second request during boot. */
+function getDashboardData() {
+  return { txns: getAllTxns(), accounts: getAccountSources_() };
+}
+
+/** Read configured account/source names from META!G, preserving the owner's order. */
+function getAccountSources_() {
+  const sh = getSpreadsheet_().getSheetByName(CFG.META_SHEET);
+  if (!sh || sh.getLastColumn() < CFG.META_ACCOUNT_COL || sh.getLastRow() <= 1) return [];
+  const header = String(sh.getRange(1, CFG.META_ACCOUNT_COL).getValue() || '').trim();
+  if (header !== CFG.META_ACCOUNT_HEADER) return [];
+  const values = sh.getRange(2, CFG.META_ACCOUNT_COL, sh.getLastRow() - 1, 1).getValues();
+  const seen = {};
+  const out = [];
+  values.forEach(function (row) {
+    const name = String(row[0] || '').trim();
+    const key = name.toLocaleLowerCase();
+    if (name && !seen[key]) { seen[key] = true; out.push(name); }
+  });
+  return out;
+}
+
+/** Add one source to META without creating a fake transaction. Returns the full configured
+ *  list so the client can adopt the authoritative spelling and order immediately. */
+function addAccountSource(name) {
+  name = String(name || '').trim();
+  if (!name) throw new Error('請輸入帳戶名稱');
+  if (name.length > 50) throw new Error('帳戶名稱不可超過 50 字');
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15 * 1000);
+  try {
+    const sh = getSpreadsheet_().getSheetByName(CFG.META_SHEET);
+    if (!sh) throw new Error('找不到 META 工作表');
+
+    const col = CFG.META_ACCOUNT_COL;
+    const existingHeader = String(sh.getRange(1, col).getValue() || '').trim();
+    if (existingHeader && existingHeader !== CFG.META_ACCOUNT_HEADER) {
+      throw new Error('META!G 已有其他設定，無法建立帳戶清單');
+    }
+    if (!existingHeader) sh.getRange(1, col).setValue(CFG.META_ACCOUNT_HEADER);
+
+    const last = Math.max(sh.getLastRow(), 1);
+    const values = last > 1 ? sh.getRange(2, col, last - 1, 1).getValues() : [];
+    const wanted = name.toLocaleLowerCase();
+    let lastAccountRow = 1;
+    for (let i = 0; i < values.length; i++) {
+      const current = String(values[i][0] || '').trim();
+      if (current) lastAccountRow = i + 2;
+      if (current.toLocaleLowerCase() === wanted) return getAccountSources_();
+    }
+    sh.getRange(lastAccountRow + 1, col).setValue(name);
+    SpreadsheetApp.flush();
+    return getAccountSources_();
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /** Transaction types that may correct the displayed amount in the shared editor. */

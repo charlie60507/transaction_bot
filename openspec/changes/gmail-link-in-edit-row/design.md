@@ -12,14 +12,14 @@
 **Non-Goals:**
 - Server or payload changes.
 - Adding the link to read-only `txnRow`.
-- CT-20's spreadsheet icon (a different destination; must not reuse that glyph).
+- The dashboard's spreadsheet icon (a different destination; must not reuse that glyph).
 - Opening Gmail inside the dashboard.
 
 ## Decisions
 
 **D1 — Real `<a target="_blank" rel="noopener">`, not a button.** Cmd-click and the context menu only work on an actual href. `_blank` is mandatory because of `<base target="_top">`. `rel="noopener"` is the usual new-tab hygiene.
 
-**D2 — Envelope SVG, not the CT-20 sheet glyph.** Two destinations stay visually distinct. Muted (`--text-muted`), accent on hover. `title` / `aria-label`: "Open original email".
+**D2 — Envelope SVG, not the spreadsheet glyph.** Two destinations stay visually distinct. Muted (`--text-muted`), accent on hover. `title` / `aria-label`: "Open original email".
 
 **D3 — Left of the amount on `.er1`.** The mail is evidence for the charge, not a second-line action. Empty `link` adds no node (no disabled placeholder).
 
