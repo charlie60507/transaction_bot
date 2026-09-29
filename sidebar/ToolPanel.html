@@ -839,7 +839,7 @@
   // make the server snapshot overwrite what the owner is still typing.
   var TEXT_DRAFTS={}, TEXT_DRAFT_REVISIONS={}, TEXT_REQUEST_TOKENS={}, TEXT_WRITE_QUEUES={},
       TEXT_CANCEL_BLURS={}, ROW_COMMIT_INTENTS={}, ACTIVE_COMPOSITIONS={}, PENDING_REPAINT=false,
-      COMPOSITION_FLUSH_SCHEDULED=false, TEXT_ROW_SERIAL=0;
+      COMPOSITION_FLUSH_SCHEDULED=false, TEXT_ROW_SERIAL=0, TEXT_REMOVED_ROW_KEYS={};
   function ensureTextRowKey(t){
     if(t&&!t._textKey) t._textKey='text-row-'+(++TEXT_ROW_SERIAL);
     return t?t._textKey:'';
@@ -857,10 +857,22 @@
     var p=String(id).split('|');
     return p.length>=5 ? p[0]+'\u001f'+p[1]+'\u001f'+p[3] : String(id);
   }
+  function dropTextRowState(ref){
+    var rowKey=textRowKey(ref);
+    ['merchant','tag'].forEach(function(field){
+      var key=rawDraftKey(rowKey,field);
+      delete TEXT_DRAFTS[key]; delete TEXT_DRAFT_REVISIONS[key]; delete TEXT_REQUEST_TOKENS[key];
+      delete TEXT_WRITE_QUEUES[key]; delete TEXT_CANCEL_BLURS[key]; delete ACTIVE_COMPOSITIONS[key];
+    });
+    delete ROW_COMMIT_INTENTS[rowKey];
+  }
   /** Carry a client-only row identity across mutable composite ids, preserving sheet order. */
   function reconcileTextRowIds(before,after){
     var oldGroups={}, newGroups={};
-    (before||[]).forEach(function(t){ var k=textRowLineage(t.id); (oldGroups[k]||(oldGroups[k]=[])).push(t); });
+    (before||[]).forEach(function(t){
+      if(TEXT_REMOVED_ROW_KEYS[ensureTextRowKey(t)]) return;
+      var k=textRowLineage(t.id); (oldGroups[k]||(oldGroups[k]=[])).push(t);
+    });
     (after||[]).forEach(function(t){ var k=textRowLineage(t.id); (newGroups[k]||(newGroups[k]=[])).push(t); });
     for(var k in oldGroups){
       if(!Object.prototype.hasOwnProperty.call(oldGroups,k)||!newGroups[k]) continue;
@@ -870,6 +882,11 @@
       }
     }
     (after||[]).forEach(ensureTextRowKey);
+    for(var removed in TEXT_REMOVED_ROW_KEYS){
+      if(Object.prototype.hasOwnProperty.call(TEXT_REMOVED_ROW_KEYS,removed)){
+        dropTextRowState(removed); delete TEXT_REMOVED_ROW_KEYS[removed];
+      }
+    }
   }
   function textDraft(id,field){ return TEXT_DRAFTS[draftKey(id,field)]||null; }
   function draftValue(t,field){ var d=t&&textDraft(t._textKey||t.id,field); return d?d.value:((t&&t[field])||''); }
@@ -1181,6 +1198,8 @@
     id=textRowKey(id);
     var d=textDraft(id,field); if(!d||!d.dirty) return;
     var q=textWriteQueue(id,field);
+    var t=textTxn(id);
+    if(t&&t._pendingAdd){ q.pending={revision:d.revision,value:d.value}; return; }
     var intent=ROW_COMMIT_INTENTS[id];
     if(intent){
       var included=null;
@@ -1196,6 +1215,7 @@
   function trySendRowCommit(id){
     id=textRowKey(id);
     var intent=ROW_COMMIT_INTENTS[id]; if(!intent||intent.sent) return;
+    var t=textTxn(id); if(t&&t._pendingAdd) return;
     for(var i=0;i<intent.saved.length;i++){
       if(textWriteQueue(id,intent.saved[i].field).active) return;
     }
@@ -1268,6 +1288,7 @@
   function deleteTxnRow(id){ openDelModal(id); }
   function confirmDelete(){
     var id=pendingDelId; if(!id || delBusy) return;
+    var deletedTxn=txnById(id), deletedTextRow=deletedTxn?ensureTextRowKey(deletedTxn):null;
     pendingDelId=null;
     delBusy=true;
     var ok=document.getElementById('d-ok'); if(ok) ok.disabled=true;
@@ -1275,6 +1296,7 @@
     google.script.run
       .withSuccessHandler(function(res){
         delBusy=false;
+        if(deletedTextRow) TEXT_REMOVED_ROW_KEYS[deletedTextRow]=true;
         settle(delSeq, res && res.txns);
         closeDelModal(); repaint(); toast('已刪除');
       })
@@ -1359,7 +1381,7 @@
     var navBefore=contextual?{ scope:state.scope, selYear:state.selYear, selMonth:state.selMonth, openHeatDay:openHeatDay }:null;
     // hm on the optimistic row too, or a 19:40 entry appears first in its day and then jumps
     // into place the moment the server's row lands.
-    var temp={ y:+p[0], m:+p[1], d:+p[2], hm:time, type:fields.type, amount:amt, cat:fields.cat||'未分類', merchant:fields.merchant, tag:fields.tag, bank:fields.source, last4:'', link:'', id:'manual-temp-'+(TXNS.length+1), posted:true };
+    var temp={ y:+p[0], m:+p[1], d:+p[2], hm:time, type:fields.type, amount:amt, cat:fields.cat||'未分類', merchant:fields.merchant, tag:fields.tag, bank:fields.source, last4:'', link:'', id:'manual-temp-'+(TXNS.length+1), posted:true, _pendingAdd:true };
     // A manual add is a local mutation too, and it adopts no list of its own — so it settles
     // through settle(), which is what makes an edit response it superseded get refetched.
     if(contextual){
@@ -1374,6 +1396,7 @@
     google.script.run
       .withSuccessHandler(function(nt){
         if(nt&&nt.id) temp.id=String(nt.id);
+        temp._pendingAdd=false;
         if(nt){
           temp.hm=(nt.hm==null)?'':String(nt.hm);
           if(nt.y!=null) temp.y=+nt.y; if(nt.m!=null) temp.m=+nt.m; if(nt.d!=null) temp.d=+nt.d;
@@ -1382,10 +1405,13 @@
           state.scope=temp.y+'-'+('0'+temp.m).slice(-2); state.selYear=temp.y; state.selMonth=temp.m;
           openHeatDay=temp.y+'-'+temp.m+'-'+temp.d;
         }
+        var tempTextRow=ensureTextRowKey(temp);
+        ['merchant','tag'].forEach(function(field){ drainTextWrite(tempTextRow,field); });
         settle(addSeq, null); toast('已新增 · 已記帳 ✓'); repaint();
       })
       .withFailureHandler(function(err){
         var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1);
+        dropTextRowState(ensureTextRowKey(temp));
         if(contextual){ state.scope=navBefore.scope; state.selYear=navBefore.selYear; state.selMonth=navBefore.selMonth; openHeatDay=navBefore.openHeatDay; }
         settle(addSeq, null); repaint(); toast('新增失敗:'+((err&&err.message)||err), true);
       })

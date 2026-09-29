@@ -89,7 +89,7 @@ function domStub(fields) {
 const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isStale', 'settle',
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
-  'textRowLineage', 'reconcileTextRowIds',
+  'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds',
   'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
   'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
   'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
@@ -110,7 +110,7 @@ function harness(initial, opts) {
     MUTATION_SEQ: 0, INFLIGHT: 0, STALE_DROPPED: false, REFRESHING: false,
     TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_WRITE_QUEUES: {},
     TEXT_CANCEL_BLURS: {}, ROW_COMMIT_INTENTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
-    COMPOSITION_FLUSH_SCHEDULED: false, TEXT_ROW_SERIAL: 0,
+    COMPOSITION_FLUSH_SCHEDULED: false, TEXT_ROW_SERIAL: 0, TEXT_REMOVED_ROW_KEYS: {},
     pendingDelId: null, delBusy: false, openSplit: null,
     google: { script: { run: recordingRun(rec) } },
     render: function () { renders.n++; if (opts.onRender) opts.onRender(); },
@@ -430,6 +430,28 @@ function run() {
   assert.strictEqual(duplicateRekey.calls[0].id, shifted[1].id,
     'the second draft writes to the second row after occurrence renumbering');
 
+  const threeDupes = [
+    row({ id: 'del|1000|100|1234|0', amount: 100, merchant: '刪除列' }),
+    row({ id: 'del|1000|100|1234|1', amount: 100, merchant: '保留二' }),
+    row({ id: 'del|1000|100|1234|2', amount: 100, merchant: '保留三' })
+  ];
+  const deleteReconcile = harness(threeDupes);
+  const keepSecond = deleteReconcile.textRowKey(threeDupes[1].id);
+  const keepThird = deleteReconcile.textRowKey(threeDupes[2].id);
+  deleteReconcile.captureDraft(keepSecond, 'merchant', '第二列草稿');
+  deleteReconcile.captureDraft(keepThird, 'merchant', '第三列草稿');
+  deleteReconcile.pendingDelId = threeDupes[0].id;
+  deleteReconcile.confirmDelete();
+  const afterDelete = serverCopy(threeDupes.slice(1));
+  afterDelete[0].id = 'del|1000|100|1234|0'; afterDelete[1].id = 'del|1000|100|1234|1';
+  deleteReconcile.deletes[0].success({ ok: true, txns: afterDelete });
+  assert.strictEqual(deleteReconcile.TXNS[0]._textKey, keepSecond,
+    'deleting the first duplicate does not shift row 2 logical state onto row 3');
+  assert.strictEqual(deleteReconcile.TXNS[1]._textKey, keepThird,
+    'the last duplicate retains its own logical state after occurrence renumbering');
+  assert.strictEqual(deleteReconcile.draftValue(deleteReconcile.TXNS[0], 'merchant'), '第二列草稿');
+  assert.strictEqual(deleteReconcile.draftValue(deleteReconcile.TXNS[1], 'merchant'), '第三列草稿');
+
   // Every asynchronous callback that can rebuild the transaction panel goes through repaint(),
   // so an unrelated add/delete/bulk response cannot detach an active native IME node.
   function assertAsyncRepaintDefers(name, issue, resolve) {
@@ -468,6 +490,34 @@ function run() {
   addTyping.flushTimers();
   addTyping.saveTextDraft(optimisticLogical, 'merchant');
   assert.strictEqual(addTyping.calls[0].id, 'manual-9', 'the preserved manual-row draft saves by the final id');
+
+  const addBlurBeforeAck = harness(base);
+  addBlurBeforeAck.submitAdd();
+  const pendingManual = addBlurBeforeAck.TXNS[addBlurBeforeAck.TXNS.length - 1];
+  const pendingManualKey = addBlurBeforeAck.textRowKey(pendingManual.id);
+  addBlurBeforeAck.captureDraft(pendingManualKey, 'merchant', '先輸入再回覆');
+  addBlurBeforeAck.saveTextDraft(pendingManualKey, 'merchant');
+  assert.strictEqual(addBlurBeforeAck.calls.length, 0,
+    'blur before add acknowledgement queues text instead of writing the temporary id');
+  addBlurBeforeAck.adds[0].success({ id: 'manual-10', hm: '' });
+  assert.strictEqual(addBlurBeforeAck.calls.length, 1, 'the queued text drains when the final id arrives');
+  assert.strictEqual(addBlurBeforeAck.calls[0].id, 'manual-10');
+  assert.strictEqual(addBlurBeforeAck.calls[0].patch.merchant, '先輸入再回覆');
+
+  const addRecordBeforeAck = harness(base);
+  addRecordBeforeAck.submitAdd();
+  const recordPending = addRecordBeforeAck.TXNS[addRecordBeforeAck.TXNS.length - 1];
+  const recordPendingKey = addRecordBeforeAck.textRowKey(recordPending.id);
+  addRecordBeforeAck.captureDraft(recordPendingKey, 'tag', '待回覆標籤');
+  addRecordBeforeAck.commitRow(recordPendingKey, false);
+  assert.strictEqual(addRecordBeforeAck.calls.length, 0,
+    'Record intent also waits while the manual row has only a temporary id');
+  addRecordBeforeAck.adds[0].success({ id: 'manual-11', hm: '' });
+  assert.strictEqual(addRecordBeforeAck.calls.length, 1, 'the queued Record drains after add acknowledgement');
+  assert.strictEqual(addRecordBeforeAck.calls[0].id, 'manual-11');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(addRecordBeforeAck.calls[0].patch)), {
+    posted: false, tag: '待回覆標籤'
+  });
 
   // Enter/Escape belong to the IME while composition is active. keyCode 229 is the fallback
   // used by browsers that do not expose KeyboardEvent.isComposing reliably.

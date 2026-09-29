@@ -39,14 +39,15 @@ function submitHarness(opts) {
   opts = opts || {};
   const calls = [], renders = [], toasts = [];
   const doc = form(Object.assign({}, FIELDS, opts.fields || {}));
-  const fns = loadFns(['closeAddModal', 'submitAdd'], {
+  const fns = loadFns(['ensureTextRowKey', 'closeAddModal', 'submitAdd'], {
     document: doc,
     addHeatDate: opts.contextual === false ? null : '2026-08-12',
     state: Object.assign({ scope: '2026-07', selYear: 2026, selMonth: 7 }, opts.state || {}),
     openHeatDay: opts.openHeatDay === undefined ? '2026-7-5' : opts.openHeatDay,
-    TXNS: [], MUTATION_SEQ: 0,
+    TXNS: [], MUTATION_SEQ: 0, TEXT_ROW_SERIAL: 0,
     nextMutation: function () { return ++fns.MUTATION_SEQ; },
     settle: function () {},
+    drainTextWrite: function () {}, dropTextRowState: function () {},
     render: function () { renders.push(true); },
     repaint: function () { renders.push(true); },
     toast: function (message, error) { toasts.push({ message: message, error: !!error }); },
