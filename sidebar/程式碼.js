@@ -30,6 +30,7 @@ const CFG = {
   // and hardcoding a position would collide with it. Absent header ⇒ the feature is
   // simply inert and every row reads as "all mine", i.e. exactly today's behaviour.
   HDR_MINE: '我的消費',
+  HDR_ROW_ID: '交易 ID',
 };
 
 // =======================================================================
@@ -64,7 +65,7 @@ function nowYMD_() {
 }
 
 /**
- * Stable unique identifier for one Transactions row.
+ * Legacy composite identifier retained for display compatibility and pre-migration fixtures.
  *
  * MessageId alone is NOT unique: a Cathay 消費彙整通知 carries several transactions and the
  * bot stamps the SAME message id on every row it produces (measured: 389 of 1017 rows share
@@ -72,9 +73,8 @@ function nowYMD_() {
  * the FIRST row of the group, so edits to any later row silently landed on the wrong
  * transaction — 259 rows were effectively uneditable.
  *
- * The key composes the fields the UI never edits — message id, timestamp, amount, card last4
- * — plus an occurrence index for rows that are identical even in those. So it survives both
- * an edit and the bot re-sorting the sheet.
+ * New dashboard mutations use the persistent UUID in `交易 ID`. This composite can be
+ * renumbered after an edit/delete and must never be used as an authoritative row identity.
  */
 function txnKey_(row, occurrence) {
   const dt = row[CFG.IDX_DATE];
@@ -108,9 +108,39 @@ function isDisplayedTxn_(row) {
   return !isNaN(dt.getTime());
 }
 
+function getRowIdColIndex_(sh) {
+  const cols = sh ? sh.getLastColumn() : 0;
+  if (!cols) return -1;
+  const headers = sh.getRange(1, 1, 1, cols).getValues()[0];
+  for (let i = 0; i < headers.length; i++) if (String(headers[i] || '').trim() === CFG.HDR_ROW_ID) return i;
+  return -1;
+}
+
+/** Create and backfill the immutable row UUID used by every dashboard mutation. Caller holds lock. */
+function ensureRowIdColIndex_(sh) {
+  let idx = getRowIdColIndex_(sh);
+  // Offline fixtures intentionally omit UUID support and retain the legacy composite-key path.
+  if (typeof Utilities === 'undefined' || typeof Utilities.getUuid !== 'function') return -1;
+  if (idx === -1) {
+    idx = sh.getLastColumn();
+    sh.getRange(1, idx + 1).setValue(CFG.HDR_ROW_ID);
+  }
+  const count = Math.max(0, sh.getLastRow() - 1);
+  if (!count) return idx;
+  const rows = sh.getRange(2, 1, count, sh.getLastColumn()).getValues();
+  var changed=false;
+  const ids = rows.map(row => {
+    const current=String(row[idx] || '');
+    if(current||!isDisplayedTxn_(row)) return [current];
+    changed=true; return [Utilities.getUuid()];
+  });
+  if(changed){ sh.getRange(2, idx + 1, count, 1).setValues(ids); SpreadsheetApp.flush(); }
+  return idx;
+}
+
 /**
- * Row number for a key produced by txnKey_. Falls back to matching on message id alone when
- * given a bare id, so a page loaded before this change still works instead of erroring.
+ * Row number for an immutable `交易 ID`. The legacy composite fallback exists only before the
+ * UUID column is migrated; once UUIDs exist, stale occurrence keys fail safely.
  * Returns -1 when nothing matches.
  */
 function findRowByKey_(sh, key) {
@@ -118,6 +148,13 @@ function findRowByKey_(sh, key) {
   const last = sh.getLastRow();
   if (last <= 1) return -1;
   const rows = sh.getRange(2, 1, last - 1, sh.getLastColumn()).getValues();
+  const rowIdIdx = getRowIdColIndex_(sh);
+  if (rowIdIdx !== -1) {
+    for (let i = 0; i < rows.length; i++) if (String(rows[i][rowIdIdx] || '') === key) return i + 2;
+    // Once immutable UUIDs exist, never reinterpret an old occurrence key: a deleted duplicate
+    // can hand that string to its successor. An old open tab must fail safely and reload.
+    return -1;
+  }
   const parts = key.split('|');
   if (parts.length < 5) {
     for (let i = 0; i < rows.length; i++) {
@@ -144,6 +181,7 @@ function getAllTxns() {
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
   const tagIdx = getTagColIndex_(sh);            // -1 if no TAG header
   const mineIdx = getMineColIndex_(sh);          // -1 if no 我的消費 header
+  const rowIdIdx = getRowIdColIndex_(sh);         // -1 only for legacy/offline fixtures
   const out = [];
   const seenKey = {};
   for (const row of rows) {
@@ -182,13 +220,13 @@ function getAllTxns() {
       bank: String(row[CFG.IDX_BANK] || ''),
       last4: String(row[CFG.IDX_LAST4] || ''),
       link: String(row[CFG.IDX_LINK] || ''),
-      // `id` is the composite key, not the bare MessageId — see txnKey_. It still starts
-      // with the message id, so the `manual-` prefix checks keep working unchanged.
+      // `id` remains the legacy composite for display/tests; `rowId` is the mutation identity.
       id: (function () {
         const base = txnKey_(row, 0).split('|').slice(0, 4).join('|');
         const n = seenKey[base] = (seenKey[base] === undefined ? 0 : seenKey[base] + 1);
         return txnKey_(row, n);
       })(),
+      rowId: rowIdIdx === -1 ? '' : String(row[rowIdIdx] || ''),
       posted: row[CFG.IDX_POSTED] === true
     });
   }
@@ -198,7 +236,15 @@ function getAllTxns() {
 /** Initial dashboard payload. Account settings travel with the transaction snapshot so
  *  the add dialog never has to race a second request during boot. */
 function getDashboardData() {
-  return { txns: getAllTxns(), accounts: getAccountSources_() };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15 * 1000);
+  try {
+    const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
+    if (sh) ensureRowIdColIndex_(sh);
+    return { txns: getAllTxns(), accounts: getAccountSources_() };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /** Read configured account/source names from META!G, preserving the owner's order. */
@@ -261,8 +307,8 @@ function isAmountCorrectionType_(type) {
 }
 
 /**
- * Write edits back to one Transactions row, located by MessageId (col I) so it
- * is safe against the bot re-sorting rows. `patch` may contain any of:
+ * Write edits back to one Transactions row, located by immutable `交易 ID`.
+ * `patch` may contain any of:
  *   merchant -> F (交易內容/商店; the row title shown in the heatmap day list)
  *   cat    -> K (種類手動; leaves auto G untouched)
  *   type   -> J (收支別; must be 支出/收入/轉帳)
@@ -289,6 +335,7 @@ function updateTxn(messageId, patch, wantTxns) {
   try {
   const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
   if (!sh) throw new Error('找不到 Transactions 工作表');
+  ensureRowIdColIndex_(sh);
   const last = sh.getLastRow();
   if (last <= 1) throw new Error('沒有交易資料');
 
@@ -378,8 +425,12 @@ function addTxn(fields) {
   const type = String(fields.type || '支出');
   if (['支出', '收入', '轉帳'].indexOf(type) === -1) throw new Error('收支別不合法');
 
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15 * 1000);
+  try {
   const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
   if (!sh) throw new Error('找不到 Transactions 工作表');
+  const rowIdIdx = ensureRowIdColIndex_(sh);
   const tagIdx = getTagColIndex_(sh);
   const ncol = sh.getLastColumn();
   const id = 'manual-' + Utilities.getUuid();
@@ -393,6 +444,7 @@ function addTxn(fields) {
   const dt = new Date(fields.date + 'T' + (time || '00:00') + ':00');
 
   const row = new Array(ncol).fill('');
+  const rowId = (rowIdIdx === -1) ? '' : Utilities.getUuid();
   row[CFG.IDX_POSTED] = true;
   row[CFG.IDX_BANK] = source;
   row[CFG.IDX_DATE] = dt;
@@ -402,6 +454,7 @@ function addTxn(fields) {
   row[CFG.IDX_INOUT] = type;
   row[CFG.IDX_CATEGORY_MANUAL] = cat;
   if (tagIdx !== -1) row[tagIdx] = String(fields.tag || '');
+  if (rowIdIdx !== -1) row[rowIdIdx] = rowId;
 
   // Insert into the date-ordered position rather than appending, so the sheet stays
   // sorted and the new row sits among its own time period.
@@ -428,8 +481,11 @@ function addTxn(fields) {
     type: type, amount: amount, charged: amount, mine: null, cat: cat || '未分類',
     merchant: String(fields.merchant || ''), tag: String(fields.tag || ''),
     bank: source, last4: '', link: '',
-    id: txnKey_(row, 0), posted: true
+    id: txnKey_(row, 0), rowId: rowId, posted: true
   };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /**
@@ -457,7 +513,7 @@ function getOrCreateDeleted_(ss, src) {
   return del;
 }
 
-/** Delete any row, located by the composite key. Moves it to Deleted first so the
+/** Delete any row, located by immutable `交易 ID`. Moves it to Deleted first so the
  *  bot still treats the mail as already handled (the sheet is its only memory).
  *
  *  Returns `{ ok, txns }` so the page does not need a nested getAllTxns. Nesting
@@ -471,6 +527,7 @@ function deleteTxn(messageId) {
     const ss = getSpreadsheet_();
     const sh = ss.getSheetByName(CFG.DATA_SHEET);
     if (!sh) throw new Error('找不到 Transactions 工作表');
+    ensureRowIdColIndex_(sh);
     const last = sh.getLastRow();
     if (last <= 1) throw new Error('沒有交易資料');
     const rowNum = findRowByKey_(sh, messageId);
@@ -478,7 +535,7 @@ function deleteTxn(messageId) {
       // Already moved (double-tap / retry after a successful write). Do not
       // throw 找不到 — the sheet is in the state the owner asked for.
       const del = ss.getSheetByName(CFG.DELETED_SHEET);
-      if (del && sheetHasBaseKey_(del, messageId)) {
+      if (del && (sheetHasRowId_(del, messageId) || sheetHasBaseKey_(del, messageId))) {
         SpreadsheetApp.flush();
         return { ok: true, txns: getAllTxns() };
       }
@@ -495,6 +552,13 @@ function deleteTxn(messageId) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function sheetHasRowId_(sh, key) {
+  const idx=getRowIdColIndex_(sh);
+  if(idx===-1||sh.getLastRow()<=1) return false;
+  const values=sh.getRange(2,idx+1,sh.getLastRow()-1,1).getValues();
+  return values.some(row => String(row[0]||'')===String(key));
 }
 
 /** True if Deleted already holds a row with the same base key (id without occurrence). */

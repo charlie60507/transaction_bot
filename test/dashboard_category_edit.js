@@ -55,7 +55,7 @@ function serverFixture(type, mineValue) {
     }
   };
   const serverRow = row;
-  const sandbox = loadServerFns(['txnKey_', 'rowMine_', 'getAllTxns', 'isAmountCorrectionType_', 'updateTxn'], {
+  const sandbox = loadServerFns(['getRowIdColIndex_', 'ensureRowIdColIndex_', 'txnKey_', 'rowMine_', 'getAllTxns', 'isAmountCorrectionType_', 'updateTxn'], {
     CFG: CFG,
     getSpreadsheet_: () => ({ getSheetByName: () => sheet }),
     asTxnKey_: key => String(key),

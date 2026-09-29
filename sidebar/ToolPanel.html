@@ -811,7 +811,7 @@
    * the screen in silence, and this page has no polling and no refresh control to correct it.
    */
   function txnsSignature(list){
-    var fields=['id','y','m','d','hm','type','amount','charged','mine','cat','merchant','tag','bank','last4','link','posted'];
+    var fields=['id','rowId','y','m','d','hm','type','amount','charged','mine','cat','merchant','tag','bank','last4','link','posted'];
     return (list||[]).map(function(t){
       return fields.map(function(f){ var v=(t||{})[f]; return (v==null)?'\u0000':String(v); }).join('\u001f');
     }).join('\u001e');
@@ -840,18 +840,18 @@
   var TEXT_DRAFTS={}, TEXT_DRAFT_REVISIONS={}, TEXT_REQUEST_TOKENS={}, TEXT_WRITE_QUEUES={},
       TEXT_CANCEL_BLURS={}, ROW_COMMIT_INTENTS={}, ACTIVE_COMPOSITIONS={}, PENDING_REPAINT=false,
       COMPOSITION_FLUSH_SCHEDULED=false, TEXT_ROW_SERIAL=0, TEXT_REMOVED_ROW_KEYS={},
-      PENDING_ADD_ROWS={}, ROW_ACTIVE_WRITES={}, ROW_DELETE_INTENTS={};
+      PENDING_ADD_ROWS={}, ROW_ACTIVE_WRITES={}, ROW_DELETE_INTENTS={}, ROW_WRITE_FIFOS={};
   function ensureTextRowKey(t){
     if(t&&!t._textKey) t._textKey='text-row-'+(++TEXT_ROW_SERIAL);
     return t?t._textKey:'';
   }
   function textTxn(ref){
     ref=String(ref);
-    for(var i=0;i<TXNS.length;i++) if(ensureTextRowKey(TXNS[i])===ref||TXNS[i].id===ref) return TXNS[i];
+    for(var i=0;i<TXNS.length;i++) if(ensureTextRowKey(TXNS[i])===ref||TXNS[i].id===ref||TXNS[i].rowId===ref) return TXNS[i];
     return null;
   }
   function textRowKey(ref){ var t=textTxn(ref); return t?ensureTextRowKey(t):String(ref); }
-  function resolveTextRowId(ref){ var t=textTxn(ref); return t?t.id:String(ref); }
+  function resolveTextRowId(ref){ var t=textTxn(ref); return t?(t.rowId||t.id):String(ref); }
   function rawDraftKey(rowKey,field){ return String(rowKey)+'\u001f'+String(field); }
   function draftKey(ref,field){ return rawDraftKey(textRowKey(ref),field); }
   function textRowLineage(id){
@@ -870,11 +870,17 @@
   /** Carry a client-only row identity across mutable composite ids, preserving sheet order. */
   function reconcileTextRowIds(before,after){
     var oldGroups={}, newGroups={};
+    var oldByRowId={};
+    (before||[]).forEach(function(t){ if(t.rowId) oldByRowId[t.rowId]=t; });
+    (after||[]).forEach(function(t){
+      if(t.rowId&&oldByRowId[t.rowId]) t._textKey=ensureTextRowKey(oldByRowId[t.rowId]);
+    });
     (before||[]).forEach(function(t){
       if(TEXT_REMOVED_ROW_KEYS[ensureTextRowKey(t)]) return;
+      if(t.rowId) return;
       var k=textRowLineage(t.id); (oldGroups[k]||(oldGroups[k]=[])).push(t);
     });
-    (after||[]).forEach(function(t){ var k=textRowLineage(t.id); (newGroups[k]||(newGroups[k]=[])).push(t); });
+    (after||[]).forEach(function(t){ if(t.rowId) return; var k=textRowLineage(t.id); (newGroups[k]||(newGroups[k]=[])).push(t); });
     for(var k in oldGroups){
       if(!Object.prototype.hasOwnProperty.call(oldGroups,k)||!newGroups[k]) continue;
       var n=Math.min(oldGroups[k].length,newGroups[k].length);
@@ -906,6 +912,16 @@
     if(ROW_ACTIVE_WRITES[rowKey]>1) ROW_ACTIVE_WRITES[rowKey]--;
     else delete ROW_ACTIVE_WRITES[rowKey];
     trySendDelete(rowKey);
+  }
+  function enqueueRowWrite(ref,start){
+    var rowKey=textRowKey(ref), q=ROW_WRITE_FIFOS[rowKey]||(ROW_WRITE_FIFOS[rowKey]={active:false,items:[]});
+    q.items.push(start);
+    function pump(){
+      if(q.active||!q.items.length) return;
+      q.active=true; beginRowWrite(rowKey);
+      q.items.shift()(function(){ q.active=false; endRowWrite(rowKey); pump(); },rowKey);
+    }
+    pump();
   }
   function textDraft(id,field){ return TEXT_DRAFTS[draftKey(id,field)]||null; }
   function draftValue(t,field){ var d=t&&textDraft(t._textKey||t.id,field); return d?d.value:((t&&t[field])||''); }
@@ -1129,7 +1145,6 @@
     }
     var t=textTxn(id); if(!t) return;
     var rowKey=ensureTextRowKey(t); if(ROW_DELETE_INTENTS[rowKey]) return;
-    var serverId=t.id;
     var prev=t[field]; t[field]=value;
     if(field==='amount'){
       var amount=Number(value);
@@ -1147,8 +1162,10 @@
     // 未分類 is a display value, not a sheet value: writing it would put the literal string into
     // 種類(手動). Clearing the category writes a blank cell, which is what 未分類 means.
     var patch={}; patch[field]=(field==='cat'&&value==='未分類')?'':value;
-    var undo={}; undo[field]=prev;
-    var seq=nextMutation(); beginRowWrite(rowKey);
+    var undo={}; undo[field]=prev, applied=t[field];
+    var seq=nextMutation();
+    enqueueRowWrite(rowKey,function(done){
+    var serverId=resolveTextRowId(rowKey);
     google.script.run
       .withSuccessHandler(function(res){
         // ONE round trip: the ack and the authoritative list arrive together, so the old
@@ -1159,13 +1176,15 @@
         // signature, so ticking 已記帳 stays this page's de facto refresh. settle() owns the
         // ordering: a snapshot a later mutation superseded is dropped AND booked for a refetch.
         if(settle(seq, res && res.txns)) repaint();
-        endRowWrite(rowKey);
+        done();
       })
       .withFailureHandler(function(err){
-        settle(seq, null); var current=textTxn(rowKey); if(current) revertTxn(current.id, undo); else repaint();
-        toast('寫入失敗:'+((err&&err.message)||err), true); endRowWrite(rowKey);
+        settle(seq, null); var current=textTxn(rowKey);
+        if(current&&current[field]===applied) revertTxn(current.id, undo); else repaint();
+        toast('寫入失敗:'+((err&&err.message)||err), true); done();
       })
       .updateTxn(serverId, patch, true);
+    });
   }
 
   function normalizedTextValue(value){ return String(value==null?'':value).trim(); }
@@ -1178,8 +1197,9 @@
     var token=nextTextRequestToken(id,field), prev=t[field];
     q.active={token:token,revision:revision,rawValue:rawValue,value:value,prev:prev,cancel:!!isCancel};
     t[field]=value;
-    var seq=nextMutation(), patch={}; patch[field]=value;
-    beginRowWrite(rowKey);
+    var patch={}; patch[field]=value;
+    var seq=nextMutation();
+    enqueueRowWrite(rowKey,function(done){
     google.script.run
       .withSuccessHandler(function(res){
         var active=q.active, current=textDraft(rowKey,field), rowIntent=ROW_COMMIT_INTENTS[rowKey];
@@ -1191,7 +1211,7 @@
         }
         if(settle(seq,res&&res.txns)) repaint();
         drainTextWrite(rowKey,field);
-        endRowWrite(rowKey);
+        done();
       })
       .withFailureHandler(function(err){
         var active=q.active, current=textDraft(rowKey,field), rowIntent=ROW_COMMIT_INTENTS[rowKey];
@@ -1205,16 +1225,17 @@
           toast('寫入失敗:'+((err&&err.message)||err),true);
         }
         drainTextWrite(rowKey,field);
-        endRowWrite(rowKey);
+        done();
       })
-      .updateTxn(t.id,patch,true);
+      .updateTxn(resolveTextRowId(rowKey),patch,true);
+    });
   }
 
   function drainTextWrite(id,field){
     id=textRowKey(id);
     var q=textWriteQueue(id,field); if(q.active) return;
-    if(ROW_DELETE_INTENTS[id]) return;
     if(ROW_COMMIT_INTENTS[id]){ trySendRowCommit(id); return; }
+    if(ROW_DELETE_INTENTS[id]) return;
     var pending=q.pending; q.pending=null;
     if(!pending) return;
     if(pending.cancel){ issueTextSave(id,field,pending.revision,pending.value,true); return; }
@@ -1244,19 +1265,20 @@
   /** Send a queued Record only after older per-field writes have completed on the server. */
   function trySendRowCommit(id){
     id=textRowKey(id);
-    var intent=ROW_COMMIT_INTENTS[id]; if(!intent||intent.sent) return;
-    if(ROW_DELETE_INTENTS[id]) return;
+    var intent=ROW_COMMIT_INTENTS[id]; if(!intent||intent.sent||intent.queued) return;
     var t=textTxn(id); if(t&&t._pendingAdd) return;
     for(var i=0;i<intent.saved.length;i++){
       if(textWriteQueue(id,intent.saved[i].field).active) return;
     }
-    intent.sent=true;
+    intent.queued=true;
     intent.saved.forEach(function(s){
       var q=textWriteQueue(id,s.field);
       s.token=nextTextRequestToken(id,s.field);
       q.active={token:s.token,revision:s.revision,rawValue:s.rawValue,value:s.value,record:true};
     });
-    var seq=nextMutation(); beginRowWrite(id);
+    var seq=nextMutation();
+    enqueueRowWrite(id,function(done){
+    intent.sent=true;
     google.script.run
       .withSuccessHandler(function(res){
         intent.saved.forEach(function(s){
@@ -1269,7 +1291,7 @@
         delete ROW_COMMIT_INTENTS[id];
         if(settle(seq,res&&res.txns)) repaint();
         ['merchant','tag'].forEach(function(field){ drainTextWrite(id,field); });
-        endRowWrite(id);
+        done();
       })
       .withFailureHandler(function(err){
         intent.saved.forEach(function(s){
@@ -1280,9 +1302,10 @@
         var currentTxn=textTxn(id); if(currentTxn) revertTxn(currentTxn.id,intent.undo); else repaint();
         toast('寫入失敗:'+((err&&err.message)||err),true);
         ['merchant','tag'].forEach(function(field){ drainTextWrite(id,field); });
-        endRowWrite(id);
+        done();
       })
       .updateTxn(resolveTextRowId(id),intent.patch,true);
+    });
   }
 
   /** Record a row and any dirty text as one authoritative patch. */
@@ -1332,7 +1355,7 @@
     var intent=ROW_DELETE_INTENTS[rowKey]; if(!intent||intent.sent) return;
     var t=textTxn(rowKey);
     if(!t||t._pendingAdd||ROW_ACTIVE_WRITES[rowKey]||ROW_COMMIT_INTENTS[rowKey]) return;
-    intent.sent=true; var serverId=t.id;
+    intent.sent=true; var serverId=resolveTextRowId(rowKey);
     var delSeq=nextMutation();
     google.script.run
       .withSuccessHandler(function(res){
@@ -1437,14 +1460,15 @@
     // identical to what the next reload will show, without restating that rule here.
     google.script.run
       .withSuccessHandler(function(nt){
-        var finalId=nt&&nt.id?String(nt.id):'';
-        var existing=finalId?txnById(finalId):null;
+        var finalId=nt&&nt.id?String(nt.id):'', finalRowId=nt&&nt.rowId?String(nt.rowId):'';
+        var existing=finalRowId?textTxn(finalRowId):(finalId?txnById(finalId):null);
         if(existing&&existing!==temp){
           existing._textKey=tempTextRow; existing._pendingAdd=true;
           var tempIndex=TXNS.indexOf(temp); if(tempIndex>=0) TXNS.splice(tempIndex,1);
           temp=existing;
         } else if(TXNS.indexOf(temp)<0) TXNS.push(temp);
         if(finalId) temp.id=finalId;
+        if(finalRowId) temp.rowId=finalRowId;
         temp._pendingAdd=false;
         delete PENDING_ADD_ROWS[tempTextRow];
         if(nt){
@@ -1502,7 +1526,6 @@
   function applySplit(id, raw){
     var t=textTxn(id); if(!t) return;
     var rowKey=ensureTextRowKey(t); if(ROW_DELETE_INTENTS[rowKey]) return;
-    var serverId=t.id;
     var chg=chargedOf(t), prevMine=t.mine, prevAmt=t.amount;
     var v = (raw==='') ? null : Number(raw);
     if(v!==null && (!isFinite(v)||v<0)){ toast('請填 0 以上的數字', true); return; }
@@ -1512,21 +1535,24 @@
     // A split is a local mutation too: bumping the counter stops an edit response already in
     // flight from adopting a list that predates it, and settling through settle() is what makes
     // that dropped list come back as a refetch instead of stranding the page on a stale row id.
-    var seq=nextMutation(); beginRowWrite(rowKey);
+    var seq=nextMutation();
+    enqueueRowWrite(rowKey,function(done){
+    var serverId=resolveTextRowId(rowKey);
     google.script.run
       .withSuccessHandler(function(){
         settle(seq, null);
         if(v==null) toast('整筆都是你的 · $'+fmt(chg));
         else if(v>chg) toast('這筆你消費 $'+fmt(v)+'，比刷卡 $'+fmt(chg)+' 多 — 有人先幫你墊了 $'+fmt(v-chg));
         else toast('這筆算你 $'+fmt(v)+'，代墊 $'+fmt(chg-v)+' 不計入統計');
-        endRowWrite(rowKey);
+        done();
       })
       .withFailureHandler(function(err){
         settle(seq, null); var current=textTxn(rowKey);
         if(current) revertTxn(current.id, { mine:prevMine, amount:prevAmt }); else repaint();
-        toast('寫入失敗:'+((err&&err.message)||err), true); endRowWrite(rowKey);
+        toast('寫入失敗:'+((err&&err.message)||err), true); done();
       })
       .updateTxn(serverId, { mine: (v==null?'':v) });
+    });
   }
 
   // Gmail permalink for auto-recorded rows. Empty link (manual rows) returns nothing — no
@@ -1656,11 +1682,14 @@
       // Nothing is refetched on the ordinary run: the debt only exists after a real drop.
       var rowKey=todo[i], current=textTxn(rowKey);
       if(!current||ROW_DELETE_INTENTS[rowKey]){ step(i+1); return; }
-      var serverId=current.id, seq=nextMutation(); beginRowWrite(rowKey);
+      var seq=nextMutation();
+      enqueueRowWrite(rowKey,function(done){
+      var serverId=resolveTextRowId(rowKey);
       google.script.run
-        .withSuccessHandler(function(){ settle(seq, null); endRowWrite(rowKey); step(i+1); })
-        .withFailureHandler(function(){ settle(seq, null); var t=textTxn(rowKey); if(t) t.posted=false; failed++; endRowWrite(rowKey); step(i+1); })
+        .withSuccessHandler(function(){ settle(seq, null); done(); step(i+1); })
+        .withFailureHandler(function(){ settle(seq, null); var t=textTxn(rowKey); if(t) t.posted=false; failed++; done(); step(i+1); })
         .updateTxn(serverId, { posted:true });
+      });
     })(0);
   }
 
@@ -1933,7 +1962,7 @@
       // equal, so the amount tiebreak alone decides — which is exactly what this page did
       // before times existed. No blank badge, no undefined on screen, no NaN in the comparator.
       t.hm = (t.hm==null) ? '' : String(t.hm);
-      t.posted = (t.posted===true); t.id = String(t.id||''); return t; });
+      t.posted = (t.posted===true); t.id = String(t.id||''); t.rowId=String(t.rowId||''); return t; });
     preservePendingAddRows(next); reconcileTextRowIds(TXNS,next); TXNS=next;
     return txnsSignature(TXNS)!==before;
   }

@@ -30,7 +30,7 @@ const SERVER_FIELDS = ['id', 'y', 'm', 'd', 'hm', 'type', 'amount', 'charged', '
 
 function row(overrides) {
   return Object.assign({
-    id: 'msg-a|1000|120|1234|0', y: 2026, m: 8, d: 12, hm: '09:00', type: '支出',
+    id: 'msg-a|1000|120|1234|0', rowId: '', y: 2026, m: 8, d: 12, hm: '09:00', type: '支出',
     amount: 120, charged: 120, mine: null, cat: '飲食', merchant: '星巴克', tag: '',
     bank: '富邦', last4: '1234', link: 'https://mail/x', posted: false
   }, overrides);
@@ -90,7 +90,7 @@ const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isS
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
   'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
-  'beginRowWrite', 'endRowWrite',
+  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite',
   'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
   'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
   'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
@@ -112,7 +112,7 @@ function harness(initial, opts) {
     TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_WRITE_QUEUES: {},
     TEXT_CANCEL_BLURS: {}, ROW_COMMIT_INTENTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
     COMPOSITION_FLUSH_SCHEDULED: false, TEXT_ROW_SERIAL: 0, TEXT_REMOVED_ROW_KEYS: {},
-    PENDING_ADD_ROWS: {}, ROW_ACTIVE_WRITES: {}, ROW_DELETE_INTENTS: {},
+    PENDING_ADD_ROWS: {}, ROW_ACTIVE_WRITES: {}, ROW_DELETE_INTENTS: {}, ROW_WRITE_FIFOS: {},
     pendingDelId: null, pendingDelRowKey: null, delBusy: false, openSplit: null,
     google: { script: { run: recordingRun(rec) } },
     render: function () { renders.n++; if (opts.onRender) opts.onRender(); },
@@ -471,6 +471,36 @@ function run() {
   assert.strictEqual(deleteAfterRekey.deletes.length, 1, 'delete dispatches after the amount response is adopted');
   assert.strictEqual(deleteAfterRekey.deletes[0].arg.id, 'del|1000|200|1234|0',
     'delete resolves the intended logical row to its current server id, not the recycled occurrence id');
+
+  const fifoBase = serverCopy(base);
+  fifoBase[0].rowId = 'uuid-row-a';
+  const fifo = harness(fifoBase);
+  const fifoKey = fifo.textRowKey(fifoBase[0].id);
+  fifo.applyEdit(fifoKey, 'amount', 999);
+  fifo.applyEdit(fifoKey, 'cat', '交通');
+  assert.strictEqual(fifo.calls.length, 1, 'same-row writes are dispatched one at a time');
+  assert.strictEqual(fifo.calls[0].id, 'uuid-row-a', 'row writes use the immutable UUID');
+  const amountOnly = serverCopy(fifoBase); amountOnly[0].amount = 999;
+  fifo.calls[0].success({ ok: true, txns: amountOnly });
+  assert.strictEqual(fifo.calls.length, 2, 'the next same-row write starts only after the first response');
+  assert.strictEqual(fifo.calls[1].patch.cat, '交通');
+  assert.strictEqual(fifo.TXNS[0].cat, '交通', 'an older acknowledgement cannot erase the queued optimistic value');
+
+  const recordThenDelete = harness(base);
+  const recordDeleteKey = recordThenDelete.textRowKey(base[0].id);
+  recordThenDelete.captureDraft(recordDeleteKey, 'merchant', '先存再刪');
+  recordThenDelete.saveTextDraft(recordDeleteKey, 'merchant');
+  recordThenDelete.commitRow(recordDeleteKey, true);
+  recordThenDelete.pendingDelId = base[0].id;
+  recordThenDelete.pendingDelRowKey = recordDeleteKey;
+  recordThenDelete.confirmDelete();
+  assert.strictEqual(recordThenDelete.deletes.length, 0, 'delete waits behind the active text save and queued Record');
+  const savedBeforeRecord = serverCopy(base); savedBeforeRecord[0].merchant = '先存再刪';
+  recordThenDelete.calls[0].success({ ok: true, txns: savedBeforeRecord });
+  assert.strictEqual(recordThenDelete.calls.length, 2, 'the pre-existing Record advances despite the later delete intent');
+  const recordedBeforeDelete = serverCopy(savedBeforeRecord); recordedBeforeDelete[0].posted = true;
+  recordThenDelete.calls[1].success({ ok: true, txns: recordedBeforeDelete });
+  assert.strictEqual(recordThenDelete.deletes.length, 1, 'delete advances after the queued Record settles');
 
   // Every asynchronous callback that can rebuild the transaction panel goes through repaint(),
   // so an unrelated add/delete/bulk response cannot detach an active native IME node.

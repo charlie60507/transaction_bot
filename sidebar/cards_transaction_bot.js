@@ -42,7 +42,10 @@ const RX = {
 function appendLast7DaysToSheet() {
   const lock = LockService.getScriptLock();
   try {
-    lock.tryLock(20 * 1000);
+    if (!lock.tryLock(20 * 1000)) {
+      Logger.log('Skipped: another Transactions writer still holds the script lock');
+      return;
+    }
 
     const sh = getOrCreateSheet_();
     ensureHeaderAndCheckbox_(sh);
@@ -693,6 +696,12 @@ function makeLooseDedupKeyFromRow_(row) {
  * Optional: one-time backfill empty column J for credit cards with "支出"
  * ------------------------- */
 function backfillExpenseForCreditCards_() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20 * 1000)) {
+    Logger.log('Backfill skipped: another Transactions writer still holds the script lock');
+    return;
+  }
+  try {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const sh = ss.getSheetByName(SHEET_NAME);
   if (!sh) return;
@@ -718,6 +727,9 @@ function backfillExpenseForCreditCards_() {
 
   if (updated > 0) rng.setValues(vals);
   Logger.log(`Backfill done. updated=${updated}`);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /** Helper: set script properties from clasp run */
