@@ -527,6 +527,29 @@ function run() {
   recordThenDelete.calls[1].success({ ok: true, txns: recordedBeforeDelete });
   assert.strictEqual(recordThenDelete.deletes.length, 1, 'delete advances after the queued Record settles');
 
+  const newerTextThenDelete = harness(base);
+  const newerTextKey = newerTextThenDelete.textRowKey(base[0].id);
+  newerTextThenDelete.captureDraft(newerTextKey, 'merchant', '第一版');
+  newerTextThenDelete.saveTextDraft(newerTextKey, 'merchant');
+  newerTextThenDelete.captureDraft(newerTextKey, 'merchant', '刪除前最後一版');
+  newerTextThenDelete.saveTextDraft(newerTextKey, 'merchant');
+  newerTextThenDelete.pendingDelId = base[0].id;
+  newerTextThenDelete.pendingDelRowKey = newerTextKey;
+  newerTextThenDelete.confirmDelete();
+  assert.strictEqual(newerTextThenDelete.deletes.length, 0,
+    'delete waits for an active text save and its newer pending revision');
+  const firstTextAck = serverCopy(base); firstTextAck[0].merchant = '第一版';
+  newerTextThenDelete.calls[0].success({ ok: true, txns: firstTextAck });
+  assert.strictEqual(newerTextThenDelete.calls.length, 2,
+    'the revision queued before delete confirmation still enters the row FIFO');
+  assert.strictEqual(newerTextThenDelete.calls[1].patch.merchant, '刪除前最後一版');
+  assert.strictEqual(newerTextThenDelete.deletes.length, 0,
+    'delete cannot overtake the final pending text revision');
+  const finalTextAck = serverCopy(base); finalTextAck[0].merchant = '刪除前最後一版';
+  newerTextThenDelete.calls[1].success({ ok: true, txns: finalTextAck });
+  assert.strictEqual(newerTextThenDelete.deletes.length, 1,
+    'delete dispatches after the last pre-confirmation text revision is durable');
+
   // Every asynchronous callback that can rebuild the transaction panel goes through repaint(),
   // so an unrelated add/delete/bulk response cannot detach an active native IME node.
   function assertAsyncRepaintDefers(name, issue, resolve) {
@@ -578,6 +601,28 @@ function run() {
   assert.strictEqual(addBlurBeforeAck.calls.length, 1, 'the queued text drains when the final id arrives');
   assert.strictEqual(addBlurBeforeAck.calls[0].id, 'manual-10');
   assert.strictEqual(addBlurBeforeAck.calls[0].patch.merchant, '先輸入再回覆');
+
+  const addTextDeleteBeforeAck = harness(base);
+  addTextDeleteBeforeAck.submitAdd();
+  const textDeletePending = addTextDeleteBeforeAck.TXNS[addTextDeleteBeforeAck.TXNS.length - 1];
+  const textDeletePendingKey = addTextDeleteBeforeAck.textRowKey(textDeletePending.id);
+  addTextDeleteBeforeAck.captureDraft(textDeletePendingKey, 'merchant', '新增後要保留的文字');
+  addTextDeleteBeforeAck.saveTextDraft(textDeletePendingKey, 'merchant');
+  addTextDeleteBeforeAck.pendingDelId = textDeletePending.id;
+  addTextDeleteBeforeAck.pendingDelRowKey = textDeletePendingKey;
+  addTextDeleteBeforeAck.confirmDelete();
+  addTextDeleteBeforeAck.adds[0].success({
+    id: 'manual-10b|3000|80||0', rowId: 'uuid-manual-10b', hm: '', y: 2026, m: 8, d: 12
+  });
+  assert.strictEqual(addTextDeleteBeforeAck.calls.length, 1,
+    'pending manual text is written after UUID acknowledgement even when delete is confirmed');
+  assert.strictEqual(addTextDeleteBeforeAck.calls[0].id, 'uuid-manual-10b');
+  assert.strictEqual(addTextDeleteBeforeAck.deletes.length, 0,
+    'pending manual delete waits for the pre-confirmation text write');
+  addTextDeleteBeforeAck.calls[0].success({ ok: true });
+  assert.strictEqual(addTextDeleteBeforeAck.deletes.length, 1,
+    'pending manual delete starts only after its final text is durable');
+  assert.strictEqual(addTextDeleteBeforeAck.deletes[0].arg.id, 'uuid-manual-10b');
 
   const addRecordBeforeAck = harness(base);
   addRecordBeforeAck.submitAdd();

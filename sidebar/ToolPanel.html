@@ -1245,8 +1245,11 @@
     id=textRowKey(id);
     var q=textWriteQueue(id,field); if(q.active) return;
     if(ROW_COMMIT_INTENTS[id]){ trySendRowCommit(id); return; }
-    if(ROW_DELETE_INTENTS[id]) return;
-    var pending=q.pending; q.pending=null;
+    var pending=q.pending;
+    // A delete intent blocks new edits, but revisions already queued before confirmation must
+    // still reach the sheet first so Deleted preserves the last value the owner entered.
+    if(ROW_DELETE_INTENTS[id]&&!pending) return;
+    q.pending=null;
     if(!pending) return;
     if(pending.cancel){ issueTextSave(id,field,pending.revision,pending.value,true); return; }
     var current=textDraft(id,field);
