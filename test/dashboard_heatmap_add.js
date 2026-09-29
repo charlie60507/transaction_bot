@@ -48,6 +48,7 @@ function submitHarness(opts) {
     nextMutation: function () { return ++fns.MUTATION_SEQ; },
     settle: function () {},
     render: function () { renders.push(true); },
+    repaint: function () { renders.push(true); },
     toast: function (message, error) { toasts.push({ message: message, error: !!error }); },
     google: { script: { run: recordingRun(calls) } }
   });

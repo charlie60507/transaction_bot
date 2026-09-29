@@ -752,7 +752,10 @@
   // describes, so the panel and its .rank styles are gone rather than duplicated.
 
   // ---------- editable day list (per-day 待記帳 queue) ----------
-  function txnById(id){ for(var i=0;i<TXNS.length;i++) if(TXNS[i].id===id) return TXNS[i]; return null; }
+  function txnById(id){
+    id=(typeof TEXT_ROW_ALIASES!=='undefined')?resolveTextRowId(id):String(id);
+    for(var i=0;i<TXNS.length;i++) if(TXNS[i].id===id) return TXNS[i]; return null;
+  }
   // Only the owner's own categories, never the bank vocabulary from 類別(G) — the server sends
   // 種類(手動) alone now (see rowCategory_). 未分類 is always offered so a category can be cleared.
   function distinctCats(){ var s={'未分類':1}; TXNS.forEach(function(t){ if(t.cat) s[t.cat]=1; }); return Object.keys(s).sort(); }
@@ -839,8 +842,67 @@
   // make the server snapshot overwrite what the owner is still typing.
   var TEXT_DRAFTS={}, TEXT_DRAFT_REVISIONS={}, TEXT_REQUEST_TOKENS={}, TEXT_WRITE_QUEUES={},
       TEXT_CANCEL_BLURS={}, ROW_COMMIT_INTENTS={}, ACTIVE_COMPOSITIONS={}, PENDING_REPAINT=false,
-      COMPOSITION_FLUSH_SCHEDULED=false;
-  function draftKey(id,field){ return String(id)+'\u001f'+String(field); }
+      COMPOSITION_FLUSH_SCHEDULED=false, TEXT_ROW_ALIASES={};
+  function resolveTextRowId(id){
+    id=String(id); var seen={};
+    while(TEXT_ROW_ALIASES[id]&&!seen[id]){ seen[id]=true; id=TEXT_ROW_ALIASES[id]; }
+    return id;
+  }
+  function rawDraftKey(id,field){ return String(id)+'\u001f'+String(field); }
+  function draftKey(id,field){ return rawDraftKey(resolveTextRowId(id),field); }
+  function textRowLineage(id){
+    var p=String(id).split('|');
+    return p.length>=5 ? p[0]+'\u001f'+p[1]+'\u001f'+p[3] : String(id);
+  }
+  function hasTextRowState(id){
+    id=String(id);
+    if(ROW_COMMIT_INTENTS[id]) return true;
+    for(var i=0;i<2;i++){
+      var key=rawDraftKey(id,i?'tag':'merchant');
+      if(TEXT_DRAFTS[key]||TEXT_WRITE_QUEUES[key]||ACTIVE_COMPOSITIONS[key]||TEXT_CANCEL_BLURS[key]) return true;
+    }
+    return false;
+  }
+  function moveTextState(map,oldKey,newKey,numeric){
+    if(!Object.prototype.hasOwnProperty.call(map,oldKey)||oldKey===newKey) return;
+    if(!Object.prototype.hasOwnProperty.call(map,newKey)) map[newKey]=map[oldKey];
+    else if(numeric) map[newKey]=Math.max(map[newKey]||0,map[oldKey]||0);
+    delete map[oldKey];
+  }
+  /** Keep one logical editor attached when a server write changes its composite transaction id. */
+  function rekeyTextRow(oldId,newId){
+    oldId=resolveTextRowId(oldId); newId=resolveTextRowId(newId);
+    if(oldId===newId) return;
+    ['merchant','tag'].forEach(function(field){
+      var oldKey=rawDraftKey(oldId,field), newKey=rawDraftKey(newId,field);
+      moveTextState(TEXT_DRAFTS,oldKey,newKey,false);
+      moveTextState(TEXT_DRAFT_REVISIONS,oldKey,newKey,true);
+      moveTextState(TEXT_REQUEST_TOKENS,oldKey,newKey,true);
+      moveTextState(TEXT_WRITE_QUEUES,oldKey,newKey,false);
+      moveTextState(TEXT_CANCEL_BLURS,oldKey,newKey,false);
+      moveTextState(ACTIVE_COMPOSITIONS,oldKey,newKey,false);
+    });
+    if(ROW_COMMIT_INTENTS[oldId]&&!ROW_COMMIT_INTENTS[newId]) ROW_COMMIT_INTENTS[newId]=ROW_COMMIT_INTENTS[oldId];
+    delete ROW_COMMIT_INTENTS[oldId];
+    for(var alias in TEXT_ROW_ALIASES){
+      if(Object.prototype.hasOwnProperty.call(TEXT_ROW_ALIASES,alias)&&resolveTextRowId(alias)===oldId) TEXT_ROW_ALIASES[alias]=newId;
+    }
+    TEXT_ROW_ALIASES[oldId]=newId;
+  }
+  /** Pair unmatched rows within their stable message/time/card lineage, preserving sheet order. */
+  function reconcileTextRowIds(before,after){
+    var nextById={}, exact={};
+    (after||[]).forEach(function(t){ nextById[String(t.id)]=true; });
+    (before||[]).forEach(function(t){ if(nextById[String(t.id)]) exact[String(t.id)]=true; });
+    var oldGroups={}, newGroups={};
+    (before||[]).forEach(function(t){ var id=String(t.id); if(exact[id]) return; var k=textRowLineage(id); (oldGroups[k]||(oldGroups[k]=[])).push(id); });
+    (after||[]).forEach(function(t){ var id=String(t.id); if(exact[id]) return; var k=textRowLineage(id); (newGroups[k]||(newGroups[k]=[])).push(id); });
+    for(var k in oldGroups){
+      if(!Object.prototype.hasOwnProperty.call(oldGroups,k)||!newGroups[k]) continue;
+      var n=Math.min(oldGroups[k].length,newGroups[k].length);
+      for(var i=0;i<n;i++) if(hasTextRowState(oldGroups[k][i])) rekeyTextRow(oldGroups[k][i],newGroups[k][i]);
+    }
+  }
   function textDraft(id,field){ return TEXT_DRAFTS[draftKey(id,field)]||null; }
   function draftValue(t,field){ var d=t&&textDraft(t.id,field); return d?d.value:((t&&t[field])||''); }
   function textWriteQueue(id,field){
@@ -850,8 +912,18 @@
   }
   function textInputMatches(id,field){
     if(typeof document==='undefined'||!document.querySelectorAll) return [];
-    var attr=field==='merchant'?'[data-emer="'+id+'"]':'[data-ef="tag"][data-id="'+id+'"]';
-    try{ return document.querySelectorAll(attr)||[]; }catch(e){ return []; }
+    var canonical=resolveTextRowId(id), ids=[canonical], out=[];
+    for(var alias in TEXT_ROW_ALIASES){
+      if(Object.prototype.hasOwnProperty.call(TEXT_ROW_ALIASES,alias)&&resolveTextRowId(alias)===canonical) ids.push(alias);
+    }
+    for(var i=0;i<ids.length;i++){
+      var attr=field==='merchant'?'[data-emer="'+ids[i]+'"]':'[data-ef="tag"][data-id="'+ids[i]+'"]';
+      try{
+        var matches=document.querySelectorAll(attr)||[];
+        for(var j=0;j<matches.length;j++) if(out.indexOf(matches[j])<0) out.push(matches[j]);
+      }catch(e){}
+    }
+    return out;
   }
   function syncTextCopies(id,field,value,committed,keepValue){
     var all=textInputMatches(id,field);
@@ -978,6 +1050,7 @@
       var a=el.attributes[i];
       if(String(a.name).indexOf('data-')!==0) continue;
       var v=String(a.value);
+      if(a.name==='data-emer'||a.name==='data-id') v=resolveTextRowId(v);
       // A quote or a backslash inside the value would need CSS escaping. No attribute this page
       // writes contains either — ids are messageId|time|amount|last4|occurrence — so give up on
       // restoring focus rather than hand querySelector a selector that might be malformed.
@@ -1053,6 +1126,7 @@
 
   // optimistic edit: update local state now, write back, revert on failure
   function applyEdit(id,field,value){
+    id=resolveTextRowId(id);
     if(field==='merchant'||field==='tag'){
       captureDraft(id,field,value);
       saveTextDraft(id,field);
@@ -1097,6 +1171,7 @@
 
   /** Issue exactly one field write. A newer blur is retained as one coalesced pending revision. */
   function issueTextSave(id,field,revision,rawValue,isCancel){
+    id=resolveTextRowId(id);
     var t=txnById(id); if(!t) return;
     var key=draftKey(id,field), q=textWriteQueue(id,field), value=normalizedTextValue(rawValue);
     var token=nextTextRequestToken(id,field), prev=t[field];
@@ -1105,18 +1180,18 @@
     var seq=nextMutation(), patch={}; patch[field]=value;
     google.script.run
       .withSuccessHandler(function(res){
-        var active=q.active, current=textDraft(id,field), rowIntent=ROW_COMMIT_INTENTS[id];
+        var active=q.active, current=textDraft(id,field), rowIntent=ROW_COMMIT_INTENTS[resolveTextRowId(id)];
         if(active&&active.token===token) q.active=null;
         if(!rowIntent){
           if(current&&current.revision===revision){
-            delete TEXT_DRAFTS[key]; syncTextCopies(id,field,value,true,false);
+            delete TEXT_DRAFTS[draftKey(id,field)]; syncTextCopies(id,field,value,true,false);
           } else if(!q.pending) syncTextCopies(id,field,value,true,true);
         }
         if(settle(seq,res&&res.txns)) repaint();
         drainTextWrite(id,field);
       })
       .withFailureHandler(function(err){
-        var active=q.active, current=textDraft(id,field), rowIntent=ROW_COMMIT_INTENTS[id];
+        var active=q.active, current=textDraft(id,field), rowIntent=ROW_COMMIT_INTENTS[resolveTextRowId(id)];
         if(active&&active.token===token) q.active=null;
         settle(seq,null);
         if(!rowIntent&&!q.pending){
@@ -1131,6 +1206,7 @@
   }
 
   function drainTextWrite(id,field){
+    id=resolveTextRowId(id);
     var q=textWriteQueue(id,field); if(q.active) return;
     if(ROW_COMMIT_INTENTS[id]){ trySendRowCommit(id); return; }
     var pending=q.pending; q.pending=null;
@@ -1142,14 +1218,23 @@
 
   /** Save one free-text draft, serialising all requests for this logical field. */
   function saveTextDraft(id,field){
-    var d=textDraft(id,field); if(!d||!d.dirty||ROW_COMMIT_INTENTS[id]) return;
+    id=resolveTextRowId(id);
+    var d=textDraft(id,field); if(!d||!d.dirty) return;
     var q=textWriteQueue(id,field);
+    var intent=ROW_COMMIT_INTENTS[id];
+    if(intent){
+      var included=null;
+      for(var i=0;i<intent.saved.length;i++) if(intent.saved[i].field===field){ included=intent.saved[i]; break; }
+      if(!included||d.revision>included.revision) q.pending={revision:d.revision,value:d.value};
+      return;
+    }
     if(q.active){ q.pending={revision:d.revision,value:d.value}; return; }
     issueTextSave(id,field,d.revision,d.value);
   }
 
   /** Send a queued Record only after older per-field writes have completed on the server. */
   function trySendRowCommit(id){
+    id=resolveTextRowId(id);
     var intent=ROW_COMMIT_INTENTS[id]; if(!intent||intent.sent) return;
     for(var i=0;i<intent.saved.length;i++){
       if(textWriteQueue(id,intent.saved[i].field).active) return;
@@ -1172,6 +1257,7 @@
         });
         delete ROW_COMMIT_INTENTS[id];
         if(settle(seq,res&&res.txns)) repaint();
+        ['merchant','tag'].forEach(function(field){ drainTextWrite(id,field); });
       })
       .withFailureHandler(function(err){
         intent.saved.forEach(function(s){
@@ -1180,12 +1266,14 @@
         delete ROW_COMMIT_INTENTS[id];
         settle(seq,null); revertTxn(id,intent.undo);
         toast('寫入失敗:'+((err&&err.message)||err),true);
+        ['merchant','tag'].forEach(function(field){ drainTextWrite(id,field); });
       })
       .updateTxn(id,intent.patch,true);
   }
 
   /** Record a row and any dirty text as one authoritative patch. */
   function commitRow(id,posted){
+    id=resolveTextRowId(id);
     var t=txnById(id); if(!t||ROW_COMMIT_INTENTS[id]) return;
     var intent={patch:{posted:posted},undo:{posted:t.posted},saved:[],sent:false};
     ['merchant','tag'].forEach(function(field){
@@ -1227,7 +1315,7 @@
       .withSuccessHandler(function(res){
         delBusy=false;
         settle(delSeq, res && res.txns);
-        closeDelModal(); render(); toast('已刪除');
+        closeDelModal(); repaint(); toast('已刪除');
       })
       .withFailureHandler(function(err){
         delBusy=false; if(ok) ok.disabled=false;
@@ -1333,12 +1421,12 @@
           state.scope=temp.y+'-'+('0'+temp.m).slice(-2); state.selYear=temp.y; state.selMonth=temp.m;
           openHeatDay=temp.y+'-'+temp.m+'-'+temp.d;
         }
-        settle(addSeq, null); toast('已新增 · 已記帳 ✓'); render();
+        settle(addSeq, null); toast('已新增 · 已記帳 ✓'); repaint();
       })
       .withFailureHandler(function(err){
         var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1);
         if(contextual){ state.scope=navBefore.scope; state.selYear=navBefore.selYear; state.selMonth=navBefore.selMonth; openHeatDay=navBefore.openHeatDay; }
-        settle(addSeq, null); render(); toast('新增失敗:'+((err&&err.message)||err), true);
+        settle(addSeq, null); repaint(); toast('新增失敗:'+((err&&err.message)||err), true);
       })
       .addTxn(fields);
   }
@@ -1509,7 +1597,7 @@
     var failed = 0;
     (function step(i){
       if(i >= todo.length){
-        if(failed) { render(); toast('完成 '+(todo.length-failed)+'/'+todo.length+' · '+failed+' 筆寫入失敗', true); }
+        if(failed) { repaint(); toast('完成 '+(todo.length-failed)+'/'+todo.length+' · '+failed+' 筆寫入失敗', true); }
         else toast('已記帳 '+todo.length+' 筆');
         return;
       }
@@ -1786,7 +1874,7 @@
    *  write whose result matches the optimistic prediction repaints nothing. */
   function adoptTxns(data){
     var before=txnsSignature(TXNS);
-    TXNS = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount;
+    var next = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount;
       // charged/mine arrive from the server; default them so a page served before the
       // matching server version simply behaves as it did — every row "all mine".
       t.charged = (t.charged==null) ? t.amount : +t.charged;
@@ -1796,6 +1884,7 @@
       // before times existed. No blank badge, no undefined on screen, no NaN in the comparator.
       t.hm = (t.hm==null) ? '' : String(t.hm);
       t.posted = (t.posted===true); t.id = String(t.id||''); return t; });
+    reconcileTextRowIds(TXNS,next); TXNS=next;
     return txnsSignature(TXNS)!==before;
   }
   function boot(){

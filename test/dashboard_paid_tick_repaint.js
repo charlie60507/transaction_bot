@@ -88,7 +88,9 @@ function domStub(fields) {
 
 const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isStale', 'settle',
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
-  'draftKey', 'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
+  'resolveTextRowId', 'rawDraftKey', 'draftKey', 'textRowLineage', 'hasTextRowState',
+  'moveTextState', 'rekeyTextRow', 'reconcileTextRowIds',
+  'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
   'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
   'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
   'isImeKeyEvent', 'handleTextKeydown', 'normalizedTextValue', 'issueTextSave', 'drainTextWrite',
@@ -108,7 +110,7 @@ function harness(initial, opts) {
     MUTATION_SEQ: 0, INFLIGHT: 0, STALE_DROPPED: false, REFRESHING: false,
     TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_WRITE_QUEUES: {},
     TEXT_CANCEL_BLURS: {}, ROW_COMMIT_INTENTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
-    COMPOSITION_FLUSH_SCHEDULED: false,
+    COMPOSITION_FLUSH_SCHEDULED: false, TEXT_ROW_ALIASES: {},
     pendingDelId: null, delBusy: false, openSplit: null,
     google: { script: { run: recordingRun(rec) } },
     render: function () { renders.n++; if (opts.onRender) opts.onRender(); },
@@ -375,6 +377,52 @@ function run() {
   assert.strictEqual(trailing.draftValue(base[0], 'merchant'), '買晚餐餐廳',
     'the final post-composition input is captured before the queued repaint');
 
+  // A separate write can change the composite transaction id while Chromium still owns an IME
+  // composition. The logical draft, composition lock and next save must follow that row identity.
+  const rekeyDuringIme = harness(base);
+  const REKEYED_ID = base[0].id.replace('|120|', '|999|');
+  rekeyDuringIme.beginComposition(base[0].id, 'merchant', '組字');
+  rekeyDuringIme.captureDraft(base[0].id, 'merchant', '組字完成');
+  const rekeyedRows = serverCopy(base);
+  rekeyedRows[0].amount = 999; rekeyedRows[0].id = REKEYED_ID;
+  assert.strictEqual(rekeyDuringIme.adoptTxns(rekeyedRows), true, 'the id-changing list is adopted');
+  assert.strictEqual(rekeyDuringIme.resolveTextRowId(base[0].id), REKEYED_ID,
+    'the old DOM id resolves to the server row that replaced it');
+  assert.strictEqual(rekeyDuringIme.draftValue(rekeyDuringIme.TXNS[0], 'merchant'), '組字完成',
+    'the live draft moves to the new composite id');
+  rekeyDuringIme.repaint();
+  assert.strictEqual(rekeyDuringIme.renders.n, 0, 'the migrated composition still defers repaint');
+  rekeyDuringIme.endComposition(base[0].id, 'merchant', '組字完成');
+  rekeyDuringIme.flushTimers();
+  assert.strictEqual(rekeyDuringIme.renders.n, 1, 'ending composition through the old DOM id flushes once');
+  rekeyDuringIme.saveTextDraft(base[0].id, 'merchant');
+  assert.strictEqual(rekeyDuringIme.calls[0].id, REKEYED_ID,
+    'the next write uses the authoritative id rather than the detached DOM id');
+
+  // Every asynchronous callback that can rebuild the transaction panel goes through repaint(),
+  // so an unrelated add/delete/bulk response cannot detach an active native IME node.
+  function assertAsyncRepaintDefers(name, issue, resolve) {
+    const h = harness(base);
+    issue(h);
+    const before = h.renders.n;
+    h.beginComposition(base[0].id, 'merchant', '輸入中');
+    resolve(h);
+    assert.strictEqual(h.renders.n, before, name + ': callback repaint is deferred during composition');
+    assert.strictEqual(h.PENDING_REPAINT, true, name + ': callback records one pending repaint');
+    h.endComposition(base[0].id, 'merchant', '輸入完成');
+    h.flushTimers();
+    assert.strictEqual(h.renders.n, before + 1, name + ': deferred repaint flushes once after composition');
+  }
+  assertAsyncRepaintDefers('add success', function (h) { h.submitAdd(); },
+    function (h) { h.adds[0].success({ id: 'manual-9', hm: '' }); });
+  assertAsyncRepaintDefers('add failure', function (h) { h.submitAdd(); },
+    function (h) { h.adds[0].failure(new Error('boom')); });
+  assertAsyncRepaintDefers('delete success', function (h) {
+    h.pendingDelId = base[1].id; h.confirmDelete();
+  }, function (h) { h.deletes[0].success({ ok: true, txns: serverCopy([base[0]]) }); });
+  assertAsyncRepaintDefers('bulk failure', function (h) { h.bulkPost([base[1].id]); },
+    function (h) { h.calls[0].failure(new Error('boom')); });
+
   // Enter/Escape belong to the IME while composition is active. keyCode 229 is the fallback
   // used by browsers that do not expose KeyboardEvent.isComposing reliably.
   [
@@ -513,6 +561,44 @@ function run() {
   assert.deepStrictEqual(JSON.parse(JSON.stringify(trimmedRecord.calls[0].patch)), {
     posted: true, merchant: '晚餐', tag: '約會'
   }, 'Record trims merchant and TAG only when building the committed patch');
+
+  // Text typed after Record has gone out is a newer revision, not part of that patch. It waits
+  // behind the row commit, then drains immediately against the row that remains in the model.
+  const editDuringRecord = harness(base);
+  editDuringRecord.captureDraft(base[0].id, 'merchant', 'Record 版本');
+  editDuringRecord.commitRow(base[0].id, true);
+  editDuringRecord.captureDraft(base[0].id, 'merchant', '稍後版本');
+  editDuringRecord.saveTextDraft(base[0].id, 'merchant');
+  assert.strictEqual(editDuringRecord.calls.length, 1, 'a newer revision waits behind Record');
+  const recordAck = serverCopy(base);
+  recordAck[0].merchant = 'Record 版本'; recordAck[0].posted = true;
+  editDuringRecord.calls[0].success({ ok: true, txns: recordAck });
+  assert.strictEqual(editDuringRecord.calls.length, 2, 'Record success drains the newer revision');
+  assert.strictEqual(editDuringRecord.calls[1].patch.merchant, '稍後版本',
+    'the drained write contains the text typed while Record was in flight');
+
+  const editDuringFailedRecord = harness(base);
+  editDuringFailedRecord.captureDraft(base[0].id, 'tag', 'Record 標籤');
+  editDuringFailedRecord.commitRow(base[0].id, true);
+  editDuringFailedRecord.captureDraft(base[0].id, 'tag', '稍後標籤');
+  editDuringFailedRecord.saveTextDraft(base[0].id, 'tag');
+  editDuringFailedRecord.calls[0].failure(new Error('record failed'));
+  assert.strictEqual(editDuringFailedRecord.calls.length, 2, 'Record failure also drains the newer revision');
+  assert.strictEqual(editDuringFailedRecord.calls[1].patch.tag, '稍後標籤',
+    'a failed Record cannot strand text entered while it was in flight');
+
+  // Escape during Record likewise survives as a compensating write. Without this drain, the
+  // Record response would leave the value the owner explicitly cancelled on the sheet.
+  const cancelDuringRecord = harness(base);
+  cancelDuringRecord.captureDraft(base[0].id, 'merchant', '不要保留');
+  cancelDuringRecord.commitRow(base[0].id, true);
+  cancelDuringRecord.cancelTextDraft(base[0].id, 'merchant');
+  const cancelRecordAck = serverCopy(base);
+  cancelRecordAck[0].merchant = '不要保留'; cancelRecordAck[0].posted = true;
+  cancelDuringRecord.calls[0].success({ ok: true, txns: cancelRecordAck });
+  assert.strictEqual(cancelDuringRecord.calls.length, 2, 'Record success drains the queued cancellation');
+  assert.strictEqual(cancelDuringRecord.calls[1].patch.merchant, base[0].merchant,
+    'the compensation restores the value from before the cancelled draft');
 
   // ---- actual duplicate DOM copies share drafts and acknowledged values ----
   ['merchant', 'tag'].forEach(function (field) {
