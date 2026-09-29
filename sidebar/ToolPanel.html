@@ -811,7 +811,7 @@
    * the screen in silence, and this page has no polling and no refresh control to correct it.
    */
   function txnsSignature(list){
-    var fields=['id','y','m','d','hm','type','amount','charged','mine','cat','merchant','tag','bank','last4','link','posted'];
+    var fields=['id','rowId','y','m','d','hm','type','amount','charged','mine','cat','merchant','tag','bank','last4','link','posted'];
     return (list||[]).map(function(t){
       return fields.map(function(f){ var v=(t||{})[f]; return (v==null)?'\u0000':String(v); }).join('\u001f');
     }).join('\u001e');
@@ -834,6 +834,186 @@
   // re-books itself if a mutation supersedes it too, so the debt survives an arbitrarily long run
   // of writes. Convergence is that refetch, not the guard.
   var MUTATION_SEQ=0, INFLIGHT=0, STALE_DROPPED=false, REFRESHING=false;
+  // Merchant and TAG are logical row fields, even when editRow() mounts the same transaction
+  // more than once. Keep their unsaved value outside the DOM so a whole-panel rebuild cannot
+  // make the server snapshot overwrite what the owner is still typing.
+  var TEXT_DRAFTS={}, TEXT_DRAFT_REVISIONS={}, TEXT_REQUEST_TOKENS={}, TEXT_WRITE_QUEUES={},
+      TEXT_CANCEL_BLURS={}, ROW_COMMIT_INTENTS={}, ACTIVE_COMPOSITIONS={}, PENDING_REPAINT=false,
+      COMPOSITION_FLUSH_SCHEDULED=false, TEXT_ROW_SERIAL=0, TEXT_REMOVED_ROW_KEYS={},
+      PENDING_ADD_ROWS={}, ROW_ACTIVE_WRITES={}, ROW_DELETE_INTENTS={}, ROW_WRITE_FIFOS={};
+  function ensureTextRowKey(t){
+    if(t&&!t._textKey) t._textKey='text-row-'+(++TEXT_ROW_SERIAL);
+    return t?t._textKey:'';
+  }
+  function textTxn(ref){
+    ref=String(ref);
+    for(var i=0;i<TXNS.length;i++) if(ensureTextRowKey(TXNS[i])===ref||TXNS[i].id===ref||TXNS[i].rowId===ref) return TXNS[i];
+    return null;
+  }
+  function textRowKey(ref){ var t=textTxn(ref); return t?ensureTextRowKey(t):String(ref); }
+  function resolveTextRowId(ref){ var t=textTxn(ref); return t?(t.rowId||t.id):String(ref); }
+  function rawDraftKey(rowKey,field){ return String(rowKey)+'\u001f'+String(field); }
+  function draftKey(ref,field){ return rawDraftKey(textRowKey(ref),field); }
+  function textRowLineage(id){
+    var p=String(id).split('|');
+    return p.length>=5 ? p[0]+'\u001f'+p[1]+'\u001f'+p[3] : String(id);
+  }
+  function dropTextRowState(ref){
+    var rowKey=textRowKey(ref);
+    ['merchant','tag'].forEach(function(field){
+      var key=rawDraftKey(rowKey,field);
+      delete TEXT_DRAFTS[key]; delete TEXT_DRAFT_REVISIONS[key]; delete TEXT_REQUEST_TOKENS[key];
+      delete TEXT_WRITE_QUEUES[key]; delete TEXT_CANCEL_BLURS[key]; delete ACTIVE_COMPOSITIONS[key];
+    });
+    delete ROW_COMMIT_INTENTS[rowKey];
+  }
+  /** Carry a client-only row identity across mutable composite ids, preserving sheet order. */
+  function reconcileTextRowIds(before,after){
+    var oldGroups={}, newGroups={};
+    var oldByRowId={};
+    (before||[]).forEach(function(t){ if(t.rowId) oldByRowId[t.rowId]=t; });
+    (after||[]).forEach(function(t){
+      if(t.rowId&&oldByRowId[t.rowId]) t._textKey=ensureTextRowKey(oldByRowId[t.rowId]);
+    });
+    (before||[]).forEach(function(t){
+      if(TEXT_REMOVED_ROW_KEYS[ensureTextRowKey(t)]) return;
+      if(t.rowId) return;
+      var k=textRowLineage(t.id); (oldGroups[k]||(oldGroups[k]=[])).push(t);
+    });
+    (after||[]).forEach(function(t){ if(t.rowId) return; var k=textRowLineage(t.id); (newGroups[k]||(newGroups[k]=[])).push(t); });
+    for(var k in oldGroups){
+      if(!Object.prototype.hasOwnProperty.call(oldGroups,k)||!newGroups[k]) continue;
+      var n=Math.min(oldGroups[k].length,newGroups[k].length);
+      for(var i=0;i<n;i++){
+        newGroups[k][i]._textKey=ensureTextRowKey(oldGroups[k][i]);
+      }
+    }
+    (after||[]).forEach(ensureTextRowKey);
+    for(var removed in TEXT_REMOVED_ROW_KEYS){
+      if(Object.prototype.hasOwnProperty.call(TEXT_REMOVED_ROW_KEYS,removed)){
+        dropTextRowState(removed); delete TEXT_REMOVED_ROW_KEYS[removed];
+      }
+    }
+  }
+  function preservePendingAddRows(list){
+    for(var key in PENDING_ADD_ROWS){
+      if(!Object.prototype.hasOwnProperty.call(PENDING_ADD_ROWS,key)) continue;
+      var pending=PENDING_ADD_ROWS[key], present=false;
+      for(var i=0;i<list.length;i++) if(list[i]===pending||list[i]._textKey===key){ present=true; break; }
+      if(!present) list.push(pending);
+    }
+    return list;
+  }
+  function beginRowWrite(ref){
+    var rowKey=textRowKey(ref); ROW_ACTIVE_WRITES[rowKey]=(ROW_ACTIVE_WRITES[rowKey]||0)+1; return rowKey;
+  }
+  function endRowWrite(ref){
+    var rowKey=textRowKey(ref);
+    if(ROW_ACTIVE_WRITES[rowKey]>1) ROW_ACTIVE_WRITES[rowKey]--;
+    else delete ROW_ACTIVE_WRITES[rowKey];
+    trySendDelete(rowKey);
+  }
+  function enqueueRowWrite(ref,start){
+    var rowKey=textRowKey(ref), q=ROW_WRITE_FIFOS[rowKey]||(ROW_WRITE_FIFOS[rowKey]={active:false,items:[]});
+    q.items.push({start:start,cancel:arguments.length>2?arguments[2]:null});
+    function pump(){
+      if(q.active||!q.items.length) return;
+      var current=textTxn(rowKey); if(current&&current._pendingAdd) return;
+      q.active=true; beginRowWrite(rowKey);
+      q.items.shift().start(function(){ q.active=false; pump(); endRowWrite(rowKey); },rowKey);
+    }
+    q.pump=pump;
+    pump();
+  }
+  function resumeRowWrites(ref){
+    var q=ROW_WRITE_FIFOS[textRowKey(ref)]; if(q&&q.pump) q.pump();
+  }
+  function cancelRowWrites(ref){
+    var rowKey=textRowKey(ref), q=ROW_WRITE_FIFOS[rowKey]; if(!q||q.active) return;
+    while(q.items.length){ var item=q.items.shift(); if(item.cancel) item.cancel(); }
+    delete ROW_WRITE_FIFOS[rowKey];
+  }
+  function textDraft(id,field){ return TEXT_DRAFTS[draftKey(id,field)]||null; }
+  function draftValue(t,field){ var d=t&&textDraft(t._textKey||t.id,field); return d?d.value:((t&&t[field])||''); }
+  function textWriteQueue(id,field){
+    var key=draftKey(id,field);
+    if(!TEXT_WRITE_QUEUES[key]) TEXT_WRITE_QUEUES[key]={active:null,pending:null};
+    return TEXT_WRITE_QUEUES[key];
+  }
+  function textInputMatches(id,field){
+    if(typeof document==='undefined'||!document.querySelectorAll) return [];
+    var rowKey=textRowKey(id), attr=field==='merchant'
+      ? '[data-emer][data-trow="'+rowKey+'"]'
+      : '[data-ef="tag"][data-trow="'+rowKey+'"]';
+    try{ return document.querySelectorAll(attr)||[]; }catch(e){ return []; }
+  }
+  function syncTextCopies(id,field,value,committed,keepValue){
+    var all=textInputMatches(id,field);
+    for(var i=0;i<all.length;i++){
+      if(committed) all[i].defaultValue=value;
+      if(!keepValue) all[i].value=value;
+    }
+  }
+  function captureDraft(id,field,value){
+    var key=draftKey(id,field), prev=TEXT_DRAFTS[key], next=String(value==null?'':value);
+    if(prev&&prev.value===next) return prev;
+    var revision=(TEXT_DRAFT_REVISIONS[key]||0)+1;
+    TEXT_DRAFT_REVISIONS[key]=revision;
+    var t=textTxn(id);
+    var d={ value:next, revision:revision, dirty:true,
+      baseValue:prev?prev.baseValue:String((t&&t[field])||'') };
+    TEXT_DRAFTS[key]=d; syncTextCopies(id,field,next,false,false); return d;
+  }
+  function nextTextRequestToken(id,field){
+    var key=draftKey(id,field), token=(TEXT_REQUEST_TOKENS[key]||0)+1;
+    TEXT_REQUEST_TOKENS[key]=token; return token;
+  }
+  function hasActiveComposition(){
+    for(var key in ACTIVE_COMPOSITIONS){
+      if(Object.prototype.hasOwnProperty.call(ACTIVE_COMPOSITIONS,key)) return true;
+    }
+    return false;
+  }
+  function beginComposition(id,field,value){
+    captureDraft(id,field,value); ACTIVE_COMPOSITIONS[draftKey(id,field)]=true;
+  }
+  function endComposition(id,field,value){
+    captureDraft(id,field,value); delete ACTIVE_COMPOSITIONS[draftKey(id,field)];
+    // Chromium may dispatch a final input event after compositionend. Flush on the next task so
+    // that event updates the app-owned draft before render() detaches the native IME node.
+    if(!hasActiveComposition()&&PENDING_REPAINT&&!COMPOSITION_FLUSH_SCHEDULED){
+      COMPOSITION_FLUSH_SCHEDULED=true;
+      setTimeout(function(){
+        COMPOSITION_FLUSH_SCHEDULED=false;
+        if(!hasActiveComposition()&&PENDING_REPAINT){ PENDING_REPAINT=false; repaint(); }
+      },0);
+    }
+  }
+  function cancelTextDraft(id,field){
+    var key=draftKey(id,field), d=TEXT_DRAFTS[key], t=textTxn(id);
+    var value=d?d.baseValue:String((t&&t[field])||'');
+    var q=textWriteQueue(id,field);
+    delete TEXT_DRAFTS[key]; q.pending=null;
+    if(q.active){
+      var revision=(TEXT_DRAFT_REVISIONS[key]||0)+1;
+      TEXT_DRAFT_REVISIONS[key]=revision;
+      q.pending={revision:revision,value:value,cancel:true};
+    }
+    TEXT_CANCEL_BLURS[key]=true;
+    setTimeout(function(){ delete TEXT_CANCEL_BLURS[key]; },0);
+    syncTextCopies(id,field,value,false,false);
+    return value;
+  }
+  function consumeTextCancel(id,field){
+    var key=draftKey(id,field);
+    return !!TEXT_CANCEL_BLURS[key];
+  }
+  function isImeKeyEvent(e){ return !!(e&&(e.isComposing||e.keyCode===229)); }
+  function handleTextKeydown(e,el,id,field){
+    if(isImeKeyEvent(e)) return;
+    if(e.key==='Enter'){ e.preventDefault(); el.blur(); }
+    else if(e.key==='Escape'){ e.preventDefault(); el.value=cancelTextDraft(id,field); el.blur(); }
+  }
   function nextMutation(){ MUTATION_SEQ++; INFLIGHT++; return MUTATION_SEQ; }
   function isStale(seq){ return seq!==MUTATION_SEQ; }
 
@@ -892,6 +1072,7 @@
       var a=el.attributes[i];
       if(String(a.name).indexOf('data-')!==0) continue;
       var v=String(a.value);
+      if((a.name==='data-emer'||a.name==='data-id')&&el.getAttribute&&el.getAttribute('data-trow')) continue;
       // A quote or a backslash inside the value would need CSS escaping. No attribute this page
       // writes contains either — ids are messageId|time|amount|last4|occurrence — so give up on
       // restoring focus rather than hand querySelector a selector that might be malformed.
@@ -927,6 +1108,7 @@
    * today, and so does one whose copy count changed under it — the first match is the fallback.
    */
   function repaint(){
+    if(hasActiveComposition()){ PENDING_REPAINT=true; return; }
     var doc=(typeof document!=='undefined')?document:null;
     var el=doc?doc.activeElement:null;
     var key=focusKey(el), sel=null;
@@ -966,25 +1148,22 @@
 
   // optimistic edit: update local state now, write back, revert on failure
   function applyEdit(id,field,value){
-    var t=txnById(id); if(!t) return;
+    if(field==='merchant'||field==='tag'){
+      captureDraft(id,field,value);
+      saveTextDraft(id,field);
+      return;
+    }
+    var t=textTxn(id); if(!t) return;
+    var rowKey=ensureTextRowKey(t); if(ROW_DELETE_INTENTS[rowKey]) return;
     var prev=t[field]; t[field]=value;
     if(field==='amount'){
       var amount=Number(value);
       if(!isFinite(amount)||amount<=0){ t[field]=prev; render(); toast('金額需大於 0', true); return; }
       t[field]=amount;
     }
-    // A title edit commits on blur, which on a touch device happens as part of the SAME tap
-    // that is heading for another control. Re-rendering here would replace the DOM before
-    // that tap lands, so 已記帳 pressed straight after typing was silently dropped. The input
-    // already shows the new text, so there is nothing to repaint — other views pick it up on
-    // the next natural render.
-    // A free-text field commits on blur, which on a touch device is part of the SAME tap that is
-    // already heading for another control; re-rendering here replaces the DOM before that tap
-    // lands, which is how 已記帳 pressed straight after typing used to be dropped before the
-    // mobile record-tap fix. The
-    // input already shows the new value, so there is nothing to repaint. Applies to every
-    // free-text field — merchant and now tag, which became an input so new projects can be typed.
-    if (field !== 'merchant' && field !== 'tag') render();
+    // Free-text fields returned above to the draft-aware path. The remaining controls own
+    // discrete values and can render their optimistic state immediately.
+    render();
     // The message belongs to the tap that caused it. It used to wait for a second round trip —
     // the same beat that produced the stray repaint — so it landed after the row had already
     // gone. After this change a successful write is silent apart from this message; only a
@@ -993,8 +1172,10 @@
     // 未分類 is a display value, not a sheet value: writing it would put the literal string into
     // 種類(手動). Clearing the category writes a blank cell, which is what 未分類 means.
     var patch={}; patch[field]=(field==='cat'&&value==='未分類')?'':value;
-    var undo={}; undo[field]=prev;
+    var undo={}; undo[field]=prev, applied=t[field];
     var seq=nextMutation();
+    enqueueRowWrite(rowKey,function(done){
+    var serverId=resolveTextRowId(rowKey);
     google.script.run
       .withSuccessHandler(function(res){
         // ONE round trip: the ack and the authoritative list arrive together, so the old
@@ -1005,17 +1186,170 @@
         // signature, so ticking 已記帳 stays this page's de facto refresh. settle() owns the
         // ordering: a snapshot a later mutation superseded is dropped AND booked for a refetch.
         if(settle(seq, res && res.txns)) repaint();
+        done();
       })
-      .withFailureHandler(function(err){ settle(seq, null); revertTxn(id, undo); toast('寫入失敗:'+((err&&err.message)||err), true); })
-      .updateTxn(id, patch, true);
+      .withFailureHandler(function(err){
+        settle(seq, null); var current=textTxn(rowKey);
+        if(current&&current[field]===applied) revertTxn(current.id, undo); else repaint();
+        if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey);
+        toast('寫入失敗:'+((err&&err.message)||err), true); done();
+      })
+      .updateTxn(serverId, patch, true);
+    },function(){ settle(seq,null); });
+  }
+
+  function normalizedTextValue(value){ return String(value==null?'':value).trim(); }
+
+  /** Issue exactly one field write. A newer blur is retained as one coalesced pending revision. */
+  function issueTextSave(id,field,revision,rawValue,isCancel){
+    var t=textTxn(id); if(!t) return;
+    var rowKey=ensureTextRowKey(t);
+    var q=textWriteQueue(id,field), value=normalizedTextValue(rawValue);
+    var token=nextTextRequestToken(id,field), prev=t[field];
+    q.active={token:token,revision:revision,rawValue:rawValue,value:value,prev:prev,cancel:!!isCancel};
+    t[field]=value;
+    var patch={}; patch[field]=value;
+    var seq=nextMutation();
+    enqueueRowWrite(rowKey,function(done){
+    google.script.run
+      .withSuccessHandler(function(res){
+        var active=q.active, current=textDraft(rowKey,field), rowIntent=ROW_COMMIT_INTENTS[rowKey];
+        if(active&&active.token===token) q.active=null;
+        if(!rowIntent){
+          if(current&&current.revision===revision){
+            delete TEXT_DRAFTS[draftKey(rowKey,field)]; syncTextCopies(rowKey,field,value,true,false);
+          } else if(!q.pending) syncTextCopies(id,field,value,true,true);
+        }
+        if(settle(seq,res&&res.txns)) repaint();
+        drainTextWrite(rowKey,field);
+        done();
+      })
+      .withFailureHandler(function(err){
+        var active=q.active, current=textDraft(rowKey,field), rowIntent=ROW_COMMIT_INTENTS[rowKey];
+        if(active&&active.token===token) q.active=null;
+        settle(seq,null);
+        if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey);
+        if(!rowIntent&&!q.pending){
+          if((current&&current.revision===revision)||isCancel){
+            var currentTxn=textTxn(rowKey), undo={}; undo[field]=prev;
+            if(currentTxn) revertTxn(currentTxn.id,undo); else repaint();
+          }
+          toast('寫入失敗:'+((err&&err.message)||err),true);
+        }
+        drainTextWrite(rowKey,field);
+        done();
+      })
+      .updateTxn(resolveTextRowId(rowKey),patch,true);
+    });
+  }
+
+  function drainTextWrite(id,field){
+    id=textRowKey(id);
+    var q=textWriteQueue(id,field); if(q.active) return;
+    if(ROW_COMMIT_INTENTS[id]){ trySendRowCommit(id); return; }
+    var pending=q.pending;
+    // A delete intent blocks new edits, but revisions already queued before confirmation must
+    // still reach the sheet first so Deleted preserves the last value the owner entered.
+    if(ROW_DELETE_INTENTS[id]&&!pending) return;
+    q.pending=null;
+    if(!pending) return;
+    if(pending.cancel){ issueTextSave(id,field,pending.revision,pending.value,true); return; }
+    var current=textDraft(id,field);
+    if(current&&current.revision>=pending.revision) issueTextSave(id,field,current.revision,current.value);
+  }
+
+  /** Save one free-text draft, serialising all requests for this logical field. */
+  function saveTextDraft(id,field){
+    id=textRowKey(id);
+    var d=textDraft(id,field); if(!d||!d.dirty) return;
+    var q=textWriteQueue(id,field);
+    if(ROW_DELETE_INTENTS[id]) return;
+    var t=textTxn(id);
+    if(t&&t._pendingAdd){ q.pending={revision:d.revision,value:d.value}; return; }
+    var intent=ROW_COMMIT_INTENTS[id];
+    if(intent){
+      var included=null;
+      for(var i=0;i<intent.saved.length;i++) if(intent.saved[i].field===field){ included=intent.saved[i]; break; }
+      if(!included||d.revision>included.revision) q.pending={revision:d.revision,value:d.value};
+      return;
+    }
+    if(q.active){ q.pending={revision:d.revision,value:d.value}; return; }
+    issueTextSave(id,field,d.revision,d.value);
+  }
+
+  /** Send a queued Record only after older per-field writes have completed on the server. */
+  function trySendRowCommit(id){
+    id=textRowKey(id);
+    var intent=ROW_COMMIT_INTENTS[id]; if(!intent||intent.sent||intent.queued) return;
+    var t=textTxn(id); if(t&&t._pendingAdd) return;
+    for(var i=0;i<intent.saved.length;i++){
+      if(textWriteQueue(id,intent.saved[i].field).active) return;
+    }
+    intent.queued=true;
+    intent.saved.forEach(function(s){
+      var q=textWriteQueue(id,s.field);
+      s.token=nextTextRequestToken(id,s.field);
+      q.active={token:s.token,revision:s.revision,rawValue:s.rawValue,value:s.value,record:true};
+    });
+    var seq=nextMutation();
+    enqueueRowWrite(id,function(done){
+    intent.sent=true;
+    google.script.run
+      .withSuccessHandler(function(res){
+        intent.saved.forEach(function(s){
+          var q=textWriteQueue(id,s.field), current=textDraft(id,s.field);
+          if(q.active&&q.active.token===s.token) q.active=null;
+          if(current&&current.revision===s.revision){
+            delete TEXT_DRAFTS[draftKey(id,s.field)]; syncTextCopies(id,s.field,s.value,true,false);
+          }
+        });
+        delete ROW_COMMIT_INTENTS[id];
+        if(settle(seq,res&&res.txns)) repaint();
+        ['merchant','tag'].forEach(function(field){ drainTextWrite(id,field); });
+        done();
+      })
+      .withFailureHandler(function(err){
+        intent.saved.forEach(function(s){
+          var q=textWriteQueue(id,s.field); if(q.active&&q.active.token===s.token) q.active=null;
+        });
+        delete ROW_COMMIT_INTENTS[id];
+        settle(seq,null);
+        if(ROW_DELETE_INTENTS[id]) cancelDeleteIntent(id);
+        var currentTxn=textTxn(id); if(currentTxn) revertTxn(currentTxn.id,intent.undo); else repaint();
+        toast('寫入失敗:'+((err&&err.message)||err),true);
+        ['merchant','tag'].forEach(function(field){ drainTextWrite(id,field); });
+        done();
+      })
+      .updateTxn(resolveTextRowId(id),intent.patch,true);
+    });
+  }
+
+  /** Record a row and any dirty text as one authoritative patch. */
+  function commitRow(id,posted){
+    var t=textTxn(id); if(!t) return;
+    id=ensureTextRowKey(t); if(ROW_COMMIT_INTENTS[id]||ROW_DELETE_INTENTS[id]) return;
+    var intent={patch:{posted:posted},undo:{posted:t.posted},saved:[],sent:false};
+    ['merchant','tag'].forEach(function(field){
+      var d=textDraft(id,field); if(!d||!d.dirty) return;
+      var value=normalizedTextValue(d.value), q=textWriteQueue(id,field);
+      q.pending=null;
+      intent.patch[field]=value; intent.undo[field]=t[field]; t[field]=value;
+      intent.saved.push({field:field,revision:d.revision,rawValue:d.value,value:value});
+    });
+    ROW_COMMIT_INTENTS[id]=intent; t.posted=posted; render();
+    toast(posted?'已記帳 · 從清單移除':'已取回待記帳');
+    trySendRowCommit(id);
   }
   // ---------- manual add / delete ----------
   function isManual(t){ return !!(t && t.id && String(t.id).indexOf('manual-')===0); }
-  function delBtn(t){ return '<button class="txdel" data-del="'+esc(t.id)+'" title="刪除">🗑</button>'; }
-  var pendingDelId=null, delBusy=false;
+  function delBtn(t){
+    var rowKey=(typeof ensureTextRowKey==='function')?ensureTextRowKey(t):String(t.id);
+    return '<button class="txdel" data-del="'+esc(t.id)+'" data-trow="'+esc(rowKey)+'" title="刪除">🗑</button>';
+  }
+  var pendingDelId=null, pendingDelRowKey=null, delBusy=false;
   function openDelModal(id){
-    var t=txnById(id); if(!t) return;
-    pendingDelId=id;
+    var t=textTxn(id); if(!t) return;
+    pendingDelId=id; pendingDelRowKey=ensureTextRowKey(t);
     document.getElementById('d-mer').textContent=t.merchant||'(無說明)';
     document.getElementById('d-amt').textContent=(t.type==='收入'?'+':'')+'$'+fmt(t.amount);
     document.getElementById('d-date').textContent=t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2);
@@ -1023,29 +1357,44 @@
     document.getElementById('delOverlay').classList.add('on');
   }
   function closeDelModal(){
-    pendingDelId=null;
+    pendingDelId=null; pendingDelRowKey=null;
     var ov=document.getElementById('delOverlay'); if(ov) ov.classList.remove('on');
   }
   function deleteTxnRow(id){ openDelModal(id); }
   function confirmDelete(){
-    var id=pendingDelId; if(!id || delBusy) return;
-    pendingDelId=null;
+    var rowKey=pendingDelRowKey; if(!rowKey || delBusy) return;
+    pendingDelId=null; pendingDelRowKey=null;
     delBusy=true;
     var ok=document.getElementById('d-ok'); if(ok) ok.disabled=true;
+    ROW_DELETE_INTENTS[rowKey]={sent:false,button:ok};
+    trySendDelete(rowKey);
+  }
+  function cancelDeleteIntent(rowKey){
+    rowKey=textRowKey(rowKey);
+    var intent=ROW_DELETE_INTENTS[rowKey]; delete ROW_DELETE_INTENTS[rowKey];
+    delBusy=false; if(intent&&intent.button) intent.button.disabled=false; closeDelModal();
+  }
+  function trySendDelete(rowKey){
+    rowKey=textRowKey(rowKey);
+    var intent=ROW_DELETE_INTENTS[rowKey]; if(!intent||intent.sent) return;
+    var t=textTxn(rowKey);
+    if(!t||t._pendingAdd||ROW_ACTIVE_WRITES[rowKey]||ROW_COMMIT_INTENTS[rowKey]) return;
+    intent.sent=true; var serverId=resolveTextRowId(rowKey);
     var delSeq=nextMutation();
     google.script.run
       .withSuccessHandler(function(res){
         delBusy=false;
+        delete ROW_DELETE_INTENTS[rowKey]; TEXT_REMOVED_ROW_KEYS[rowKey]=true;
         settle(delSeq, res && res.txns);
-        closeDelModal(); render(); toast('已刪除');
+        closeDelModal(); repaint(); toast('已刪除');
       })
       .withFailureHandler(function(err){
-        delBusy=false; if(ok) ok.disabled=false;
+        delBusy=false; delete ROW_DELETE_INTENTS[rowKey]; if(intent.button) intent.button.disabled=false;
         settle(delSeq, null);
-        pendingDelId=id;
+        var current=textTxn(rowKey); pendingDelId=current?current.id:null; pendingDelRowKey=current?rowKey:null;
         toast('刪除失敗:'+((err&&err.message)||err), true);
       })
-      .deleteTxn({ id: id });
+      .deleteTxn({ id: serverId });
   }
   function openAddModal(date){
     var ov=document.getElementById('addOverlay'); if(!ov) return;
@@ -1120,13 +1469,14 @@
     var navBefore=contextual?{ scope:state.scope, selYear:state.selYear, selMonth:state.selMonth, openHeatDay:openHeatDay }:null;
     // hm on the optimistic row too, or a 19:40 entry appears first in its day and then jumps
     // into place the moment the server's row lands.
-    var temp={ y:+p[0], m:+p[1], d:+p[2], hm:time, type:fields.type, amount:amt, cat:fields.cat||'未分類', merchant:fields.merchant, tag:fields.tag, bank:fields.source, last4:'', link:'', id:'manual-temp-'+(TXNS.length+1), posted:true };
+    var temp={ y:+p[0], m:+p[1], d:+p[2], hm:time, type:fields.type, amount:amt, cat:fields.cat||'未分類', merchant:fields.merchant, tag:fields.tag, bank:fields.source, last4:'', link:'', id:'manual-temp-'+(TXNS.length+1), posted:true, _pendingAdd:true };
     // A manual add is a local mutation too, and it adopts no list of its own — so it settles
     // through settle(), which is what makes an edit response it superseded get refetched.
     if(contextual){
       state.scope=p[0]+'-'+('0'+(+p[1])).slice(-2); state.selYear=+p[0]; state.selMonth=+p[1];
       openHeatDay=(+p[0])+'-'+(+p[1])+'-'+(+p[2]);
     }
+    var tempTextRow=ensureTextRowKey(temp); PENDING_ADD_ROWS[tempTextRow]=temp;
     TXNS.push(temp); closeAddModal(); render();
     var addSeq=nextMutation();
     // The success handler adopts the server's hm as well as its id: the server decides what
@@ -1134,7 +1484,17 @@
     // identical to what the next reload will show, without restating that rule here.
     google.script.run
       .withSuccessHandler(function(nt){
-        if(nt&&nt.id) temp.id=String(nt.id);
+        var finalId=nt&&nt.id?String(nt.id):'', finalRowId=nt&&nt.rowId?String(nt.rowId):'';
+        var existing=finalRowId?textTxn(finalRowId):(finalId?txnById(finalId):null);
+        if(existing&&existing!==temp){
+          existing._textKey=tempTextRow; existing._pendingAdd=true;
+          var tempIndex=TXNS.indexOf(temp); if(tempIndex>=0) TXNS.splice(tempIndex,1);
+          temp=existing;
+        } else if(TXNS.indexOf(temp)<0) TXNS.push(temp);
+        if(finalId) temp.id=finalId;
+        if(finalRowId) temp.rowId=finalRowId;
+        temp._pendingAdd=false;
+        delete PENDING_ADD_ROWS[tempTextRow];
         if(nt){
           temp.hm=(nt.hm==null)?'':String(nt.hm);
           if(nt.y!=null) temp.y=+nt.y; if(nt.m!=null) temp.m=+nt.m; if(nt.d!=null) temp.d=+nt.d;
@@ -1143,12 +1503,19 @@
           state.scope=temp.y+'-'+('0'+temp.m).slice(-2); state.selYear=temp.y; state.selMonth=temp.m;
           openHeatDay=temp.y+'-'+temp.m+'-'+temp.d;
         }
-        settle(addSeq, null); toast('已新增 · 已記帳 ✓'); render();
+        resumeRowWrites(tempTextRow);
+        ['merchant','tag'].forEach(function(field){ drainTextWrite(tempTextRow,field); });
+        trySendDelete(tempTextRow);
+        settle(addSeq, null); toast('已新增 · 已記帳 ✓'); repaint();
       })
       .withFailureHandler(function(err){
         var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1);
+        delete PENDING_ADD_ROWS[tempTextRow];
+        if(ROW_DELETE_INTENTS[tempTextRow]) cancelDeleteIntent(tempTextRow);
+        cancelRowWrites(tempTextRow);
+        dropTextRowState(ensureTextRowKey(temp));
         if(contextual){ state.scope=navBefore.scope; state.selYear=navBefore.selYear; state.selMonth=navBefore.selMonth; openHeatDay=navBefore.openHeatDay; }
-        settle(addSeq, null); render(); toast('新增失敗:'+((err&&err.message)||err), true);
+        settle(addSeq, null); repaint(); toast('新增失敗:'+((err&&err.message)||err), true);
       })
       .addTxn(fields);
   }
@@ -1163,11 +1530,12 @@
    */
   function splitBox(t){
     var chg=chargedOf(t);
+    var rowKey=ensureTextRowKey(t);
     return '<div class="split">'
       +'<span class="slb">這筆有多少是我自己的？</span>'
-      +'<input class="sin num" type="number" inputmode="decimal" min="0" step="1" value="'+(isSplitTxn(t)?t.mine:'')+'" placeholder="'+fmt(chg)+'" data-sin="'+esc(t.id)+'" aria-label="這筆有多少是我自己的">'
+      +'<input class="sin num" type="number" inputmode="decimal" min="0" step="1" value="'+(isSplitTxn(t)?t.mine:'')+'" placeholder="'+fmt(chg)+'" data-sin="'+esc(t.id)+'" data-trow="'+esc(rowKey)+'" aria-label="這筆有多少是我自己的">'
       +'<span class="shint num">刷卡 '+fmt(chg)+'</span>'
-      +'<button type="button" class="sbtn ok" data-sok="'+esc(t.id)+'">確定</button>'
+      +'<button type="button" class="sbtn ok" data-sok="'+esc(t.id)+'" data-trow="'+esc(rowKey)+'">確定</button>'
       +'<button type="button" class="sbtn" data-scancel="1">取消</button>'
       +'<span class="snote" data-snote="'+esc(t.id)+'" hidden></span>'
       +'</div>';
@@ -1182,7 +1550,8 @@
    * "all of it was mine" is what a blank cell already means.
    */
   function applySplit(id, raw){
-    var t=txnById(id); if(!t) return;
+    var t=textTxn(id); if(!t) return;
+    var rowKey=ensureTextRowKey(t); if(ROW_DELETE_INTENTS[rowKey]) return;
     var chg=chargedOf(t), prevMine=t.mine, prevAmt=t.amount;
     var v = (raw==='') ? null : Number(raw);
     if(v!==null && (!isFinite(v)||v<0)){ toast('請填 0 以上的數字', true); return; }
@@ -1193,15 +1562,24 @@
     // flight from adopting a list that predates it, and settling through settle() is what makes
     // that dropped list come back as a refetch instead of stranding the page on a stale row id.
     var seq=nextMutation();
+    enqueueRowWrite(rowKey,function(done){
+    var serverId=resolveTextRowId(rowKey);
     google.script.run
       .withSuccessHandler(function(){
         settle(seq, null);
         if(v==null) toast('整筆都是你的 · $'+fmt(chg));
         else if(v>chg) toast('這筆你消費 $'+fmt(v)+'，比刷卡 $'+fmt(chg)+' 多 — 有人先幫你墊了 $'+fmt(v-chg));
         else toast('這筆算你 $'+fmt(v)+'，代墊 $'+fmt(chg-v)+' 不計入統計');
+        done();
       })
-      .withFailureHandler(function(err){ settle(seq, null); revertTxn(id, { mine:prevMine, amount:prevAmt }); toast('寫入失敗:'+((err&&err.message)||err), true); })
-      .updateTxn(id, { mine: (v==null?'':v) });
+      .withFailureHandler(function(err){
+        settle(seq, null); var current=textTxn(rowKey);
+        if(current) revertTxn(current.id, { mine:prevMine, amount:prevAmt }); else repaint();
+        if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey);
+        toast('寫入失敗:'+((err&&err.message)||err), true); done();
+      })
+      .updateTxn(serverId, { mine: (v==null?'':v) });
+    },function(){ settle(seq,null); });
   }
 
   // Gmail permalink for auto-recorded rows. Empty link (manual rows) returns nothing — no
@@ -1225,10 +1603,18 @@
   }
   function editRow(t){
     function canCorrectAmount(row){ return !!(row && ['支出','轉帳'].indexOf(row.type)!==-1); }
+    // Keep editRow() extractable for the small offline fixtures that render it in isolation.
+    // In the real panel TEXT_DRAFTS exists; an isolated fixture intentionally has no drafts.
+    var textRow=(typeof ensureTextRowKey==='function')?ensureTextRowKey(t):String(t.id);
+    function currentText(field){
+      var drafts=(typeof TEXT_DRAFTS==='undefined')?{}:TEXT_DRAFTS;
+      var d=drafts[String(textRow)+'\u001f'+field];
+      return d?d.value:(t[field]||'');
+    }
     var tc=typeColor(t.type);
     var compactAmount=(t.type==='轉帳')
       ? '<span class="amt num" style="color:'+tc+'">$'+fmt(t.amount)+'</span>'
-      : '<button type="button" class="amt amtbtn num" data-amt="'+esc(t.id)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button>';
+      : '<button type="button" class="amt amtbtn num" data-amt="'+esc(textRow)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button>';
     return '<div class="erow'+(t.posted?' done':'')+'" data-erow="'+esc(t.id)+'">'
       // The expense amount IS the split control. ~5 of ~100 rows a month are split, so a permanent
       // input would ask a question whose answer is "no" 95% of the time; an unsplit row must
@@ -1238,18 +1624,18 @@
       // a day that holds more than one. Rendered only when the row actually has a time, so the
       // pre-June rows look exactly as they do today. Shown to the minute: 富邦 gives seconds and
       // 國泰 does not, so seconds would advertise a precision most timed rows do not have.
-      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" value="'+esc(t.merchant)+'" placeholder="(無說明)" spellcheck="false">'+mailLink(t)+compactAmount+'</div>'
-      +(t.type==='支出' && openSplit===t.id ? splitBox(t) : '')
+      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" value="'+esc(currentText('merchant'))+'" placeholder="(無說明)" spellcheck="false">'+mailLink(t)+compactAmount+'</div>'
+      +(t.type==='支出' && openSplit===textRow ? splitBox(t) : '')
       +'<div class="er2">'
-        +(canCorrectAmount(t)?'<div class="fld"><span class="lb">金額</span><input class="amtcor num" type="number" inputmode="decimal" min="0.01" step="0.01" data-ef="amount" data-id="'+esc(t.id)+'" value="'+esc(t.amount)+'" aria-label="金額"></div>':'')
-        +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
-        +'<div class="fld"><span class="lb">收支</span><select data-ef="type" data-id="'+esc(t.id)+'" style="color:'+tc+'">'+selOpts(['支出','收入','轉帳'],t.type)+'</select></div>'
+        +(canCorrectAmount(t)?'<div class="fld"><span class="lb">金額</span><input class="amtcor num" type="number" inputmode="decimal" min="0.01" step="0.01" data-ef="amount" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" value="'+esc(t.amount)+'" aria-label="金額"></div>':'')
+        +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
+        +'<div class="fld"><span class="lb">收支</span><select data-ef="type" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" style="color:'+tc+'">'+selOpts(['支出','收入','轉帳'],t.type)+'</select></div>'
         // TAG is a type-or-pick field, not a closed list: a project only exists once a
         // transaction carries it, so if the picker can only offer values already in the sheet
         // there is no way to start a new one from the web at all. 類別 stays a closed <select>
         // on purpose — that taxonomy was just cleaned up and should not fragment.
-        +'<div class="fld"><span class="lb">TAG</span><input class="tagin" list="taglist" data-ef="tag" data-id="'+esc(t.id)+'" value="'+esc(t.tag)+'" placeholder="（無）· 可直接打新專案" spellcheck="false"></div>'
-        +'<button class="erec" data-erec="'+esc(t.id)+'">'+(t.posted?'↩ 取消記帳':'✓ 記帳')+'</button>'+delBtn(t)
+        +'<div class="fld"><span class="lb">TAG</span><input class="tagin" list="taglist" data-ef="tag" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" value="'+esc(currentText('tag'))+'" placeholder="（無）· 可直接打新專案" spellcheck="false"></div>'
+        +'<button class="erec" data-erec="'+esc(t.id)+'" data-trow="'+esc(textRow)+'">'+(t.posted?'↩ 取消記帳':'✓ 記帳')+'</button>'+delBtn(t)
       +'</div></div>';
   }
   /**
@@ -1305,14 +1691,14 @@
   // Mark a whole day recorded. Writes are sequential, not parallel: Apps Script serializes
   // sheet writes anyway, and one at a time means a mid-way failure reverts exactly one row.
   function bulkPost(ids){
-    var todo = ids.filter(function(id){ var t=txnById(id); return t && !t.posted; });
+    var todo = ids.map(function(id){ var t=txnById(id); return t&&!t.posted?ensureTextRowKey(t):null; }).filter(Boolean);
     if(!todo.length) return;
-    todo.forEach(function(id){ var t=txnById(id); t.posted=true; });
+    todo.forEach(function(rowKey){ var t=textTxn(rowKey); t.posted=true; });
     render();
     var failed = 0;
     (function step(i){
       if(i >= todo.length){
-        if(failed) { render(); toast('完成 '+(todo.length-failed)+'/'+todo.length+' · '+failed+' 筆寫入失敗', true); }
+        if(failed) { repaint(); toast('完成 '+(todo.length-failed)+'/'+todo.length+' · '+failed+' 筆寫入失敗', true); }
         else toast('已記帳 '+todo.length+' 筆');
         return;
       }
@@ -1321,11 +1707,16 @@
       // cannot be adopted on top of the rows it just marked — and settling each row through
       // settle() is what turns that dropped list into one refetch rather than a stale row id.
       // Nothing is refetched on the ordinary run: the debt only exists after a real drop.
+      var rowKey=todo[i], current=textTxn(rowKey);
+      if(!current||ROW_DELETE_INTENTS[rowKey]){ step(i+1); return; }
       var seq=nextMutation();
+      enqueueRowWrite(rowKey,function(done){
+      var serverId=resolveTextRowId(rowKey);
       google.script.run
-        .withSuccessHandler(function(){ settle(seq, null); step(i+1); })
-        .withFailureHandler(function(){ settle(seq, null); var t=txnById(todo[i]); if(t) t.posted=false; failed++; step(i+1); })
-        .updateTxn(todo[i], { posted:true });
+        .withSuccessHandler(function(){ settle(seq, null); done(); step(i+1); })
+        .withFailureHandler(function(){ settle(seq, null); var t=textTxn(rowKey); if(t) t.posted=false; if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey); failed++; done(); step(i+1); })
+        .updateTxn(serverId, { posted:true });
+      });
     })(0);
   }
 
@@ -1505,14 +1896,26 @@
     app.querySelectorAll('.cell[data-hday]').forEach(function(c){ c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); }; });
     app.querySelectorAll('[data-hadd]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); openAddModal(this.getAttribute('data-hadd')); }; });
     app.querySelectorAll('[data-ef]').forEach(function(el){
-      el.onchange=function(e){ e.stopPropagation(); applyEdit(this.getAttribute('data-id'), this.getAttribute('data-ef'), this.value.trim()); };
-      if(el.tagName==='INPUT'){ el.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } }; }
+      var field=el.getAttribute('data-ef'), id=el.getAttribute('data-trow')||el.getAttribute('data-id');
+      if(field==='tag'){
+        el.oninput=function(e){ e.stopPropagation(); captureDraft(id,field,this.value); };
+        el.oncompositionstart=function(e){ e.stopPropagation(); beginComposition(id,field,this.value); };
+        el.oncompositionend=function(e){ e.stopPropagation(); endComposition(id,field,this.value); };
+      }
+      el.onchange=function(e){ e.stopPropagation(); if(field==='tag'&&consumeTextCancel(id,field)) return; applyEdit(id,field,this.value); };
+      if(field==='tag') el.onblur=function(){ if(consumeTextCancel(id,field)) return; saveTextDraft(id,field); };
+      if(el.tagName==='INPUT'){ el.onkeydown=function(e){ handleTextKeydown(e,this,id,field); }; }
     });
     app.querySelectorAll('[data-emer]').forEach(function(i){
-      i.onchange=function(e){ e.stopPropagation(); applyEdit(this.getAttribute('data-emer'),'merchant',this.value.trim()); };
-      i.onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); this.blur(); } else if(e.key==='Escape'){ this.value=this.defaultValue; this.blur(); } };
+      var id=i.getAttribute('data-trow')||i.getAttribute('data-emer');
+      i.oninput=function(e){ e.stopPropagation(); captureDraft(id,'merchant',this.value); };
+      i.oncompositionstart=function(e){ e.stopPropagation(); beginComposition(id,'merchant',this.value); };
+      i.oncompositionend=function(e){ e.stopPropagation(); endComposition(id,'merchant',this.value); };
+      i.onchange=function(e){ e.stopPropagation(); if(consumeTextCancel(id,'merchant')) return; applyEdit(id,'merchant',this.value); };
+      i.onblur=function(){ if(consumeTextCancel(id,'merchant')) return; saveTextDraft(id,'merchant'); };
+      i.onkeydown=function(e){ handleTextKeydown(e,this,id,'merchant'); };
     });
-    app.querySelectorAll('[data-erec]').forEach(function(b){ b.onclick=function(){ var id=this.getAttribute('data-erec'); var t=txnById(id); if(t) applyEdit(id,'posted',!t.posted); }; });
+    app.querySelectorAll('[data-erec]').forEach(function(b){ b.onclick=function(){ var id=this.getAttribute('data-trow')||this.getAttribute('data-erec'); var t=textTxn(id); if(t) commitRow(id,!t.posted); }; });
     // 我的消費: tapping the amount toggles the split editor open. Commit is Enter or 確定 only —
     // never blur, which on touch is part of the same tap heading for another control.
     // Only ONE split box is ever open (openSplit is a single id), so every lookup below is a
@@ -1526,19 +1929,19 @@
     app.querySelectorAll('[data-sok]').forEach(function(b){ b.onclick=function(e){
       e.stopPropagation();
       var box=this.parentNode, inp=box?box.querySelector('.sin'):null;
-      applySplit(this.getAttribute('data-sok'), inp?inp.value.trim():'');
+      applySplit(this.getAttribute('data-trow')||this.getAttribute('data-sok'), inp?inp.value.trim():'');
     }; });
     app.querySelectorAll('[data-scancel]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); openSplit=null; render(); }; });
     app.querySelectorAll('[data-sin]').forEach(function(inp){
       inp.onclick=function(e){ e.stopPropagation(); };
       inp.onkeydown=function(e){
-        if(e.key==='Enter'){ e.preventDefault(); applySplit(this.getAttribute('data-sin'), this.value.trim()); }
+        if(e.key==='Enter'){ e.preventDefault(); applySplit(this.getAttribute('data-trow')||this.getAttribute('data-sin'), this.value.trim()); }
         else if(e.key==='Escape'){ e.preventDefault(); openSplit=null; render(); }
       };
       // Live, non-blocking note. Consuming more than the card was charged is legitimate —
       // someone else fronted part of my share — so it explains rather than blocks.
       inp.oninput=function(){
-        var t=txnById(this.getAttribute('data-sin')); if(!t) return;
+        var t=textTxn(this.getAttribute('data-trow')||this.getAttribute('data-sin')); if(!t) return;
         var note=this.parentNode?this.parentNode.querySelector('.snote'):null; if(!note) return;
         var chg=chargedOf(t), v=Number(this.value.trim());
         if(this.value.trim()!=='' && isFinite(v) && v>chg){
@@ -1548,7 +1951,7 @@
     });
     var addB=app.querySelector('[data-add]'); if(addB) addB.onclick=function(){ openAddModal(null); };
     var settingsB=app.querySelector('[data-settings]'); if(settingsB) settingsB.onclick=openSettingsModal;
-    app.querySelectorAll('[data-del]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); deleteTxnRow(this.getAttribute('data-del')); }; });
+    app.querySelectorAll('[data-del]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); deleteTxnRow(this.getAttribute('data-trow')||this.getAttribute('data-del')); }; });
     app.querySelectorAll('.ctl[data-pscope]').forEach(function(b){ b.onclick=function(){ state.projScope=this.getAttribute('data-pscope'); openProj=null; render(); }; });
     app.querySelectorAll('.ctl[data-iscope]').forEach(function(b){ b.onclick=function(){ state.inboxScope=this.getAttribute('data-iscope'); render(); }; });
     var ibd=app.querySelector('[data-inboxdone]'); if(ibd) ibd.onclick=function(){ state.inboxDone=!state.inboxDone; render(); };
@@ -1577,7 +1980,7 @@
    *  write whose result matches the optimistic prediction repaints nothing. */
   function adoptTxns(data){
     var before=txnsSignature(TXNS);
-    TXNS = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount;
+    var next = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount;
       // charged/mine arrive from the server; default them so a page served before the
       // matching server version simply behaves as it did — every row "all mine".
       t.charged = (t.charged==null) ? t.amount : +t.charged;
@@ -1586,7 +1989,8 @@
       // equal, so the amount tiebreak alone decides — which is exactly what this page did
       // before times existed. No blank badge, no undefined on screen, no NaN in the comparator.
       t.hm = (t.hm==null) ? '' : String(t.hm);
-      t.posted = (t.posted===true); t.id = String(t.id||''); return t; });
+      t.posted = (t.posted===true); t.id = String(t.id||''); t.rowId=String(t.rowId||''); return t; });
+    preservePendingAddRows(next); reconcileTextRowIds(TXNS,next); TXNS=next;
     return txnsSignature(TXNS)!==before;
   }
   function boot(){

@@ -16,7 +16,7 @@ const CFG = {
   SPREADSHEET_ID: 'fixture-sheet', DATA_SHEET: 'Transactions', DELETED_SHEET: 'Deleted',
   TZ: 'Asia/Taipei', IDX_POSTED: 0, IDX_BANK: 1, IDX_DATE: 2, IDX_LAST4: 3,
   IDX_AMOUNT: 4, IDX_MERCHANT: 5, IDX_CATEGORY_AUTO: 6, IDX_LINK: 7,
-  IDX_MESSAGEID: 8, IDX_INOUT: 9, IDX_CATEGORY_MANUAL: 10, HDR_MINE: '我的消費'
+  IDX_MESSAGEID: 8, IDX_INOUT: 9, IDX_CATEGORY_MANUAL: 10, HDR_MINE: '我的消費', HDR_ROW_ID: '交易 ID'
 };
 
 // Keep the rolling seven-day importer deterministic. Using the host clock makes this fixture
@@ -59,7 +59,10 @@ class Range {
   }
   setValue(value) { return this.setValues([[value]]); }
   setNumberFormat() { return this; }
-  setDataValidation() { return this; }
+  setDataValidation() {
+    if (this.sheet.failDataValidation) throw new Error('fixture validation failure');
+    return this;
+  }
   sort(specs) {
     const body = this.sheet.rows.splice(this.row - 1, this.numRows);
     body.sort((a, b) => {
@@ -127,6 +130,7 @@ function loadBot(spreadsheet, threads) {
     SPREADSHEET_ID: 'fixture-sheet', SORT_ORDER: 'NONE', TZ: 'Asia/Taipei',
     FUBON_TRANSFER_QUERY: 'fixture-fubon-transfer'
   };
+  let uuidSeq = 0;
   const sandbox = {
     console: { log: () => {} }, Logger: { log: () => {} }, Date: FixtureDate,
     CFG, Set, Map,
@@ -134,6 +138,7 @@ function loadBot(spreadsheet, threads) {
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {}, waitLock: () => true }) },
     SpreadsheetApp: {
       openById: () => spreadsheet,
+      flush: () => {},
       newDataValidation: () => ({ requireCheckbox() { return this; }, build: () => ({}) })
     },
     GmailApp: {
@@ -143,20 +148,27 @@ function loadBot(spreadsheet, threads) {
         return [];
       }
     },
-    Utilities: { formatDate: (date, tz, fmt) => formatDate(date, fmt) },
+    Utilities: {
+      formatDate: (date, tz, fmt) => formatDate(date, fmt),
+      getUuid: () => 'import-uuid-' + (++uuidSeq)
+    },
     UrlFetchApp: { fetch: () => { throw new Error('Gemini must not run in this fixture'); } }
   };
   vm.createContext(sandbox);
+  const serverSource = fs.readFileSync(SERVER, 'utf8');
+  vm.runInContext(['isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_']
+    .map(name => extractFunction(serverSource, name)).join('\n'), sandbox);
   vm.runInContext(fs.readFileSync(BOT, 'utf8'), sandbox, { filename: BOT });
   return sandbox;
 }
 
 function loadServer(spreadsheet) {
   const source = fs.readFileSync(SERVER, 'utf8');
+  let uuidSeq = 0;
   const names = [
-    'txnKey_', 'asTxnKey_', 'isDisplayedTxn_', 'findRowByKey_', 'getAllTxns',
+    'txnKey_', 'asTxnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_', 'findRowByKey_', 'getAllTxns',
     'isAmountCorrectionType_', 'updateTxn', 'addTxn', 'getOrCreateDeleted_', 'deleteTxn',
-    'sheetHasBaseKey_', 'getSpreadsheet_', 'rowCategory_', 'cellDateTime_', 'rowHM_',
+    'sheetHasRowId_', 'sheetHasBaseKey_', 'getSpreadsheet_', 'rowCategory_', 'cellDateTime_', 'rowHM_',
     'lastDataRow_', 'insertPositionForDate_', 'getTagColIndex_', 'getMineColIndex_',
     'headerRow_', 'ensureMineColIndex_', 'rowMine_'
   ];
@@ -169,7 +181,7 @@ function loadServer(spreadsheet) {
     LockService: { getScriptLock: () => ({ waitLock: () => true, releaseLock: () => {} }) },
     Utilities: {
       formatDate: (date, tz, fmt) => formatDate(date, fmt),
-      getUuid: () => 'fixture-manual-id'
+      getUuid: () => 'fixture-uuid-' + (++uuidSeq)
     }
   };
   vm.createContext(sandbox);
@@ -231,14 +243,19 @@ function run() {
   assert.strictEqual(cathayRow[10], '', 'Cathay transfer bypasses automatic manual categorization');
   assert.strictEqual(fubonRow[10], '', 'Fubon transfer bypasses automatic manual categorization');
   assert.ok(!transactions.rows.some(row => row[8] === 'fubon-transfer-init'), 'richer Fubon success notice remains preferred');
+  const importedRowIdIndex = transactions.rows[0].indexOf('交易 ID');
+  assert.ok(importedRowIdIndex >= 0, 'the importer migrates the immutable row-id column');
+  assert.ok(cathayRow[importedRowIdIndex], 'a newly imported row receives its UUID in the same locked write');
+  assert.ok(fubonRow[importedRowIdIndex], 'every imported row is immediately addressable by UUID');
 
   const server = loadServer(spreadsheet);
+  server.ensureRowIdColIndex_(transactions);
   assert.strictEqual(server.getAllTxns().find(txn => txn.id.startsWith('historical-transfer|')).type, '轉帳', 'historical transfer remains unchanged');
 
   let retained = server.getAllTxns().find(txn => txn.id.startsWith('cathay-transfer-1|'));
   assert.strictEqual(retained.type, '轉帳');
   assert.strictEqual(retained.cat, '未分類');
-  server.updateTxn(retained.id, { amount: 1500, cat: '個人' }, true);
+  server.updateTxn(retained.rowId, { amount: 1500, cat: '個人' }, true);
   retained = server.getAllTxns().find(txn => txn.id.startsWith('cathay-transfer-1|'));
   assert.strictEqual(retained.type, '轉帳', 'manual categorization never changes payment type');
   assert.strictEqual(retained.amount, 1500, 'transfer amount correction writes the raw transfer amount');
@@ -246,7 +263,7 @@ function run() {
   assert.strictEqual(retained.cat, '個人');
 
   let fubonRetained = server.getAllTxns().find(txn => txn.id.startsWith('fubon-transfer-success|'));
-  server.updateTxn(fubonRetained.id, { cat: '飲食' }, true);
+  server.updateTxn(fubonRetained.rowId, { cat: '飲食' }, true);
   fubonRetained = server.getAllTxns().find(txn => txn.id.startsWith('fubon-transfer-success|'));
 
   let dashboardTxns = server.getAllTxns();
@@ -275,7 +292,7 @@ function run() {
   assert.strictEqual(cardRows.map(txn => txn.id.split('|')[0]).join(','), 'historical-expense',
     'credit-card analysis remains restricted to actual expense rows');
 
-  server.updateTxn(retained.id, { cat: '' }, true);
+  server.updateTxn(retained.rowId, { cat: '' }, true);
   retained = server.getAllTxns().find(txn => txn.id.startsWith('cathay-transfer-1|'));
   dashboardTxns = server.getAllTxns();
   dashboard = loadFns(['isConsumption', 'inScope', 'sumScope'], { TXNS: dashboardTxns });
@@ -287,17 +304,29 @@ function run() {
 
   const manual = server.addTxn({ date: '2026-09-12', amount: 80, type: '轉帳', source: '現金', merchant: '手動轉帳' });
   assert.strictEqual(manual.type, '轉帳', 'manual creation still accepts transfer type');
-  server.updateTxn(manual.id, { type: '轉帳' });
-  assert.strictEqual(server.getAllTxns().find(txn => txn.id.startsWith('manual-fixture-manual-id|')).type, '轉帳',
+  server.updateTxn(manual.rowId, { type: '轉帳' });
+  assert.strictEqual(server.getAllTxns().find(txn => txn.id.startsWith('manual-fixture-uuid-')).type, '轉帳',
     'manual editing still accepts transfer type');
+
+  transactions.failDataValidation = true;
+  assert.throws(() => server.addTxn({
+    date: '2026-09-11', amount: 90, type: '支出', source: '現金', merchant: '不可半成功'
+  }), /fixture validation failure/);
+  transactions.failDataValidation = false;
+  assert.ok(!transactions.rows.some(row => row[5] === '不可半成功'),
+    'a pre-write formatting or validation failure cannot leave a persisted transaction behind');
 
   const deleting = server.getAllTxns().find(txn => txn.id.startsWith('fubon-transfer-success|'));
   const fubonRowNumber = transactions.rows.findIndex(row => row[8] === 'fubon-transfer-success') + 1;
   const completeFubonRow = transactions.getRange(fubonRowNumber, 1, 1, transactions.getLastColumn()).getValues()[0];
-  server.deleteTxn(deleting.id);
+  assert.throws(() => server.deleteTxn(deleting.id), /找不到該筆交易/,
+    'after UUID migration an old occurrence key fails safely instead of matching a successor');
+  server.deleteTxn(deleting.rowId);
   assert.deepStrictEqual(deleted.rows.find(row => row[8] === 'fubon-transfer-success'), completeFubonRow,
     'delete copies every source column before removing the transaction');
   assert.ok(!transactions.rows.some(row => row[8] === 'fubon-transfer-success'));
+  assert.doesNotThrow(() => server.deleteTxn(deleting.rowId),
+    'retrying the immutable UUID is idempotent and cannot delete another row');
 
   bot.appendLast7DaysToSheet();
   assert.ok(!transactions.rows.some(row => row[8] === 'fubon-transfer-success'),

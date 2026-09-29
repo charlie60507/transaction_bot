@@ -55,7 +55,7 @@ function serverFixture(type, mineValue) {
     }
   };
   const serverRow = row;
-  const sandbox = loadServerFns(['txnKey_', 'rowMine_', 'getAllTxns', 'isAmountCorrectionType_', 'updateTxn'], {
+  const sandbox = loadServerFns(['getRowIdColIndex_', 'ensureRowIdColIndex_', 'txnKey_', 'rowMine_', 'getAllTxns', 'isAmountCorrectionType_', 'updateTxn'], {
     CFG: CFG,
     getSpreadsheet_: () => ({ getSheetByName: () => sheet }),
     asTxnKey_: key => String(key),
@@ -65,6 +65,7 @@ function serverFixture(type, mineValue) {
     ensureMineColIndex_: () => { headerEnsures++; return 12; },
     rowHM_: () => '12:00',
     rowCategory_: value => String(value[CFG.IDX_CATEGORY_MANUAL] || ''),
+    LockService: { getScriptLock: () => ({ waitLock: function () {}, releaseLock: function () {} }) },
     Utilities: { formatDate: (date, tz, part) => ({ yyyy: '2026', M: '9', d: '13' })[part] },
     SpreadsheetApp: { flush: () => { flushes++; } }
   });
@@ -95,7 +96,7 @@ function run() {
   // nothing about editing. The contract is now one round trip: updateTxn returns the
   // authoritative list itself, and applyEdit never fetches it separately.
   const applyEditSrc = extractFunction(extractInlineScript(src), 'applyEdit');
-  assert.ok(/\.updateTxn\(\s*id,\s*patch,\s*true\s*\)/.test(applyEditSrc),
+  assert.ok(/\.updateTxn\(\s*serverId,\s*patch,\s*true\s*\)/.test(applyEditSrc),
     'successful edits refresh authoritative transactions in the same call that writes them');
   assert.ok(!/getAllTxns/.test(applyEditSrc),
     'the edit path does not follow a successful write with a second fetch');
@@ -109,6 +110,7 @@ function run() {
     openRow: null,
     PALETTE: ['#5f9aa0'],
     catDelta: function () { return ''; },
+    ensureTextRowKey: function (t) { return t._textKey || String(t.id); },
     splitBox: function () { return ''; },
     selOpts: function () { return ''; },
     distinctCats: function () { return ['飲食']; }
@@ -117,6 +119,11 @@ function run() {
   assert.ok(html.indexOf('data-ef="amount"') >= 0, 'row exposes amount correction');
   assert.ok(html.indexOf('value="120"') >= 0, 'amount editor carries current value');
   assert.ok(html.indexOf('data-amt="msg|date|120|1234|0"') >= 0, 'split affordance retains stable row identity');
+  const logicalHtml = fns.editRow(sample({ _textKey: 'client-row-7' }));
+  assert.ok(logicalHtml.includes('data-amt="client-row-7"'),
+    'a stale split control targets the logical row rather than a recyclable composite id');
+  assert.ok(logicalHtml.includes('data-del="msg|date|120|1234|0" data-trow="client-row-7"'),
+    'a stale delete control carries the logical row identity');
 
   const incomeHtml = fns.editRow(sample({ type: '收入' }));
   assert.strictEqual(incomeHtml.indexOf('data-ef="amount"'), -1, 'income rows do not expose expense amount correction');

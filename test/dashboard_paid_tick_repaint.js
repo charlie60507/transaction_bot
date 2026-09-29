@@ -30,7 +30,7 @@ const SERVER_FIELDS = ['id', 'y', 'm', 'd', 'hm', 'type', 'amount', 'charged', '
 
 function row(overrides) {
   return Object.assign({
-    id: 'msg-a|1000|120|1234|0', y: 2026, m: 8, d: 12, hm: '09:00', type: '支出',
+    id: 'msg-a|1000|120|1234|0', rowId: '', y: 2026, m: 8, d: 12, hm: '09:00', type: '支出',
     amount: 120, charged: 120, mine: null, cat: '飲食', merchant: '星巴克', tag: '',
     bank: '富邦', last4: '1234', link: 'https://mail/x', posted: false
   }, overrides);
@@ -88,7 +88,15 @@ function domStub(fields) {
 
 const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isStale', 'settle',
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
-  'applySplit', 'bulkPost', 'submitAdd', 'confirmDelete', 'closeDelModal', 'closeAddModal',
+  'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
+  'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
+  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'resumeRowWrites', 'cancelRowWrites',
+  'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
+  'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
+  'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
+  'isImeKeyEvent', 'handleTextKeydown', 'normalizedTextValue', 'issueTextSave', 'drainTextWrite',
+  'saveTextDraft', 'trySendRowCommit', 'commitRow', 'applySplit', 'bulkPost',
+  'submitAdd', 'openDelModal', 'confirmDelete', 'cancelDeleteIntent', 'trySendDelete', 'closeDelModal', 'closeAddModal',
   'chargedOf', 'isSplitTxn', 'fmt'];
 
 function harness(initial, opts) {
@@ -96,15 +104,21 @@ function harness(initial, opts) {
   const renders = { n: 0 };
   const toasts = [];
   const scrolls = [];
+  const timers = [];
   const rec = { calls: [], deletes: [], adds: [], reads: [] };
   const doc = opts.document || domStub(ADD_FORM);
   const fns = loadFns(PANEL_FNS, {
     TXNS: serverCopy(initial || []),
     MUTATION_SEQ: 0, INFLIGHT: 0, STALE_DROPPED: false, REFRESHING: false,
-    pendingDelId: null, delBusy: false, openSplit: null,
+    TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_WRITE_QUEUES: {},
+    TEXT_CANCEL_BLURS: {}, ROW_COMMIT_INTENTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
+    COMPOSITION_FLUSH_SCHEDULED: false, TEXT_ROW_SERIAL: 0, TEXT_REMOVED_ROW_KEYS: {},
+    PENDING_ADD_ROWS: {}, ROW_ACTIVE_WRITES: {}, ROW_DELETE_INTENTS: {}, ROW_WRITE_FIFOS: {},
+    pendingDelId: null, pendingDelRowKey: null, delBusy: false, openSplit: null,
     google: { script: { run: recordingRun(rec) } },
     render: function () { renders.n++; if (opts.onRender) opts.onRender(); },
     toast: function (msg, isErr) { toasts.push({ msg: msg, err: !!isErr }); },
+    setTimeout: function (fn) { timers.push(fn); return timers.length; },
     document: doc,
     window: {
       pageXOffset: opts.pageX || 0, pageYOffset: opts.pageY || 0,
@@ -118,6 +132,7 @@ function harness(initial, opts) {
   fns.deletes = rec.deletes;
   fns.adds = rec.adds;
   fns.reads = rec.reads;
+  fns.flushTimers = function () { while (timers.length) timers.shift()(); };
   return fns;
 }
 
@@ -156,6 +171,25 @@ function rebuildingDom(key, before, after) {
     rebuild: function () { dom.matches = after; dom.activeElement = null; }
   };
   return dom;
+}
+
+function duplicateTextDom(id, field, initial) {
+  const selector = field === 'merchant'
+    ? '[data-emer="' + id + '"]'
+    : '[data-ef="tag"][data-id="' + id + '"]';
+  const nodes = [0, 1].map(function () { return { value: initial, defaultValue: initial }; });
+  return {
+    nodes: nodes,
+    activeElement: null,
+    getElementById: function () { return null; },
+    querySelector: function () { return null; },
+    querySelectorAll: function (sel) {
+      if (sel === selector) return nodes;
+      if (field === 'merchant' && sel.indexOf('[data-emer]') >= 0) return nodes;
+      if (field === 'tag' && sel.indexOf('[data-ef="tag"]') >= 0) return nodes;
+      return [];
+    }
+  };
 }
 
 function run() {
@@ -319,6 +353,676 @@ function run() {
   assert.strictEqual(numAfter[0].focused, 1, 'focus is still restored');
   assert.deepStrictEqual(numAfter[0].ranges, [], 'no caret is written when none could be read');
 
+  // ---- IME-aware drafts: composition defers destructive repaint and flushes once ----
+  ['merchant', 'tag'].forEach(function (field) {
+    const h = harness(base);
+    const initial = field === 'merchant' ? '買晚餐' : '生活';
+    const finalValue = initial + '餐廳';
+    h.beginComposition(base[0].id, field, initial);
+    h.captureDraft(base[0].id, field, finalValue);
+    h.repaint();
+    h.repaint();
+    assert.strictEqual(h.renders.n, 0, field + ': repaint is deferred while composition is active');
+    assert.strictEqual(h.PENDING_REPAINT, true, field + ': repeated repaint requests coalesce');
+    h.endComposition(base[0].id, field, finalValue);
+    assert.strictEqual(h.renders.n, 0, field + ': compositionend does not detach the input synchronously');
+    h.flushTimers();
+    assert.strictEqual(h.renders.n, 1, field + ': the queued repaint flushes exactly once');
+    assert.strictEqual(h.draftValue(base[0], field), finalValue,
+      field + ': rebuilt copies resolve the same logical draft value');
+    assert.strictEqual(h.draftValue(Object.assign({}, base[0]), field), finalValue,
+      field + ': draft identity is transaction plus field, not a DOM-copy index');
+  });
+
+  // A trailing input after compositionend runs before the queued repaint and becomes the value
+  // rendered into every copy, rather than being lost with the detached native input.
+  const trailing = harness(base);
+  trailing.beginComposition(base[0].id, 'merchant', '買晚餐');
+  trailing.repaint();
+  trailing.endComposition(base[0].id, 'merchant', '買晚餐餐');
+  trailing.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
+  trailing.flushTimers();
+  assert.strictEqual(trailing.draftValue(base[0], 'merchant'), '買晚餐餐廳',
+    'the final post-composition input is captured before the queued repaint');
+
+  // A separate write can change the composite transaction id while Chromium still owns an IME
+  // composition. The logical draft, composition lock and next save must follow that row identity.
+  const rekeyDuringIme = harness(base);
+  const REKEYED_ID = base[0].id.replace('|120|', '|999|');
+  const LOGICAL_ROW = rekeyDuringIme.textRowKey(base[0].id);
+  rekeyDuringIme.beginComposition(LOGICAL_ROW, 'merchant', '組字');
+  rekeyDuringIme.captureDraft(LOGICAL_ROW, 'merchant', '組字完成');
+  const rekeyedRows = serverCopy(base);
+  rekeyedRows[0].amount = 999; rekeyedRows[0].id = REKEYED_ID;
+  assert.strictEqual(rekeyDuringIme.adoptTxns(rekeyedRows), true, 'the id-changing list is adopted');
+  assert.strictEqual(rekeyDuringIme.resolveTextRowId(LOGICAL_ROW), REKEYED_ID,
+    'the DOM-bound logical row resolves to the server id that replaced it');
+  assert.strictEqual(rekeyDuringIme.draftValue(rekeyDuringIme.TXNS[0], 'merchant'), '組字完成',
+    'the live draft moves to the new composite id');
+  rekeyDuringIme.repaint();
+  assert.strictEqual(rekeyDuringIme.renders.n, 0, 'the migrated composition still defers repaint');
+  rekeyDuringIme.endComposition(LOGICAL_ROW, 'merchant', '組字完成');
+  rekeyDuringIme.flushTimers();
+  assert.strictEqual(rekeyDuringIme.renders.n, 1, 'ending composition through the old DOM id flushes once');
+  rekeyDuringIme.saveTextDraft(LOGICAL_ROW, 'merchant');
+  assert.strictEqual(rekeyDuringIme.calls[0].id, REKEYED_ID,
+    'the next write uses the authoritative id rather than the detached DOM id');
+
+  // Occurrence ids can be recycled inside one duplicate group: after row 1 changes amount,
+  // row 2 may inherit row 1's old string id. Client-only keys preserve identity by sheet order.
+  const dupRows = [
+    row({ id: 'same|1000|100|1234|0', amount: 100, merchant: '第一列' }),
+    row({ id: 'same|1000|100|1234|1', amount: 100, merchant: '第二列' })
+  ];
+  const duplicateRekey = harness(dupRows);
+  const firstLogical = duplicateRekey.textRowKey(dupRows[0].id);
+  const secondLogical = duplicateRekey.textRowKey(dupRows[1].id);
+  duplicateRekey.captureDraft(firstLogical, 'merchant', '第一列草稿');
+  duplicateRekey.captureDraft(secondLogical, 'merchant', '第二列草稿');
+  const shifted = serverCopy(dupRows);
+  shifted[0].amount = 200; shifted[0].id = 'same|1000|200|1234|0';
+  shifted[1].id = 'same|1000|100|1234|0';
+  duplicateRekey.adoptTxns(shifted);
+  assert.strictEqual(duplicateRekey.TXNS[0]._textKey, firstLogical,
+    'the changed first duplicate keeps the first logical editor despite losing its old id');
+  assert.strictEqual(duplicateRekey.TXNS[1]._textKey, secondLogical,
+    'the second duplicate does not steal the first row identity when it inherits that id string');
+  assert.strictEqual(duplicateRekey.draftValue(duplicateRekey.TXNS[0], 'merchant'), '第一列草稿');
+  assert.strictEqual(duplicateRekey.draftValue(duplicateRekey.TXNS[1], 'merchant'), '第二列草稿');
+  duplicateRekey.saveTextDraft(secondLogical, 'merchant');
+  assert.strictEqual(duplicateRekey.calls[0].id, shifted[1].id,
+    'the second draft writes to the second row after occurrence renumbering');
+  duplicateRekey.openDelModal(secondLogical);
+  assert.strictEqual(duplicateRekey.pendingDelRowKey, secondLogical,
+    'a delete click from stale DOM keeps targeting its logical row after occurrence renumbering');
+  assert.strictEqual(duplicateRekey.document.getElementById('d-mer').textContent, '第二列草稿',
+    'the delete confirmation describes the intended row, not the row that inherited its old id');
+
+  const threeDupes = [
+    row({ id: 'del|1000|100|1234|0', amount: 100, merchant: '刪除列' }),
+    row({ id: 'del|1000|100|1234|1', amount: 100, merchant: '保留二' }),
+    row({ id: 'del|1000|100|1234|2', amount: 100, merchant: '保留三' })
+  ];
+  const deleteReconcile = harness(threeDupes);
+  const keepSecond = deleteReconcile.textRowKey(threeDupes[1].id);
+  const keepThird = deleteReconcile.textRowKey(threeDupes[2].id);
+  deleteReconcile.captureDraft(keepSecond, 'merchant', '第二列草稿');
+  deleteReconcile.captureDraft(keepThird, 'merchant', '第三列草稿');
+  deleteReconcile.pendingDelId = threeDupes[0].id;
+  deleteReconcile.pendingDelRowKey = deleteReconcile.textRowKey(threeDupes[0].id);
+  deleteReconcile.confirmDelete();
+  const afterDelete = serverCopy(threeDupes.slice(1));
+  afterDelete[0].id = 'del|1000|100|1234|0'; afterDelete[1].id = 'del|1000|100|1234|1';
+  deleteReconcile.deletes[0].success({ ok: true, txns: afterDelete });
+  assert.strictEqual(deleteReconcile.TXNS[0]._textKey, keepSecond,
+    'deleting the first duplicate does not shift row 2 logical state onto row 3');
+  assert.strictEqual(deleteReconcile.TXNS[1]._textKey, keepThird,
+    'the last duplicate retains its own logical state after occurrence renumbering');
+  assert.strictEqual(deleteReconcile.draftValue(deleteReconcile.TXNS[0], 'merchant'), '第二列草稿');
+  assert.strictEqual(deleteReconcile.draftValue(deleteReconcile.TXNS[1], 'merchant'), '第三列草稿');
+
+  // Delete is bound to the client row, not the occurrence string visible when the modal opened,
+  // and waits for an in-flight amount write that can renumber every duplicate in the group.
+  const deleteAfterRekey = harness(threeDupes);
+  const deleteLogical = deleteAfterRekey.textRowKey(threeDupes[1].id);
+  deleteAfterRekey.applyEdit(deleteLogical, 'amount', 200);
+  deleteAfterRekey.pendingDelId = threeDupes[1].id;
+  deleteAfterRekey.pendingDelRowKey = deleteLogical;
+  deleteAfterRekey.confirmDelete();
+  assert.strictEqual(deleteAfterRekey.deletes.length, 0, 'delete waits for the row write already in flight');
+  const amountShifted = serverCopy(threeDupes);
+  amountShifted[1].amount = 200; amountShifted[1].id = 'del|1000|200|1234|0';
+  amountShifted[2].id = 'del|1000|100|1234|1';
+  deleteAfterRekey.calls[0].success({ ok: true, txns: amountShifted });
+  assert.strictEqual(deleteAfterRekey.deletes.length, 1, 'delete dispatches after the amount response is adopted');
+  assert.strictEqual(deleteAfterRekey.deletes[0].arg.id, 'del|1000|200|1234|0',
+    'delete resolves the intended logical row to its current server id, not the recycled occurrence id');
+
+  const fifoBase = serverCopy(base);
+  fifoBase[0].rowId = 'uuid-row-a';
+  const fifo = harness(fifoBase);
+  const fifoKey = fifo.textRowKey(fifoBase[0].id);
+  fifo.applyEdit(fifoKey, 'amount', 999);
+  fifo.applyEdit(fifoKey, 'cat', '交通');
+  assert.strictEqual(fifo.calls.length, 1, 'same-row writes are dispatched one at a time');
+  assert.strictEqual(fifo.calls[0].id, 'uuid-row-a', 'row writes use the immutable UUID');
+  const amountOnly = serverCopy(fifoBase); amountOnly[0].amount = 999;
+  fifo.calls[0].success({ ok: true, txns: amountOnly });
+  assert.strictEqual(fifo.calls.length, 2, 'the next same-row write starts only after the first response');
+  assert.strictEqual(fifo.calls[1].patch.cat, '交通');
+  assert.strictEqual(fifo.TXNS[0].cat, '交通', 'an older acknowledgement cannot erase the queued optimistic value');
+
+  const fifoThenDelete = harness(fifoBase);
+  const fifoDeleteKey = fifoThenDelete.textRowKey(fifoBase[0].id);
+  fifoThenDelete.applyEdit(fifoDeleteKey, 'amount', 999);
+  fifoThenDelete.applyEdit(fifoDeleteKey, 'cat', '交通');
+  fifoThenDelete.pendingDelId = fifoBase[0].id;
+  fifoThenDelete.pendingDelRowKey = fifoDeleteKey;
+  fifoThenDelete.confirmDelete();
+  assert.strictEqual(fifoThenDelete.deletes.length, 0,
+    'delete waits while the first same-row write is active and a second is queued');
+  fifoThenDelete.calls[0].success({ ok: true, txns: amountOnly });
+  assert.strictEqual(fifoThenDelete.calls.length, 2, 'the queued write starts before delete is reconsidered');
+  assert.strictEqual(fifoThenDelete.deletes.length, 0,
+    'delete cannot overtake the second same-row write between FIFO entries');
+  const bothEdits = serverCopy(amountOnly); bothEdits[0].cat = '交通';
+  fifoThenDelete.calls[1].success({ ok: true, txns: bothEdits });
+  assert.strictEqual(fifoThenDelete.deletes.length, 1,
+    'delete dispatches only after every queued same-row write settles');
+  assert.strictEqual(fifoThenDelete.deletes[0].arg.id, 'uuid-row-a');
+
+  const recordThenDelete = harness(base);
+  const recordDeleteKey = recordThenDelete.textRowKey(base[0].id);
+  recordThenDelete.captureDraft(recordDeleteKey, 'merchant', '先存再刪');
+  recordThenDelete.saveTextDraft(recordDeleteKey, 'merchant');
+  recordThenDelete.commitRow(recordDeleteKey, true);
+  recordThenDelete.pendingDelId = base[0].id;
+  recordThenDelete.pendingDelRowKey = recordDeleteKey;
+  recordThenDelete.confirmDelete();
+  assert.strictEqual(recordThenDelete.deletes.length, 0, 'delete waits behind the active text save and queued Record');
+  const savedBeforeRecord = serverCopy(base); savedBeforeRecord[0].merchant = '先存再刪';
+  recordThenDelete.calls[0].success({ ok: true, txns: savedBeforeRecord });
+  assert.strictEqual(recordThenDelete.calls.length, 2, 'the pre-existing Record advances despite the later delete intent');
+  const recordedBeforeDelete = serverCopy(savedBeforeRecord); recordedBeforeDelete[0].posted = true;
+  recordThenDelete.calls[1].success({ ok: true, txns: recordedBeforeDelete });
+  assert.strictEqual(recordThenDelete.deletes.length, 1, 'delete advances after the queued Record settles');
+
+  const newerTextThenDelete = harness(base);
+  const newerTextKey = newerTextThenDelete.textRowKey(base[0].id);
+  newerTextThenDelete.captureDraft(newerTextKey, 'merchant', '第一版');
+  newerTextThenDelete.saveTextDraft(newerTextKey, 'merchant');
+  newerTextThenDelete.captureDraft(newerTextKey, 'merchant', '刪除前最後一版');
+  newerTextThenDelete.saveTextDraft(newerTextKey, 'merchant');
+  newerTextThenDelete.pendingDelId = base[0].id;
+  newerTextThenDelete.pendingDelRowKey = newerTextKey;
+  newerTextThenDelete.confirmDelete();
+  assert.strictEqual(newerTextThenDelete.deletes.length, 0,
+    'delete waits for an active text save and its newer pending revision');
+  const firstTextAck = serverCopy(base); firstTextAck[0].merchant = '第一版';
+  newerTextThenDelete.calls[0].success({ ok: true, txns: firstTextAck });
+  assert.strictEqual(newerTextThenDelete.calls.length, 2,
+    'the revision queued before delete confirmation still enters the row FIFO');
+  assert.strictEqual(newerTextThenDelete.calls[1].patch.merchant, '刪除前最後一版');
+  assert.strictEqual(newerTextThenDelete.deletes.length, 0,
+    'delete cannot overtake the final pending text revision');
+  const finalTextAck = serverCopy(base); finalTextAck[0].merchant = '刪除前最後一版';
+  newerTextThenDelete.calls[1].success({ ok: true, txns: finalTextAck });
+  assert.strictEqual(newerTextThenDelete.deletes.length, 1,
+    'delete dispatches after the last pre-confirmation text revision is durable');
+
+  const failedTextBase = serverCopy(base); failedTextBase[0].rowId = 'uuid-row-a';
+  const failedTextThenDelete = harness(failedTextBase);
+  const failedTextKey = failedTextThenDelete.textRowKey(failedTextBase[0].id);
+  failedTextThenDelete.captureDraft(failedTextKey, 'merchant', '第一版');
+  failedTextThenDelete.saveTextDraft(failedTextKey, 'merchant');
+  failedTextThenDelete.captureDraft(failedTextKey, 'merchant', '寫入失敗的最後一版');
+  failedTextThenDelete.saveTextDraft(failedTextKey, 'merchant');
+  failedTextThenDelete.pendingDelId = failedTextBase[0].id;
+  failedTextThenDelete.pendingDelRowKey = failedTextKey;
+  failedTextThenDelete.confirmDelete();
+  const failedFirstAck = serverCopy(failedTextBase); failedFirstAck[0].merchant = '第一版';
+  failedTextThenDelete.calls[0].success({ ok: true, txns: failedFirstAck });
+  failedTextThenDelete.calls[1].failure(new Error('write failed'));
+  assert.strictEqual(failedTextThenDelete.deletes.length, 0,
+    'a failed final text revision cancels delete instead of archiving stale text');
+  assert.strictEqual(failedTextThenDelete.ROW_DELETE_INTENTS[failedTextKey], undefined);
+  assert.strictEqual(failedTextThenDelete.delBusy, false, 'the row remains available for a deliberate retry');
+  assert.ok(failedTextThenDelete.textTxn(failedTextKey), 'the row is retained after the protected write fails');
+
+  // Every asynchronous callback that can rebuild the transaction panel goes through repaint(),
+  // so an unrelated add/delete/bulk response cannot detach an active native IME node.
+  function assertAsyncRepaintDefers(name, issue, resolve) {
+    const h = harness(base);
+    issue(h);
+    const before = h.renders.n;
+    h.beginComposition(base[0].id, 'merchant', '輸入中');
+    resolve(h);
+    assert.strictEqual(h.renders.n, before, name + ': callback repaint is deferred during composition');
+    assert.strictEqual(h.PENDING_REPAINT, true, name + ': callback records one pending repaint');
+    h.endComposition(base[0].id, 'merchant', '輸入完成');
+    h.flushTimers();
+    assert.strictEqual(h.renders.n, before + 1, name + ': deferred repaint flushes once after composition');
+  }
+  assertAsyncRepaintDefers('add success', function (h) { h.submitAdd(); },
+    function (h) { h.adds[0].success({ id: 'manual-9', hm: '' }); });
+  assertAsyncRepaintDefers('add failure', function (h) { h.submitAdd(); },
+    function (h) { h.adds[0].failure(new Error('boom')); });
+  assertAsyncRepaintDefers('delete success', function (h) {
+    h.pendingDelId = base[1].id; h.pendingDelRowKey = h.textRowKey(base[1].id); h.confirmDelete();
+  }, function (h) { h.deletes[0].success({ ok: true, txns: serverCopy([base[0]]) }); });
+  assertAsyncRepaintDefers('bulk failure', function (h) { h.bulkPost([base[1].id]); },
+    function (h) { h.calls[0].failure(new Error('boom')); });
+
+  const addTyping = harness(base);
+  addTyping.submitAdd();
+  const optimistic = addTyping.TXNS[addTyping.TXNS.length - 1];
+  const optimisticLogical = addTyping.textRowKey(optimistic.id);
+  addTyping.beginComposition(optimisticLogical, 'merchant', '回覆前輸入');
+  addTyping.adds[0].success({ id: 'manual-9', hm: '' });
+  assert.strictEqual(addTyping.resolveTextRowId(optimisticLogical), 'manual-9',
+    'the optimistic manual row keeps its logical key when the server id arrives');
+  assert.strictEqual(addTyping.draftValue(optimistic, 'merchant'), '回覆前輸入',
+    'typing begun before add success survives the id replacement');
+  addTyping.endComposition(optimisticLogical, 'merchant', '回覆前輸入');
+  addTyping.flushTimers();
+  addTyping.saveTextDraft(optimisticLogical, 'merchant');
+  assert.strictEqual(addTyping.calls[0].id, 'manual-9', 'the preserved manual-row draft saves by the final id');
+
+  const addBlurBeforeAck = harness(base);
+  addBlurBeforeAck.submitAdd();
+  const pendingManual = addBlurBeforeAck.TXNS[addBlurBeforeAck.TXNS.length - 1];
+  const pendingManualKey = addBlurBeforeAck.textRowKey(pendingManual.id);
+  addBlurBeforeAck.captureDraft(pendingManualKey, 'merchant', '先輸入再回覆');
+  addBlurBeforeAck.saveTextDraft(pendingManualKey, 'merchant');
+  assert.strictEqual(addBlurBeforeAck.calls.length, 0,
+    'blur before add acknowledgement queues text instead of writing the temporary id');
+  addBlurBeforeAck.adds[0].success({ id: 'manual-10', hm: '' });
+  assert.strictEqual(addBlurBeforeAck.calls.length, 1, 'the queued text drains when the final id arrives');
+  assert.strictEqual(addBlurBeforeAck.calls[0].id, 'manual-10');
+  assert.strictEqual(addBlurBeforeAck.calls[0].patch.merchant, '先輸入再回覆');
+
+  const addTextDeleteBeforeAck = harness(base);
+  addTextDeleteBeforeAck.submitAdd();
+  const textDeletePending = addTextDeleteBeforeAck.TXNS[addTextDeleteBeforeAck.TXNS.length - 1];
+  const textDeletePendingKey = addTextDeleteBeforeAck.textRowKey(textDeletePending.id);
+  addTextDeleteBeforeAck.captureDraft(textDeletePendingKey, 'merchant', '新增後要保留的文字');
+  addTextDeleteBeforeAck.saveTextDraft(textDeletePendingKey, 'merchant');
+  addTextDeleteBeforeAck.pendingDelId = textDeletePending.id;
+  addTextDeleteBeforeAck.pendingDelRowKey = textDeletePendingKey;
+  addTextDeleteBeforeAck.confirmDelete();
+  addTextDeleteBeforeAck.adds[0].success({
+    id: 'manual-10b|3000|80||0', rowId: 'uuid-manual-10b', hm: '', y: 2026, m: 8, d: 12
+  });
+  assert.strictEqual(addTextDeleteBeforeAck.calls.length, 1,
+    'pending manual text is written after UUID acknowledgement even when delete is confirmed');
+  assert.strictEqual(addTextDeleteBeforeAck.calls[0].id, 'uuid-manual-10b');
+  assert.strictEqual(addTextDeleteBeforeAck.deletes.length, 0,
+    'pending manual delete waits for the pre-confirmation text write');
+  addTextDeleteBeforeAck.calls[0].success({ ok: true });
+  assert.strictEqual(addTextDeleteBeforeAck.deletes.length, 1,
+    'pending manual delete starts only after its final text is durable');
+  assert.strictEqual(addTextDeleteBeforeAck.deletes[0].arg.id, 'uuid-manual-10b');
+
+  const addTextDeleteFailure = harness(base);
+  addTextDeleteFailure.submitAdd();
+  const failingManual = addTextDeleteFailure.TXNS[addTextDeleteFailure.TXNS.length - 1];
+  const failingManualKey = addTextDeleteFailure.textRowKey(failingManual.id);
+  addTextDeleteFailure.captureDraft(failingManualKey, 'merchant', '不能遺失的文字');
+  addTextDeleteFailure.saveTextDraft(failingManualKey, 'merchant');
+  addTextDeleteFailure.pendingDelId = failingManual.id;
+  addTextDeleteFailure.pendingDelRowKey = failingManualKey;
+  addTextDeleteFailure.confirmDelete();
+  addTextDeleteFailure.adds[0].success({
+    id: 'manual-10c|3000|80||0', rowId: 'uuid-manual-10c', hm: '', y: 2026, m: 8, d: 12
+  });
+  addTextDeleteFailure.calls[0].failure(new Error('write failed'));
+  assert.strictEqual(addTextDeleteFailure.deletes.length, 0,
+    'a pending manual row is not deleted when its final text fails to persist');
+  assert.strictEqual(addTextDeleteFailure.ROW_DELETE_INTENTS[failingManualKey], undefined);
+  assert.strictEqual(addTextDeleteFailure.delBusy, false);
+  assert.ok(addTextDeleteFailure.textTxn(failingManualKey),
+    'the acknowledged manual row remains visible so the owner can retry');
+
+  const addRecordBeforeAck = harness(base);
+  addRecordBeforeAck.submitAdd();
+  const recordPending = addRecordBeforeAck.TXNS[addRecordBeforeAck.TXNS.length - 1];
+  const recordPendingKey = addRecordBeforeAck.textRowKey(recordPending.id);
+  addRecordBeforeAck.captureDraft(recordPendingKey, 'tag', '待回覆標籤');
+  addRecordBeforeAck.commitRow(recordPendingKey, false);
+  assert.strictEqual(addRecordBeforeAck.calls.length, 0,
+    'Record intent also waits while the manual row has only a temporary id');
+  addRecordBeforeAck.adds[0].success({ id: 'manual-11', hm: '' });
+  assert.strictEqual(addRecordBeforeAck.calls.length, 1, 'the queued Record drains after add acknowledgement');
+  assert.strictEqual(addRecordBeforeAck.calls[0].id, 'manual-11');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(addRecordBeforeAck.calls[0].patch)), {
+    posted: false, tag: '待回覆標籤'
+  });
+
+  const addEditBeforeAck = harness(base);
+  addEditBeforeAck.submitAdd();
+  const editPending = addEditBeforeAck.TXNS[addEditBeforeAck.TXNS.length - 1];
+  const editPendingKey = addEditBeforeAck.textRowKey(editPending.id);
+  addEditBeforeAck.applyEdit(editPendingKey, 'amount', 125);
+  assert.strictEqual(addEditBeforeAck.calls.length, 0,
+    'a discrete edit waits while the manual row has only a temporary id');
+  addEditBeforeAck.adds[0].success({
+    id: 'manual-13|3000|80||0', rowId: 'uuid-manual-13', hm: '', y: 2026, m: 8, d: 12
+  });
+  assert.strictEqual(addEditBeforeAck.calls.length, 1, 'the queued discrete edit resumes after add acknowledgement');
+  assert.strictEqual(addEditBeforeAck.calls[0].id, 'uuid-manual-13');
+  assert.strictEqual(addEditBeforeAck.calls[0].patch.amount, 125);
+
+  const addSplitBeforeAck = harness(base);
+  addSplitBeforeAck.submitAdd();
+  const splitPending = addSplitBeforeAck.TXNS[addSplitBeforeAck.TXNS.length - 1];
+  const splitPendingKey = addSplitBeforeAck.textRowKey(splitPending.id);
+  addSplitBeforeAck.applySplit(splitPendingKey, '25');
+  assert.strictEqual(addSplitBeforeAck.calls.length, 0,
+    'a split waits while the manual row has only a temporary id');
+  addSplitBeforeAck.adds[0].success({
+    id: 'manual-14|3000|80||0', rowId: 'uuid-manual-14', hm: '', y: 2026, m: 8, d: 12
+  });
+  assert.strictEqual(addSplitBeforeAck.calls.length, 1, 'the queued split resumes after add acknowledgement');
+  assert.strictEqual(addSplitBeforeAck.calls[0].id, 'uuid-manual-14');
+  assert.strictEqual(addSplitBeforeAck.calls[0].patch.mine, 25);
+
+  const addQueuedEditFailure = harness(base);
+  addQueuedEditFailure.submitAdd();
+  const failedEditPending = addQueuedEditFailure.TXNS[addQueuedEditFailure.TXNS.length - 1];
+  const failedEditKey = addQueuedEditFailure.textRowKey(failedEditPending.id);
+  addQueuedEditFailure.applyEdit(failedEditKey, 'cat', '交通');
+  assert.strictEqual(addQueuedEditFailure.INFLIGHT, 2, 'the add and queued edit are both tracked mutations');
+  addQueuedEditFailure.adds[0].failure(new Error('add failed'));
+  assert.strictEqual(addQueuedEditFailure.calls.length, 0, 'a failed add never dispatches its queued temp-id edit');
+  assert.strictEqual(addQueuedEditFailure.INFLIGHT, 0, 'cancelling a queued edit settles its mutation accounting');
+  assert.strictEqual(addQueuedEditFailure.ROW_WRITE_FIFOS[failedEditKey], undefined,
+    'a failed add discards its dormant row-write queue');
+
+  // Another write can adopt a snapshot containing the final manual row before addTxn's own
+  // callback runs. The pending-add map keeps the temp logical identity and joins it to that row.
+  const addSnapshotRace = harness(base);
+  addSnapshotRace.submitAdd();
+  const racedTemp = addSnapshotRace.TXNS[addSnapshotRace.TXNS.length - 1];
+  const racedTempKey = addSnapshotRace.textRowKey(racedTemp.id);
+  addSnapshotRace.captureDraft(racedTempKey, 'merchant', '快照期間輸入');
+  addSnapshotRace.saveTextDraft(racedTempKey, 'merchant');
+  const snapshotWithFinal = serverCopy(base).concat([
+    row({ id: 'manual-12|3000|80||0', y: 2026, m: 8, d: 18, amount: 80, charged: 80,
+      merchant: '午餐', bank: '現金', last4: '', posted: true })
+  ]);
+  addSnapshotRace.adoptTxns(snapshotWithFinal);
+  assert.ok(addSnapshotRace.TXNS.some(function (t) { return t._textKey === racedTempKey; }),
+    'an unrelated authoritative snapshot cannot evict the pending optimistic identity');
+  addSnapshotRace.adds[0].success({ id: 'manual-12|3000|80||0', hm: '', y: 2026, m: 8, d: 18 });
+  assert.strictEqual(addSnapshotRace.calls.length, 1, 'queued text drains after the callback joins the final row');
+  assert.strictEqual(addSnapshotRace.calls[0].id, 'manual-12|3000|80||0');
+  assert.strictEqual(addSnapshotRace.calls[0].patch.merchant, '快照期間輸入');
+  assert.strictEqual(addSnapshotRace.TXNS.filter(function (t) { return t.id === 'manual-12|3000|80||0'; }).length, 1,
+    'joining the acknowledged row removes the detached optimistic duplicate');
+
+  const addDeleteFailureDom = domStub(ADD_FORM);
+  const addDeleteFailure = harness(base, { document: addDeleteFailureDom });
+  addDeleteFailure.submitAdd();
+  const failedPending = addDeleteFailure.TXNS[addDeleteFailure.TXNS.length - 1];
+  const failedPendingKey = addDeleteFailure.textRowKey(failedPending.id);
+  addDeleteFailure.pendingDelId = failedPending.id;
+  addDeleteFailure.pendingDelRowKey = failedPendingKey;
+  addDeleteFailure.confirmDelete();
+  assert.strictEqual(addDeleteFailure.delBusy, true, 'confirmed delete stays pending while add is unresolved');
+  assert.strictEqual(addDeleteFailure.deletes.length, 0, 'temporary ids are never sent to deleteTxn');
+  assert.strictEqual(addDeleteFailureDom.getElementById('d-ok').disabled, true);
+  addDeleteFailure.adds[0].failure(new Error('add failed'));
+  assert.strictEqual(addDeleteFailure.delBusy, false, 'add failure releases the global delete guard');
+  assert.strictEqual(addDeleteFailure.ROW_DELETE_INTENTS[failedPendingKey], undefined,
+    'add failure removes the stranded delete intent');
+  assert.strictEqual(addDeleteFailureDom.getElementById('d-ok').disabled, false,
+    'add failure re-enables the delete confirmation button');
+  assert.strictEqual(addDeleteFailure.pendingDelId, null);
+  assert.strictEqual(addDeleteFailure.pendingDelRowKey, null);
+
+  // Enter/Escape belong to the IME while composition is active. keyCode 229 is the fallback
+  // used by browsers that do not expose KeyboardEvent.isComposing reliably.
+  [
+    { key: 'Enter', isComposing: true },
+    { key: 'Escape', keyCode: 229 }
+  ].forEach(function (event) {
+    let prevented = 0, blurred = 0;
+    const input = { value: '組字中', defaultValue: '原值', blur: function () { blurred++; } };
+    event.preventDefault = function () { prevented++; };
+    trailing.handleTextKeydown(event, input, base[0].id, 'merchant');
+    assert.strictEqual(prevented, 0, event.key + ': IME keydown is not intercepted');
+    assert.strictEqual(blurred, 0, event.key + ': IME keydown does not blur the editor');
+    assert.strictEqual(input.value, '組字中', event.key + ': IME keydown does not reset the draft');
+  });
+  let normalPrevented = 0, normalBlurred = 0;
+  trailing.captureDraft(base[0].id, 'merchant', 'edited');
+  const normalInput = { value: 'edited', defaultValue: base[0].merchant, blur: function () { normalBlurred++; } };
+  trailing.handleTextKeydown({ key: 'Escape', preventDefault: function () { normalPrevented++; } }, normalInput,
+    base[0].id, 'merchant');
+  assert.strictEqual(normalPrevented, 1, 'ordinary Escape is still handled');
+  assert.strictEqual(normalBlurred, 1, 'ordinary Escape still blurs');
+  assert.strictEqual(normalInput.value, base[0].merchant, 'ordinary Escape restores the committed value');
+
+  // Escape cancels the logical draft, not just the visible node. The synthetic change/blur that
+  // follows browser blur must therefore have nothing left to save.
+  ['merchant', 'tag'].forEach(function (field) {
+    const original = base[0][field];
+    const dom = duplicateTextDom(base[0].id, field, original);
+    const h = harness(base, { document: dom });
+    h.captureDraft(base[0].id, field, '  不要儲存  ');
+    const input = dom.nodes[0]; input.blur = function () {};
+    h.handleTextKeydown({ key: 'Escape', preventDefault: function () {} }, input, base[0].id, field);
+    if (!h.consumeTextCancel(base[0].id, field)) h.applyEdit(base[0].id, field, input.value);
+    if (!h.consumeTextCancel(base[0].id, field)) h.saveTextDraft(base[0].id, field);
+    assert.strictEqual(h.textDraft(base[0].id, field), null, field + ': Escape deletes the dirty draft');
+    assert.strictEqual(h.calls.length, 0, field + ': following change/blur does not save the cancelled value');
+    assert.ok(dom.nodes.every(function (node) { return node.value === original; }),
+      field + ': every mounted copy returns to the committed value');
+  });
+
+  const activeCancelDom = duplicateTextDom(base[0].id, 'merchant', base[0].merchant);
+  const activeCancel = harness(base, { document: activeCancelDom });
+  activeCancel.captureDraft(base[0].id, 'merchant', '先送出的值');
+  activeCancel.saveTextDraft(base[0].id, 'merchant');
+  const activeInput = activeCancelDom.nodes[0]; activeInput.blur = function () {};
+  activeCancel.handleTextKeydown({ key: 'Escape', preventDefault: function () {} }, activeInput,
+    base[0].id, 'merchant');
+  const firstAck = serverCopy(base); firstAck[0].merchant = '先送出的值';
+  activeCancel.calls[0].success({ ok: true, txns: firstAck });
+  assert.strictEqual(activeCancel.calls.length, 2,
+    'Escape queues a compensating restore when the dirty value is already in flight');
+  assert.strictEqual(activeCancel.calls[1].patch.merchant, base[0].merchant,
+    'the compensating write restores the pre-draft committed value');
+
+  // ---- an old save acknowledgement cannot clear characters typed while it was in flight ----
+  ['merchant', 'tag'].forEach(function (field) {
+    const h = harness(base);
+    h.captureDraft(base[0].id, field, '第一版');
+    h.saveTextDraft(base[0].id, field);
+    h.captureDraft(base[0].id, field, '第二版');
+    const ack = serverCopy(base); ack[0][field] = '第一版';
+    h.calls[0].success({ ok: true, txns: ack });
+    assert.strictEqual(h.textDraft(base[0].id, field).value, '第二版',
+      field + ': an older acknowledgement leaves the newer draft dirty');
+    assert.strictEqual(h.draftValue(base[0], field), '第二版',
+      field + ': the newer draft overlays the adopted server value');
+  });
+
+  const supersededFailure = harness(base);
+  supersededFailure.captureDraft(base[0].id, 'merchant', '第一版');
+  supersededFailure.saveTextDraft(base[0].id, 'merchant');
+  supersededFailure.captureDraft(base[0].id, 'merchant', '第二版');
+  supersededFailure.calls[0].failure(new Error('old request failed'));
+  assert.strictEqual(supersededFailure.TXNS[0].merchant, '第一版',
+    'a superseded failure does not roll back the newer edit lifecycle');
+  assert.strictEqual(supersededFailure.draftValue(base[0], 'merchant'), '第二版',
+    'a superseded failure leaves newer typing visible');
+  assert.strictEqual(supersededFailure.toasts.length, 1,
+    'typing alone does not hide a current request failure; only a newer request supersedes it');
+
+  // ---- field writes are serial and intermediate pending revisions are coalesced ----
+  const serial = harness(base);
+  serial.captureDraft(base[0].id, 'merchant', ' 第一版 ');
+  serial.saveTextDraft(base[0].id, 'merchant');
+  serial.captureDraft(base[0].id, 'merchant', ' 第二版 ');
+  serial.saveTextDraft(base[0].id, 'merchant');
+  serial.captureDraft(base[0].id, 'merchant', ' 最終版 ');
+  serial.saveTextDraft(base[0].id, 'merchant');
+  assert.strictEqual(serial.calls.length, 1, 'only one Apps Script field write is active at a time');
+  assert.strictEqual(serial.calls[0].patch.merchant, '第一版', 'field commits preserve trimming semantics');
+  const firstSaved = serverCopy(base); firstSaved[0].merchant = '第一版';
+  serial.calls[0].success({ ok: true, txns: firstSaved });
+  assert.strictEqual(serial.calls.length, 2, 'the queue drains after the active write completes');
+  assert.strictEqual(serial.calls[1].patch.merchant, '最終版', 'intermediate revisions coalesce to the newest value');
+  assert.ok(!serial.calls.some(function (call) { return call.patch.merchant === '第二版'; }),
+    'the superseded middle revision is never sent');
+
+  // ---- draft revisions and request tokens never repeat after delete/recreate (ABA) ----
+  const aba = harness(base);
+  const firstDraft = aba.captureDraft(base[0].id, 'merchant', '相同文字');
+  const key = aba.draftKey(base[0].id, 'merchant');
+  aba.saveTextDraft(base[0].id, 'merchant');                 // request token 1
+  aba.commitRow(base[0].id, true);                           // waits behind token 1
+  assert.strictEqual(aba.calls.length, 1, 'Record does not race an active field write');
+  const committed = serverCopy(base);
+  committed[0].merchant = '相同文字'; committed[0].posted = true;
+  aba.calls[0].success({ ok: true, txns: committed });        // drains the field queue
+  assert.strictEqual(aba.calls.length, 2, 'Record is issued only after the older field write settles');
+  aba.calls[1].success({ ok: true, txns: committed });        // deletes the exact committed draft
+  assert.strictEqual(aba.textDraft(base[0].id, 'merchant'), null, 'Record success clears its exact draft');
+  const recreatedDraft = aba.captureDraft(base[0].id, 'merchant', '相同文字');
+  assert.ok(recreatedDraft.revision > firstDraft.revision,
+    'recreating the same value receives a newer logical revision');
+  aba.saveTextDraft(base[0].id, 'merchant');                 // token 3 for the recreated draft
+  assert.ok(aba.TEXT_REQUEST_TOKENS[key] > 2,
+    'request tokens remain monotonic independently of draft lifetime');
+  assert.strictEqual(aba.textDraft(base[0].id, 'merchant').revision, recreatedDraft.revision,
+    'an ABA-recreated same-value draft retains its new identity');
+
+  // ---- immediate Record includes both dirty text fields in its one authoritative patch ----
+  const record = harness(base);
+  record.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
+  record.captureDraft(base[0].id, 'tag', '約會');
+  record.commitRow(base[0].id, true);
+  assert.strictEqual(record.calls.length, 1, 'Record issues one request');
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(record.calls[0].patch)), {
+    posted: true, merchant: '買晚餐餐廳', tag: '約會'
+  }, 'Record combines posted, merchant and TAG in one patch');
+  assert.strictEqual(record.TXNS[0].merchant, '買晚餐餐廳', 'Record applies merchant optimistically');
+  assert.strictEqual(record.TXNS[0].tag, '約會', 'Record applies TAG optimistically');
+
+  const trimmedRecord = harness(base);
+  trimmedRecord.captureDraft(base[0].id, 'merchant', '  晚餐  ');
+  trimmedRecord.captureDraft(base[0].id, 'tag', '  約會  ');
+  trimmedRecord.commitRow(base[0].id, true);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(trimmedRecord.calls[0].patch)), {
+    posted: true, merchant: '晚餐', tag: '約會'
+  }, 'Record trims merchant and TAG only when building the committed patch');
+
+  // Text typed after Record has gone out is a newer revision, not part of that patch. It waits
+  // behind the row commit, then drains immediately against the row that remains in the model.
+  const editDuringRecord = harness(base);
+  editDuringRecord.captureDraft(base[0].id, 'merchant', 'Record 版本');
+  editDuringRecord.commitRow(base[0].id, true);
+  editDuringRecord.captureDraft(base[0].id, 'merchant', '稍後版本');
+  editDuringRecord.saveTextDraft(base[0].id, 'merchant');
+  assert.strictEqual(editDuringRecord.calls.length, 1, 'a newer revision waits behind Record');
+  const recordAck = serverCopy(base);
+  recordAck[0].merchant = 'Record 版本'; recordAck[0].posted = true;
+  editDuringRecord.calls[0].success({ ok: true, txns: recordAck });
+  assert.strictEqual(editDuringRecord.calls.length, 2, 'Record success drains the newer revision');
+  assert.strictEqual(editDuringRecord.calls[1].patch.merchant, '稍後版本',
+    'the drained write contains the text typed while Record was in flight');
+
+  const editDuringFailedRecord = harness(base);
+  editDuringFailedRecord.captureDraft(base[0].id, 'tag', 'Record 標籤');
+  editDuringFailedRecord.commitRow(base[0].id, true);
+  editDuringFailedRecord.captureDraft(base[0].id, 'tag', '稍後標籤');
+  editDuringFailedRecord.saveTextDraft(base[0].id, 'tag');
+  editDuringFailedRecord.calls[0].failure(new Error('record failed'));
+  assert.strictEqual(editDuringFailedRecord.calls.length, 2, 'Record failure also drains the newer revision');
+  assert.strictEqual(editDuringFailedRecord.calls[1].patch.tag, '稍後標籤',
+    'a failed Record cannot strand text entered while it was in flight');
+
+  // Escape during Record likewise survives as a compensating write. Without this drain, the
+  // Record response would leave the value the owner explicitly cancelled on the sheet.
+  const cancelDuringRecord = harness(base);
+  cancelDuringRecord.captureDraft(base[0].id, 'merchant', '不要保留');
+  cancelDuringRecord.commitRow(base[0].id, true);
+  cancelDuringRecord.cancelTextDraft(base[0].id, 'merchant');
+  const cancelRecordAck = serverCopy(base);
+  cancelRecordAck[0].merchant = '不要保留'; cancelRecordAck[0].posted = true;
+  cancelDuringRecord.calls[0].success({ ok: true, txns: cancelRecordAck });
+  assert.strictEqual(cancelDuringRecord.calls.length, 2, 'Record success drains the queued cancellation');
+  assert.strictEqual(cancelDuringRecord.calls[1].patch.merchant, base[0].merchant,
+    'the compensation restores the value from before the cancelled draft');
+
+  // A different response may change the composite id while Record is in flight. The intent and
+  // draft are keyed by the stable client row, so the late callback still clears the right state.
+  const rekeyDuringRecord = harness(base);
+  const recordLogical = rekeyDuringRecord.textRowKey(base[0].id);
+  rekeyDuringRecord.captureDraft(recordLogical, 'merchant', '一起記帳');
+  rekeyDuringRecord.commitRow(recordLogical, true);
+  const recordRekeyed = serverCopy(base);
+  recordRekeyed[0].amount = 999; recordRekeyed[0].id = REKEYED_ID;
+  rekeyDuringRecord.adoptTxns(recordRekeyed);
+  const recordResponse = serverCopy(recordRekeyed);
+  recordResponse[0].merchant = '一起記帳'; recordResponse[0].posted = true;
+  rekeyDuringRecord.calls[0].success({ ok: true, txns: recordResponse });
+  assert.strictEqual(rekeyDuringRecord.ROW_COMMIT_INTENTS[recordLogical], undefined,
+    'a Record callback clears its intent after an in-flight id change');
+  assert.strictEqual(rekeyDuringRecord.textDraft(recordLogical, 'merchant'), null,
+    'the exact committed draft is cleared through the stable row key');
+  rekeyDuringRecord.captureDraft(recordLogical, 'merchant', '下一次');
+  rekeyDuringRecord.commitRow(recordLogical, false);
+  assert.strictEqual(rekeyDuringRecord.calls.length, 2, 'the row is not permanently blocked after rekeyed Record');
+  assert.strictEqual(rekeyDuringRecord.calls[1].id, REKEYED_ID, 'the next Record uses the current server id');
+
+  // ---- actual duplicate DOM copies share drafts and acknowledged values ----
+  ['merchant', 'tag'].forEach(function (field) {
+    const dom = duplicateTextDom(base[0].id, field, base[0][field]);
+    const h = harness(base, { document: dom });
+    dom.nodes[0].value = '  同步新值  ';
+    h.captureDraft(base[0].id, field, dom.nodes[0].value);
+    assert.strictEqual(dom.nodes[1].value, '  同步新值  ', field + ': input mirrors into the other mounted copy');
+    h.applyEdit(base[0].id, field, dom.nodes[1].value);       // stale copy commits its mirrored value
+    assert.strictEqual(h.calls[0].patch[field], '同步新值', field + ': stale copy cannot overwrite the new value');
+    const ack = serverCopy(base); ack[0][field] = '同步新值';
+    h.calls[0].success({ ok: true, txns: ack });
+    assert.ok(dom.nodes.every(function (node) {
+      return node.value === '同步新值' && node.defaultValue === '同步新值';
+    }), field + ': save acknowledgement updates value and defaultValue on every mounted copy');
+  });
+
+  // Blur/change can issue a text save immediately before the Record click. The combined Record
+  // request supersedes it, so a late failure from that older save cannot revert or toast.
+  const blurThenRecord = harness(base);
+  blurThenRecord.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
+  blurThenRecord.saveTextDraft(base[0].id, 'merchant');
+  blurThenRecord.commitRow(base[0].id, true);
+  assert.strictEqual(blurThenRecord.calls.length, 1,
+    'combined Record waits instead of racing the earlier blur save');
+  blurThenRecord.calls[0].failure(new Error('older blur failure'));
+  assert.strictEqual(blurThenRecord.calls.length, 2,
+    'combined Record drains after the older blur save settles');
+  const combined = serverCopy(base);
+  combined[0].merchant = '買晚餐餐廳'; combined[0].posted = true;
+  blurThenRecord.calls[1].success({ ok: true, txns: combined });
+  assert.strictEqual(blurThenRecord.TXNS[0].merchant, '買晚餐餐廳',
+    'older blur failure cannot revert the combined Record value');
+  assert.deepStrictEqual(blurThenRecord.toasts.map(function (t) { return t.msg; }),
+    ['已記帳 · 從清單移除'], 'superseded blur failure cannot add a stale error toast');
+
+  // A failed save reverts only the optimistic server-backed value. The draft remains the value
+  // every rebuilt editor shows, so the owner can retry without retyping it.
+  const failedDraft = harness(base);
+  failedDraft.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
+  failedDraft.saveTextDraft(base[0].id, 'merchant');
+  failedDraft.calls[0].failure(new Error('offline'));
+  assert.strictEqual(failedDraft.TXNS[0].merchant, base[0].merchant, 'failure reverts the optimistic model');
+  assert.strictEqual(failedDraft.draftValue(base[0], 'merchant'), '買晚餐餐廳',
+    'failure keeps the typed draft available for retry');
+  assert.ok(failedDraft.toasts[failedDraft.toasts.length - 1].err, 'failure remains visible');
+  const callsAfterFailure = failedDraft.calls.length;
+  failedDraft.saveTextDraft(base[0].id, 'merchant');
+  assert.strictEqual(failedDraft.calls.length, callsAfterFailure + 1,
+    'blurring unchanged failed text retries without requiring another input event');
+  assert.strictEqual(failedDraft.calls[1].patch.merchant, '買晚餐餐廳',
+    'the retry resends the preserved dirty draft');
+
+  // Binding coverage: the production attach() wires both editable field kinds to the same input
+  // and composition lifecycle and routes Record through the combined commit helper.
+  assert.ok(/oncompositionstart[\s\S]*beginComposition/.test(attachSrc), 'attach binds compositionstart');
+  assert.ok(/oncompositionend[\s\S]*endComposition/.test(attachSrc), 'attach binds compositionend');
+  assert.ok(/oninput[\s\S]*captureDraft/.test(attachSrc), 'attach captures live input');
+  assert.strictEqual((attachSrc.match(/handleTextKeydown\(e,this,/g) || []).length, 2,
+    'merchant and TAG keydown both use the IME-aware handler');
+  assert.ok(/field==='tag'[\s\S]*onblur=function\(\)\{[^}]*saveTextDraft\(id,field\); \}/.test(attachSrc),
+    'TAG blur retries a preserved dirty draft');
+  assert.ok(/data-emer[\s\S]*onblur=function\(\)\{[^}]*saveTextDraft\(id,'merchant'\); \}/.test(attachSrc),
+    'merchant blur retries a preserved dirty draft');
+  assert.ok(/commitRow\(id,!t\.posted\)/.test(attachSrc), 'Record uses the combined row commit');
+
   // ---- a list discarded by the sequence guard is refetched, not lost ----
   // applySplit, bulkPost and submitAdd bump the counter and adopt no list of their own. When one
   // of them supersedes an edit, the edit's authoritative list is dropped — and because 金額 is
@@ -426,7 +1130,7 @@ function run() {
     function (h) { h.submitAdd(); },
     function (h) { boom(h, function (x) { return x.adds[0]; })(); });
   debtPaidByFailedMutation('confirmDelete',
-    function (h) { h.pendingDelId = base[1].id; h.confirmDelete(); },
+    function (h) { h.pendingDelId = base[1].id; h.pendingDelRowKey = h.textRowKey(base[1].id); h.confirmDelete(); },
     function (h) { boom(h, function (x) { return x.deletes[0]; })(); });
 
   // ---- the refetch's own bookkeeping: one read at a time, re-booked when it cannot be used ----
@@ -526,6 +1230,7 @@ function run() {
   // ---- a superseded delete response neither resurrects rows nor strands the page ----
   const del = harness(base);
   del.pendingDelId = base[1].id;
+  del.pendingDelRowKey = del.textRowKey(base[1].id);
   del.confirmDelete();
   assert.strictEqual(del.deletes.length, 1, 'the delete is written');
   del.applyEdit(base[0].id, 'posted', true);
@@ -551,11 +1256,11 @@ function run() {
   assert.strictEqual(arity.reads.length, 0, 'and an ordinary run of either pays for no extra read');
 
   const split = extractFunction(script, 'applySplit');
-  assert.ok(/\.updateTxn\(\s*id,\s*\{\s*mine:\s*\(v==null\?'':v\)\s*\}\s*\)/.test(split), 'applySplit still calls updateTxn with two arguments');
+  assert.ok(/\.updateTxn\(\s*serverId,\s*\{\s*mine:\s*\(v==null\?'':v\)\s*\}\s*\)/.test(split), 'applySplit still calls updateTxn with two arguments');
   assert.ok(!/getAllTxns/.test(split), 'applySplit does not fetch the full list');
-  assert.ok(/revertTxn\(\s*id,\s*\{\s*mine:prevMine,\s*amount:prevAmt\s*\}\s*\)/.test(split), 'applySplit reverts by re-resolving its row');
+  assert.ok(/revertTxn\(\s*current\.id,\s*\{\s*mine:prevMine,\s*amount:prevAmt\s*\}\s*\)/.test(split), 'applySplit reverts by re-resolving its row');
   const bulk = extractFunction(script, 'bulkPost');
-  assert.ok(/\.updateTxn\(\s*todo\[i\],\s*\{\s*posted:true\s*\}\s*\)/.test(bulk), 'bulkPost still calls updateTxn with two arguments');
+  assert.ok(/\.updateTxn\(\s*serverId,\s*\{\s*posted:true\s*\}\s*\)/.test(bulk), 'bulkPost still calls updateTxn with two arguments');
   assert.ok(!/getAllTxns/.test(bulk), 'a ten-row bulk post does not pull ten copies of the table');
   const edit = extractFunction(script, 'applyEdit');
   assert.ok(!/getAllTxns/.test(edit), 'the edit path no longer refetches after a successful write');

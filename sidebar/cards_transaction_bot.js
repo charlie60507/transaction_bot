@@ -42,10 +42,18 @@ const RX = {
 function appendLast7DaysToSheet() {
   const lock = LockService.getScriptLock();
   try {
-    lock.tryLock(20 * 1000);
+    if (!lock.tryLock(20 * 1000)) {
+      Logger.log('Skipped: another Transactions writer still holds the script lock');
+      return;
+    }
 
     const sh = getOrCreateSheet_();
     ensureHeaderAndCheckbox_(sh);
+    // Importers participate in the same immutable-row identity contract as dashboard writes.
+    // Allocate the column before reading/appending so every newly visible transaction already
+    // has a UUID; otherwise an open dashboard can receive a legacy key that stops resolving as
+    // soon as its first mutation migrates the sheet.
+    const rowIdIdx = ensureRowIdColIndex_(sh);
 
     // Last 7-day window (inclusive, Taiwan timezone)
     const { start7d0, today0, ymdStart7d, ymdToday } = timeWindow7d_();
@@ -299,7 +307,14 @@ function appendLast7DaysToSheet() {
     // Append new rows
     if (newRows.length > 0) {
       const startRow = sh.getLastRow() + 1;
-      sh.getRange(startRow, 1, newRows.length, HEADER.length).setValues(newRows);
+      const writeWidth = sh.getLastColumn();
+      const rowsToWrite = newRows.map(function(row) {
+        const out = new Array(writeWidth).fill('');
+        for (let i = 0; i < row.length && i < writeWidth; i++) out[i] = row[i];
+        if (rowIdIdx !== -1) out[rowIdIdx] = Utilities.getUuid();
+        return out;
+      });
+      sh.getRange(startRow, 1, rowsToWrite.length, writeWidth).setValues(rowsToWrite);
 
       // Format date column (column C)
       const finalLastRow = sh.getLastRow();
@@ -693,6 +708,12 @@ function makeLooseDedupKeyFromRow_(row) {
  * Optional: one-time backfill empty column J for credit cards with "支出"
  * ------------------------- */
 function backfillExpenseForCreditCards_() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20 * 1000)) {
+    Logger.log('Backfill skipped: another Transactions writer still holds the script lock');
+    return;
+  }
+  try {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const sh = ss.getSheetByName(SHEET_NAME);
   if (!sh) return;
@@ -718,6 +739,9 @@ function backfillExpenseForCreditCards_() {
 
   if (updated > 0) rng.setValues(vals);
   Logger.log(`Backfill done. updated=${updated}`);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /** Helper: set script properties from clasp run */
