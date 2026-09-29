@@ -45,4 +45,4 @@ The previous change (`derive-source-picker`) chose TAG's type-or-pick shape so a
 
 ## Open Questions
 
-None — CT-24's Change / Acceptance is the design. The previous change's datalist open question is resolved: it does not surface, so the control is a select.
+None — this change's acceptance criteria are the design. The previous change's datalist open question is resolved: it does not surface, so the control is a select.

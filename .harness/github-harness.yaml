@@ -1,0 +1,39 @@
+schema_version: 1
+
+github:
+  host: github.com
+  allowed_repository_owners:
+    - charlie60507
+  base_branch: main
+
+identity:
+  allowed_logins:
+    - charlie60507
+
+authority:
+  approvers:
+    - charlie60507
+  recovery_authorizers:
+    - charlie60507
+
+labels:
+  routing:
+    inbox: harness:inbox
+    brainstorming: harness:brainstorming
+    ready-to-investigate: harness:ready-to-investigate
+    awaiting-info: harness:awaiting-info
+    awaiting-approval: harness:awaiting-approval
+    ready-to-dev: harness:ready-to-dev
+    in-progress: harness:in-progress
+    in-review: harness:in-review
+    blocked: harness:blocked
+
+workflow:
+  default_mode: supervised
+  branch_prefix: harness/issue
+  worktree_parent: .worktrees
+  verification_commands:
+    - node check_sidebar.js
+  required_checks: []
+  review_rounds: 5
+  same_failure_repairs: 2

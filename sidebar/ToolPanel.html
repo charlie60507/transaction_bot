@@ -980,7 +980,8 @@
     // the next natural render.
     // A free-text field commits on blur, which on a touch device is part of the SAME tap that is
     // already heading for another control; re-rendering here replaces the DOM before that tap
-    // lands, which is how 已記帳 pressed straight after typing used to be dropped (CT-16). The
+    // lands, which is how 已記帳 pressed straight after typing used to be dropped before the
+    // mobile record-tap fix. The
     // input already shows the new value, so there is nothing to repaint. Applies to every
     // free-text field — merchant and now tag, which became an input so new projects can be typed.
     if (field !== 'merchant' && field !== 'tag') render();
@@ -1205,7 +1206,7 @@
 
   // Gmail permalink for auto-recorded rows. Empty link (manual rows) returns nothing — no
   // disabled placeholder. Real <a target="_blank"> because the page has <base target="_top">
-  // and Cmd-click only works on an href. Envelope, not a sheet glyph (that is CT-20).
+  // and Cmd-click only works on an href. Envelope, not the dashboard's sheet glyph.
   function mailLink(t){
     var href=String(t.link||'').trim();
     if(!href) return '';
@@ -1513,7 +1514,7 @@
     });
     app.querySelectorAll('[data-erec]').forEach(function(b){ b.onclick=function(){ var id=this.getAttribute('data-erec'); var t=txnById(id); if(t) applyEdit(id,'posted',!t.posted); }; });
     // 我的消費: tapping the amount toggles the split editor open. Commit is Enter or 確定 only —
-    // never blur, which on touch is part of the same tap heading for another control (CT-16).
+    // never blur, which on touch is part of the same tap heading for another control.
     // Only ONE split box is ever open (openSplit is a single id), so every lookup below is a
     // plain '.split .sin' — no need to build a selector out of the row id, which is a composite
     // key containing '|' and would need escaping this file has no precedent for.

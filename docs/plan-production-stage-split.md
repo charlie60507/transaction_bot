@@ -2,9 +2,8 @@
 
 **Status: PLAN — shape agreed with the owner, not started. Open questions at the bottom.**
 
-*Recorded 2026-09-14. This file is the record; discussion continues here or on a
-GitHub Issue that links to it. (An earlier copy exists as Linear CT-26, from
-before this repo moved to GitHub Issues — treat this file as authoritative.)*
+*Recorded 2026-09-14. This file is the authoritative record; discussion continues
+here or on a GitHub Issue that links to it.*
 
 ## Goal
 

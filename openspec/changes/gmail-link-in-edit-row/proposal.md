@@ -21,4 +21,4 @@ The dashboard is the standing tab; Gmail is opened only when a row looks wrong. 
 
 - **sidebar/ToolPanel.html** (frontend): `editRow` first line plus a muted/hover-accent envelope style. The page has `<base target="_top">`, so `_blank` is mandatory or the Web App iframe navigates away.
 - **sidebar/程式碼.js**: unchanged.
-- Distinct from CT-20's spreadsheet icon (not in this change). Offline fixture asserts the anchor is present iff `link` is set and carries `target="_blank"`.
+- Distinct from the dashboard's spreadsheet icon (not in this change). Offline fixture asserts the anchor is present iff `link` is set and carries `target="_blank"`.
