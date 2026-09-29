@@ -919,7 +919,7 @@
     function pump(){
       if(q.active||!q.items.length) return;
       q.active=true; beginRowWrite(rowKey);
-      q.items.shift()(function(){ q.active=false; endRowWrite(rowKey); pump(); },rowKey);
+      q.items.shift()(function(){ q.active=false; pump(); endRowWrite(rowKey); },rowKey);
     }
     pump();
   }
@@ -1350,6 +1350,11 @@
     ROW_DELETE_INTENTS[rowKey]={sent:false,button:ok};
     trySendDelete(rowKey);
   }
+  function cancelDeleteIntent(rowKey){
+    rowKey=textRowKey(rowKey);
+    var intent=ROW_DELETE_INTENTS[rowKey]; delete ROW_DELETE_INTENTS[rowKey];
+    delBusy=false; if(intent&&intent.button) intent.button.disabled=false; closeDelModal();
+  }
   function trySendDelete(rowKey){
     rowKey=textRowKey(rowKey);
     var intent=ROW_DELETE_INTENTS[rowKey]; if(!intent||intent.sent) return;
@@ -1486,7 +1491,7 @@
       .withFailureHandler(function(err){
         var i=TXNS.indexOf(temp); if(i>=0) TXNS.splice(i,1);
         delete PENDING_ADD_ROWS[tempTextRow];
-        delete ROW_DELETE_INTENTS[tempTextRow];
+        if(ROW_DELETE_INTENTS[tempTextRow]) cancelDeleteIntent(tempTextRow);
         dropTextRowState(ensureTextRowKey(temp));
         if(contextual){ state.scope=navBefore.scope; state.selYear=navBefore.selYear; state.selMonth=navBefore.selMonth; openHeatDay=navBefore.openHeatDay; }
         settle(addSeq, null); repaint(); toast('新增失敗:'+((err&&err.message)||err), true);

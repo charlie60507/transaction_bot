@@ -535,7 +535,8 @@ function deleteTxn(messageId) {
       // Already moved (double-tap / retry after a successful write). Do not
       // throw 找不到 — the sheet is in the state the owner asked for.
       const del = ss.getSheetByName(CFG.DELETED_SHEET);
-      if (del && (sheetHasRowId_(del, messageId) || sheetHasBaseKey_(del, messageId))) {
+      const migrated = getRowIdColIndex_(sh) !== -1;
+      if (del && (sheetHasRowId_(del, messageId) || (!migrated && sheetHasBaseKey_(del, messageId)))) {
         SpreadsheetApp.flush();
         return { ok: true, txns: getAllTxns() };
       }

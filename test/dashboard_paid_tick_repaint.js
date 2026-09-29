@@ -96,7 +96,8 @@ const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isS
   'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
   'isImeKeyEvent', 'handleTextKeydown', 'normalizedTextValue', 'issueTextSave', 'drainTextWrite',
   'saveTextDraft', 'trySendRowCommit', 'commitRow', 'applySplit', 'bulkPost',
-  'submitAdd', 'confirmDelete', 'trySendDelete', 'closeDelModal', 'closeAddModal', 'chargedOf', 'isSplitTxn', 'fmt'];
+  'submitAdd', 'confirmDelete', 'cancelDeleteIntent', 'trySendDelete', 'closeDelModal', 'closeAddModal',
+  'chargedOf', 'isSplitTxn', 'fmt'];
 
 function harness(initial, opts) {
   opts = opts || {};
@@ -486,6 +487,25 @@ function run() {
   assert.strictEqual(fifo.calls[1].patch.cat, '交通');
   assert.strictEqual(fifo.TXNS[0].cat, '交通', 'an older acknowledgement cannot erase the queued optimistic value');
 
+  const fifoThenDelete = harness(fifoBase);
+  const fifoDeleteKey = fifoThenDelete.textRowKey(fifoBase[0].id);
+  fifoThenDelete.applyEdit(fifoDeleteKey, 'amount', 999);
+  fifoThenDelete.applyEdit(fifoDeleteKey, 'cat', '交通');
+  fifoThenDelete.pendingDelId = fifoBase[0].id;
+  fifoThenDelete.pendingDelRowKey = fifoDeleteKey;
+  fifoThenDelete.confirmDelete();
+  assert.strictEqual(fifoThenDelete.deletes.length, 0,
+    'delete waits while the first same-row write is active and a second is queued');
+  fifoThenDelete.calls[0].success({ ok: true, txns: amountOnly });
+  assert.strictEqual(fifoThenDelete.calls.length, 2, 'the queued write starts before delete is reconsidered');
+  assert.strictEqual(fifoThenDelete.deletes.length, 0,
+    'delete cannot overtake the second same-row write between FIFO entries');
+  const bothEdits = serverCopy(amountOnly); bothEdits[0].cat = '交通';
+  fifoThenDelete.calls[1].success({ ok: true, txns: bothEdits });
+  assert.strictEqual(fifoThenDelete.deletes.length, 1,
+    'delete dispatches only after every queued same-row write settles');
+  assert.strictEqual(fifoThenDelete.deletes[0].arg.id, 'uuid-row-a');
+
   const recordThenDelete = harness(base);
   const recordDeleteKey = recordThenDelete.textRowKey(base[0].id);
   recordThenDelete.captureDraft(recordDeleteKey, 'merchant', '先存再刪');
@@ -590,6 +610,26 @@ function run() {
   assert.strictEqual(addSnapshotRace.calls[0].patch.merchant, '快照期間輸入');
   assert.strictEqual(addSnapshotRace.TXNS.filter(function (t) { return t.id === 'manual-12|3000|80||0'; }).length, 1,
     'joining the acknowledged row removes the detached optimistic duplicate');
+
+  const addDeleteFailureDom = domStub(ADD_FORM);
+  const addDeleteFailure = harness(base, { document: addDeleteFailureDom });
+  addDeleteFailure.submitAdd();
+  const failedPending = addDeleteFailure.TXNS[addDeleteFailure.TXNS.length - 1];
+  const failedPendingKey = addDeleteFailure.textRowKey(failedPending.id);
+  addDeleteFailure.pendingDelId = failedPending.id;
+  addDeleteFailure.pendingDelRowKey = failedPendingKey;
+  addDeleteFailure.confirmDelete();
+  assert.strictEqual(addDeleteFailure.delBusy, true, 'confirmed delete stays pending while add is unresolved');
+  assert.strictEqual(addDeleteFailure.deletes.length, 0, 'temporary ids are never sent to deleteTxn');
+  assert.strictEqual(addDeleteFailureDom.getElementById('d-ok').disabled, true);
+  addDeleteFailure.adds[0].failure(new Error('add failed'));
+  assert.strictEqual(addDeleteFailure.delBusy, false, 'add failure releases the global delete guard');
+  assert.strictEqual(addDeleteFailure.ROW_DELETE_INTENTS[failedPendingKey], undefined,
+    'add failure removes the stranded delete intent');
+  assert.strictEqual(addDeleteFailureDom.getElementById('d-ok').disabled, false,
+    'add failure re-enables the delete confirmation button');
+  assert.strictEqual(addDeleteFailure.pendingDelId, null);
+  assert.strictEqual(addDeleteFailure.pendingDelRowKey, null);
 
   // Enter/Escape belong to the IME while composition is active. keyCode 229 is the fallback
   // used by browsers that do not expose KeyboardEvent.isComposing reliably.
