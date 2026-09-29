@@ -1191,6 +1191,7 @@
       .withFailureHandler(function(err){
         settle(seq, null); var current=textTxn(rowKey);
         if(current&&current[field]===applied) revertTxn(current.id, undo); else repaint();
+        if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey);
         toast('寫入失敗:'+((err&&err.message)||err), true); done();
       })
       .updateTxn(serverId, patch, true);
@@ -1227,6 +1228,7 @@
         var active=q.active, current=textDraft(rowKey,field), rowIntent=ROW_COMMIT_INTENTS[rowKey];
         if(active&&active.token===token) q.active=null;
         settle(seq,null);
+        if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey);
         if(!rowIntent&&!q.pending){
           if((current&&current.revision===revision)||isCancel){
             var currentTxn=textTxn(rowKey), undo={}; undo[field]=prev;
@@ -1312,6 +1314,7 @@
         });
         delete ROW_COMMIT_INTENTS[id];
         settle(seq,null);
+        if(ROW_DELETE_INTENTS[id]) cancelDeleteIntent(id);
         var currentTxn=textTxn(id); if(currentTxn) revertTxn(currentTxn.id,intent.undo); else repaint();
         toast('寫入失敗:'+((err&&err.message)||err),true);
         ['merchant','tag'].forEach(function(field){ drainTextWrite(id,field); });
@@ -1572,6 +1575,7 @@
       .withFailureHandler(function(err){
         settle(seq, null); var current=textTxn(rowKey);
         if(current) revertTxn(current.id, { mine:prevMine, amount:prevAmt }); else repaint();
+        if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey);
         toast('寫入失敗:'+((err&&err.message)||err), true); done();
       })
       .updateTxn(serverId, { mine: (v==null?'':v) });
@@ -1710,7 +1714,7 @@
       var serverId=resolveTextRowId(rowKey);
       google.script.run
         .withSuccessHandler(function(){ settle(seq, null); done(); step(i+1); })
-        .withFailureHandler(function(){ settle(seq, null); var t=textTxn(rowKey); if(t) t.posted=false; failed++; done(); step(i+1); })
+        .withFailureHandler(function(){ settle(seq, null); var t=textTxn(rowKey); if(t) t.posted=false; if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey); failed++; done(); step(i+1); })
         .updateTxn(serverId, { posted:true });
       });
     })(0);

@@ -550,6 +550,25 @@ function run() {
   assert.strictEqual(newerTextThenDelete.deletes.length, 1,
     'delete dispatches after the last pre-confirmation text revision is durable');
 
+  const failedTextBase = serverCopy(base); failedTextBase[0].rowId = 'uuid-row-a';
+  const failedTextThenDelete = harness(failedTextBase);
+  const failedTextKey = failedTextThenDelete.textRowKey(failedTextBase[0].id);
+  failedTextThenDelete.captureDraft(failedTextKey, 'merchant', '第一版');
+  failedTextThenDelete.saveTextDraft(failedTextKey, 'merchant');
+  failedTextThenDelete.captureDraft(failedTextKey, 'merchant', '寫入失敗的最後一版');
+  failedTextThenDelete.saveTextDraft(failedTextKey, 'merchant');
+  failedTextThenDelete.pendingDelId = failedTextBase[0].id;
+  failedTextThenDelete.pendingDelRowKey = failedTextKey;
+  failedTextThenDelete.confirmDelete();
+  const failedFirstAck = serverCopy(failedTextBase); failedFirstAck[0].merchant = '第一版';
+  failedTextThenDelete.calls[0].success({ ok: true, txns: failedFirstAck });
+  failedTextThenDelete.calls[1].failure(new Error('write failed'));
+  assert.strictEqual(failedTextThenDelete.deletes.length, 0,
+    'a failed final text revision cancels delete instead of archiving stale text');
+  assert.strictEqual(failedTextThenDelete.ROW_DELETE_INTENTS[failedTextKey], undefined);
+  assert.strictEqual(failedTextThenDelete.delBusy, false, 'the row remains available for a deliberate retry');
+  assert.ok(failedTextThenDelete.textTxn(failedTextKey), 'the row is retained after the protected write fails');
+
   // Every asynchronous callback that can rebuild the transaction panel goes through repaint(),
   // so an unrelated add/delete/bulk response cannot detach an active native IME node.
   function assertAsyncRepaintDefers(name, issue, resolve) {
@@ -623,6 +642,26 @@ function run() {
   assert.strictEqual(addTextDeleteBeforeAck.deletes.length, 1,
     'pending manual delete starts only after its final text is durable');
   assert.strictEqual(addTextDeleteBeforeAck.deletes[0].arg.id, 'uuid-manual-10b');
+
+  const addTextDeleteFailure = harness(base);
+  addTextDeleteFailure.submitAdd();
+  const failingManual = addTextDeleteFailure.TXNS[addTextDeleteFailure.TXNS.length - 1];
+  const failingManualKey = addTextDeleteFailure.textRowKey(failingManual.id);
+  addTextDeleteFailure.captureDraft(failingManualKey, 'merchant', '不能遺失的文字');
+  addTextDeleteFailure.saveTextDraft(failingManualKey, 'merchant');
+  addTextDeleteFailure.pendingDelId = failingManual.id;
+  addTextDeleteFailure.pendingDelRowKey = failingManualKey;
+  addTextDeleteFailure.confirmDelete();
+  addTextDeleteFailure.adds[0].success({
+    id: 'manual-10c|3000|80||0', rowId: 'uuid-manual-10c', hm: '', y: 2026, m: 8, d: 12
+  });
+  addTextDeleteFailure.calls[0].failure(new Error('write failed'));
+  assert.strictEqual(addTextDeleteFailure.deletes.length, 0,
+    'a pending manual row is not deleted when its final text fails to persist');
+  assert.strictEqual(addTextDeleteFailure.ROW_DELETE_INTENTS[failingManualKey], undefined);
+  assert.strictEqual(addTextDeleteFailure.delBusy, false);
+  assert.ok(addTextDeleteFailure.textTxn(failingManualKey),
+    'the acknowledged manual row remains visible so the owner can retry');
 
   const addRecordBeforeAck = harness(base);
   addRecordBeforeAck.submitAdd();
