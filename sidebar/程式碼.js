@@ -460,29 +460,27 @@ function addTxn(fields) {
   // sorted and the new row sits among its own time period.
   const pos = insertPositionForDate_(sh, dt);
   const rowNum = pos.row;
-  if (!pos.appending) sh.insertRowBefore(rowNum);
-  sh.getRange(rowNum, 1, 1, ncol).setValues([row]);
-  // The format follows the value: a date-only row must not display 00:00:00 in the sheet —
-  // that is the same lie the dashboard refuses to tell, told in the other app instead. Display
-  // only; nothing ever reads this format back to decide whether a row has a time.
-  sh.getRange(rowNum, CFG.IDX_DATE + 1)
-    .setNumberFormat(time ? 'yyyy/mm/dd hh:mm:ss' : 'yyyy/mm/dd');
-  sh.getRange(rowNum, CFG.IDX_POSTED + 1).setDataValidation(
-    SpreadsheetApp.newDataValidation().requireCheckbox().build());
-  sh.getRange(rowNum, CFG.IDX_POSTED + 1).setValue(true);
-
-  return {
+  const checkboxValidation = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+  // Build everything the response needs before the persistent write. Once setValues succeeds,
+  // there must be no later validation/formatting step that can turn a committed transaction into
+  // an apparent failure and invite the user to add the same purchase again.
+  const result = {
     y: dt.getFullYear(), m: dt.getMonth() + 1, d: dt.getDate(),
-    // Derived exactly as getAllTxns will derive it on the next load, so the optimistic row
-    // sits in its final chronological position instead of jumping when the real row arrives.
     hm: rowHM_(dt),
-    // A manually added row is never split on creation — 我的消費 is left blank, so
-    // amount === charged and `mine` is null. Split it afterwards by tapping the amount.
     type: type, amount: amount, charged: amount, mine: null, cat: cat || '未分類',
     merchant: String(fields.merchant || ''), tag: String(fields.tag || ''),
     bank: source, last4: '', link: '',
     id: txnKey_(row, 0), rowId: rowId, posted: true
   };
+  if (!pos.appending) sh.insertRowBefore(rowNum);
+  // The format follows the value: a date-only row must not display 00:00:00 in the sheet —
+  // that is the same lie the dashboard refuses to tell, told in the other app instead. Display
+  // only; nothing ever reads this format back to decide whether a row has a time.
+  sh.getRange(rowNum, CFG.IDX_DATE + 1)
+    .setNumberFormat(time ? 'yyyy/mm/dd hh:mm:ss' : 'yyyy/mm/dd');
+  sh.getRange(rowNum, CFG.IDX_POSTED + 1).setDataValidation(checkboxValidation);
+  sh.getRange(rowNum, 1, 1, ncol).setValues([row]);
+  return result;
   } finally {
     lock.releaseLock();
   }

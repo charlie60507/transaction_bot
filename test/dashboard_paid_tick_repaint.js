@@ -96,7 +96,7 @@ const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isS
   'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
   'isImeKeyEvent', 'handleTextKeydown', 'normalizedTextValue', 'issueTextSave', 'drainTextWrite',
   'saveTextDraft', 'trySendRowCommit', 'commitRow', 'applySplit', 'bulkPost',
-  'submitAdd', 'confirmDelete', 'cancelDeleteIntent', 'trySendDelete', 'closeDelModal', 'closeAddModal',
+  'submitAdd', 'openDelModal', 'confirmDelete', 'cancelDeleteIntent', 'trySendDelete', 'closeDelModal', 'closeAddModal',
   'chargedOf', 'isSplitTxn', 'fmt'];
 
 function harness(initial, opts) {
@@ -432,6 +432,11 @@ function run() {
   duplicateRekey.saveTextDraft(secondLogical, 'merchant');
   assert.strictEqual(duplicateRekey.calls[0].id, shifted[1].id,
     'the second draft writes to the second row after occurrence renumbering');
+  duplicateRekey.openDelModal(secondLogical);
+  assert.strictEqual(duplicateRekey.pendingDelRowKey, secondLogical,
+    'a delete click from stale DOM keeps targeting its logical row after occurrence renumbering');
+  assert.strictEqual(duplicateRekey.document.getElementById('d-mer').textContent, '第二列草稿',
+    'the delete confirmation describes the intended row, not the row that inherited its old id');
 
   const threeDupes = [
     row({ id: 'del|1000|100|1234|0', amount: 100, merchant: '刪除列' }),

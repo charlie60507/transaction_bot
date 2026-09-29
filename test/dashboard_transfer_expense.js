@@ -59,7 +59,10 @@ class Range {
   }
   setValue(value) { return this.setValues([[value]]); }
   setNumberFormat() { return this; }
-  setDataValidation() { return this; }
+  setDataValidation() {
+    if (this.sheet.failDataValidation) throw new Error('fixture validation failure');
+    return this;
+  }
   sort(specs) {
     const body = this.sheet.rows.splice(this.row - 1, this.numRows);
     body.sort((a, b) => {
@@ -127,6 +130,7 @@ function loadBot(spreadsheet, threads) {
     SPREADSHEET_ID: 'fixture-sheet', SORT_ORDER: 'NONE', TZ: 'Asia/Taipei',
     FUBON_TRANSFER_QUERY: 'fixture-fubon-transfer'
   };
+  let uuidSeq = 0;
   const sandbox = {
     console: { log: () => {} }, Logger: { log: () => {} }, Date: FixtureDate,
     CFG, Set, Map,
@@ -134,6 +138,7 @@ function loadBot(spreadsheet, threads) {
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {}, waitLock: () => true }) },
     SpreadsheetApp: {
       openById: () => spreadsheet,
+      flush: () => {},
       newDataValidation: () => ({ requireCheckbox() { return this; }, build: () => ({}) })
     },
     GmailApp: {
@@ -143,10 +148,16 @@ function loadBot(spreadsheet, threads) {
         return [];
       }
     },
-    Utilities: { formatDate: (date, tz, fmt) => formatDate(date, fmt) },
+    Utilities: {
+      formatDate: (date, tz, fmt) => formatDate(date, fmt),
+      getUuid: () => 'import-uuid-' + (++uuidSeq)
+    },
     UrlFetchApp: { fetch: () => { throw new Error('Gemini must not run in this fixture'); } }
   };
   vm.createContext(sandbox);
+  const serverSource = fs.readFileSync(SERVER, 'utf8');
+  vm.runInContext(['isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_']
+    .map(name => extractFunction(serverSource, name)).join('\n'), sandbox);
   vm.runInContext(fs.readFileSync(BOT, 'utf8'), sandbox, { filename: BOT });
   return sandbox;
 }
@@ -232,6 +243,10 @@ function run() {
   assert.strictEqual(cathayRow[10], '', 'Cathay transfer bypasses automatic manual categorization');
   assert.strictEqual(fubonRow[10], '', 'Fubon transfer bypasses automatic manual categorization');
   assert.ok(!transactions.rows.some(row => row[8] === 'fubon-transfer-init'), 'richer Fubon success notice remains preferred');
+  const importedRowIdIndex = transactions.rows[0].indexOf('交易 ID');
+  assert.ok(importedRowIdIndex >= 0, 'the importer migrates the immutable row-id column');
+  assert.ok(cathayRow[importedRowIdIndex], 'a newly imported row receives its UUID in the same locked write');
+  assert.ok(fubonRow[importedRowIdIndex], 'every imported row is immediately addressable by UUID');
 
   const server = loadServer(spreadsheet);
   server.ensureRowIdColIndex_(transactions);
@@ -292,6 +307,14 @@ function run() {
   server.updateTxn(manual.rowId, { type: '轉帳' });
   assert.strictEqual(server.getAllTxns().find(txn => txn.id.startsWith('manual-fixture-uuid-')).type, '轉帳',
     'manual editing still accepts transfer type');
+
+  transactions.failDataValidation = true;
+  assert.throws(() => server.addTxn({
+    date: '2026-09-11', amount: 90, type: '支出', source: '現金', merchant: '不可半成功'
+  }), /fixture validation failure/);
+  transactions.failDataValidation = false;
+  assert.ok(!transactions.rows.some(row => row[5] === '不可半成功'),
+    'a pre-write formatting or validation failure cannot leave a persisted transaction behind');
 
   const deleting = server.getAllTxns().find(txn => txn.id.startsWith('fubon-transfer-success|'));
   const fubonRowNumber = transactions.rows.findIndex(row => row[8] === 'fubon-transfer-success') + 1;

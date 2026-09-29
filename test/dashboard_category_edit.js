@@ -110,6 +110,7 @@ function run() {
     openRow: null,
     PALETTE: ['#5f9aa0'],
     catDelta: function () { return ''; },
+    ensureTextRowKey: function (t) { return t._textKey || String(t.id); },
     splitBox: function () { return ''; },
     selOpts: function () { return ''; },
     distinctCats: function () { return ['飲食']; }
@@ -118,6 +119,11 @@ function run() {
   assert.ok(html.indexOf('data-ef="amount"') >= 0, 'row exposes amount correction');
   assert.ok(html.indexOf('value="120"') >= 0, 'amount editor carries current value');
   assert.ok(html.indexOf('data-amt="msg|date|120|1234|0"') >= 0, 'split affordance retains stable row identity');
+  const logicalHtml = fns.editRow(sample({ _textKey: 'client-row-7' }));
+  assert.ok(logicalHtml.includes('data-amt="client-row-7"'),
+    'a stale split control targets the logical row rather than a recyclable composite id');
+  assert.ok(logicalHtml.includes('data-del="msg|date|120|1234|0" data-trow="client-row-7"'),
+    'a stale delete control carries the logical row identity');
 
   const incomeHtml = fns.editRow(sample({ type: '收入' }));
   assert.strictEqual(incomeHtml.indexOf('data-ef="amount"'), -1, 'income rows do not expose expense amount correction');

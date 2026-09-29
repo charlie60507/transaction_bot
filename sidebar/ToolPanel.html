@@ -1326,10 +1326,13 @@
   }
   // ---------- manual add / delete ----------
   function isManual(t){ return !!(t && t.id && String(t.id).indexOf('manual-')===0); }
-  function delBtn(t){ return '<button class="txdel" data-del="'+esc(t.id)+'" title="刪除">🗑</button>'; }
+  function delBtn(t){
+    var rowKey=(typeof ensureTextRowKey==='function')?ensureTextRowKey(t):String(t.id);
+    return '<button class="txdel" data-del="'+esc(t.id)+'" data-trow="'+esc(rowKey)+'" title="刪除">🗑</button>';
+  }
   var pendingDelId=null, pendingDelRowKey=null, delBusy=false;
   function openDelModal(id){
-    var t=txnById(id); if(!t) return;
+    var t=textTxn(id); if(!t) return;
     pendingDelId=id; pendingDelRowKey=ensureTextRowKey(t);
     document.getElementById('d-mer').textContent=t.merchant||'(無說明)';
     document.getElementById('d-amt').textContent=(t.type==='收入'?'+':'')+'$'+fmt(t.amount);
@@ -1592,7 +1595,7 @@
     var tc=typeColor(t.type);
     var compactAmount=(t.type==='轉帳')
       ? '<span class="amt num" style="color:'+tc+'">$'+fmt(t.amount)+'</span>'
-      : '<button type="button" class="amt amtbtn num" data-amt="'+esc(t.id)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button>';
+      : '<button type="button" class="amt amtbtn num" data-amt="'+esc(textRow)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button>';
     return '<div class="erow'+(t.posted?' done':'')+'" data-erow="'+esc(t.id)+'">'
       // The expense amount IS the split control. ~5 of ~100 rows a month are split, so a permanent
       // input would ask a question whose answer is "no" 95% of the time; an unsplit row must
@@ -1603,7 +1606,7 @@
       // pre-June rows look exactly as they do today. Shown to the minute: 富邦 gives seconds and
       // 國泰 does not, so seconds would advertise a precision most timed rows do not have.
       +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" value="'+esc(currentText('merchant'))+'" placeholder="(無說明)" spellcheck="false">'+mailLink(t)+compactAmount+'</div>'
-      +(t.type==='支出' && openSplit===t.id ? splitBox(t) : '')
+      +(t.type==='支出' && openSplit===textRow ? splitBox(t) : '')
       +'<div class="er2">'
         +(canCorrectAmount(t)?'<div class="fld"><span class="lb">金額</span><input class="amtcor num" type="number" inputmode="decimal" min="0.01" step="0.01" data-ef="amount" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" value="'+esc(t.amount)+'" aria-label="金額"></div>':'')
         +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
@@ -1929,7 +1932,7 @@
     });
     var addB=app.querySelector('[data-add]'); if(addB) addB.onclick=function(){ openAddModal(null); };
     var settingsB=app.querySelector('[data-settings]'); if(settingsB) settingsB.onclick=openSettingsModal;
-    app.querySelectorAll('[data-del]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); deleteTxnRow(this.getAttribute('data-del')); }; });
+    app.querySelectorAll('[data-del]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); deleteTxnRow(this.getAttribute('data-trow')||this.getAttribute('data-del')); }; });
     app.querySelectorAll('.ctl[data-pscope]').forEach(function(b){ b.onclick=function(){ state.projScope=this.getAttribute('data-pscope'); openProj=null; render(); }; });
     app.querySelectorAll('.ctl[data-iscope]').forEach(function(b){ b.onclick=function(){ state.inboxScope=this.getAttribute('data-iscope'); render(); }; });
     var ibd=app.querySelector('[data-inboxdone]'); if(ibd) ibd.onclick=function(){ state.inboxDone=!state.inboxDone; render(); };
