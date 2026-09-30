@@ -19,10 +19,10 @@ function run() {
   assert.strictEqual(/settings-account|新增帳戶|a-source-add/.test(addOverlay), false, 'transaction entry contains no account management controls');
   assert.strictEqual(html.indexOf('list="banklist"'), -1, 'no datalist binding on 來源');
   assert.strictEqual(html.indexOf('id="banklist"'), -1, 'banklist datalist is gone');
-  assert.ok(html.indexOf('id="taglist"') >= 0, 'TAG datalist is untouched');
+  assert.strictEqual(html.indexOf('id="taglist"'), -1, 'TAG datalist is gone');
 
   const elements = {};
-  ['a-cat', 'a-tag', 'a-date', 'a-time', 'a-source', 'a-amt', 'a-mer'].forEach(id => {
+  ['a-cat', 'a-date', 'a-time', 'a-source', 'a-amt', 'a-mer'].forEach(id => {
     elements[id] = { value: '', innerHTML: '', classList: { add() {}, remove() {} } };
   });
   const fns = loadFns(['distinctBanks', 'isManual', 'openAddModal'], {

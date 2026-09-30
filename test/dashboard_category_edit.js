@@ -60,7 +60,6 @@ function serverFixture(type, mineValue) {
     getSpreadsheet_: () => ({ getSheetByName: () => sheet }),
     asTxnKey_: key => String(key),
     findRowByKey_: () => 2,
-    getTagColIndex_: () => 11,
     getMineColIndex_: () => 12,
     ensureMineColIndex_: () => { headerEnsures++; return 12; },
     rowHM_: () => '12:00',
@@ -83,7 +82,7 @@ function sample(overrides) {
   return Object.assign({
     id: 'msg|date|120|1234|0', bank: '富邦', last4: '1234', hm: '12:00',
     merchant: '星巴克', amount: 120, charged: 120, mine: null,
-    type: '支出', cat: '飲食', tag: '', posted: true, link: ''
+    type: '支出', cat: '飲食', posted: true, link: ''
   }, overrides);
 }
 
@@ -144,6 +143,7 @@ function run() {
   assert.strictEqual(mappedTransfer.amount, 120, 'transfer mapping uses raw 金額_NTD even when 我的消費 is populated');
   assert.strictEqual(mappedTransfer.charged, 120, 'transfer retains the raw charged amount');
   assert.strictEqual(mappedTransfer.mine, null, 'transfer mapping exposes no split state');
+  assert.ok(!Object.prototype.hasOwnProperty.call(mappedTransfer, 'tag'), 'getAllTxns emits no tag field');
 
   const transferResult = transferServer.update({ amount: 150 }, true);
   assert.deepStrictEqual(transferServer.writes, [[2, 5, 150]], 'transfer correction writes only 金額_NTD');

@@ -57,8 +57,8 @@ function loadServer(sheet) {
 
 function run() {
   const sheet = new Sheet([
-    ['交易關鍵字', '種類', '', '種類清單', 'TAG清單'],
-    ['理髮', '個人', '', '個人', '生活']
+    ['交易關鍵字', '種類', '', '種類清單', ''],
+    ['理髮', '個人', '', '個人', '']
   ]);
   const server = loadServer(sheet);
 

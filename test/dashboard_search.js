@@ -6,7 +6,7 @@ const { loadFns, PANEL } = require('./extract_panel');
 function T(partial) {
   return Object.assign({
     id: 'id', y: 2026, m: 8, d: 10, hm: '10:00', merchant: 'x', cat: '其他',
-    type: '支出', amount: 1, charged: 1, tag: '', bank: '富邦'
+    type: '支出', amount: 1, charged: 1, bank: '富邦'
   }, partial);
 }
 
@@ -25,7 +25,6 @@ function run() {
     T({ id: 'exact-350', merchant: '全聯', cat: '日用', amount: 350, charged: 350, y: 2026, m: 8, d: 1 }),
     T({ id: 'charged-350', merchant: '聚餐', cat: '飲食', amount: 200, charged: 350, y: 2026, m: 6, d: 20 }),
     T({ id: 'income-pay', merchant: '薪水', cat: '薪資', type: '收入', amount: 80000, charged: 80000, y: 2026, m: 5, d: 5 }),
-    T({ id: 'tag-only', merchant: '中油', cat: '交通', tag: '重機', amount: 400, charged: 400, y: 2026, m: 4, d: 2 }),
     T({ id: 'bank-only', merchant: '無名店', cat: '其他', bank: '國泰', amount: 99, charged: 99, y: 2026, m: 3, d: 1 })
   ];
   const fns = loadFns(['numericQuery', 'txnMatchesQuery', 'searchHits', 'searchPanel'], {
@@ -46,7 +45,6 @@ function run() {
   assert.deepStrictEqual(ids(fns.searchHits(txns, '$350')).sort(), amt);
   assert.deepStrictEqual(ids(fns.searchHits(txns, '1,350')), ['starbucks-aug']);
 
-  assert.deepStrictEqual(ids(fns.searchHits(txns, '重機')), [], 'TAG is not a search field');
   assert.deepStrictEqual(ids(fns.searchHits(txns, '國泰')), [], 'bank is not a search field');
   assert.deepStrictEqual(ids(fns.searchHits(txns, '2026')), [], 'date is not a search field');
 
