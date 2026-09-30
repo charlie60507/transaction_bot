@@ -353,7 +353,7 @@ function run() {
   // ---- IME-aware drafts: composition defers destructive repaint and flushes once ----
   ['merchant'].forEach(function (field) {
     const h = harness(base);
-    const initial = field === 'merchant' ? '買晚餐' : '生活';
+    const initial = '買晚餐';
     const finalValue = initial + '餐廳';
     h.beginComposition(base[0].id, field, initial);
     h.captureDraft(base[0].id, field, finalValue);
@@ -810,6 +810,37 @@ function run() {
     'Escape queues a compensating restore when the dirty value is already in flight');
   assert.strictEqual(activeCancel.calls[1].patch.merchant, base[0].merchant,
     'the compensating write restores the pre-draft committed value');
+
+  // The amount corrector (data-ef="amount") shares the Escape handler, but only merchant has
+  // mounted copies to keep in step. Escape on the amount must restore the committed amount into
+  // the focused input alone: textInputMatches queries nothing, so a merchant copy of the same row
+  // is never overwritten with the amount.
+  const amountQueries = [];
+  const merchantCopy = { value: base[0].merchant, defaultValue: base[0].merchant };
+  const amountDom = {
+    activeElement: null,
+    getElementById: function () { return null; },
+    querySelector: function (sel) { amountQueries.push(sel); return null; },
+    querySelectorAll: function (sel) { amountQueries.push(sel); return [merchantCopy]; }
+  };
+  const amountEsc = harness(base, { document: amountDom });
+  assert.deepStrictEqual(Array.from(amountEsc.textInputMatches(base[0].id, 'amount')), [],
+    'textInputMatches returns no copies for the amount field');
+  assert.strictEqual(amountQueries.length, 0, 'textInputMatches queries nothing for the amount field');
+  amountEsc.captureDraft(base[0].id, 'amount', '999');
+  let amountPrevented = 0, amountBlurred = 0;
+  const amountInput = { value: '999', defaultValue: String(base[0].amount),
+    blur: function () { amountBlurred++; } };
+  amountEsc.handleTextKeydown({ key: 'Escape', preventDefault: function () { amountPrevented++; } },
+    amountInput, base[0].id, 'amount');
+  assert.strictEqual(amountInput.value, String(base[0].amount), 'amount Escape restores the committed amount');
+  assert.strictEqual(amountPrevented, 1, 'amount Escape is handled');
+  assert.strictEqual(amountBlurred, 1, 'amount Escape blurs the corrector');
+  assert.strictEqual(amountEsc.textDraft(base[0].id, 'amount'), null, 'amount Escape drops the dirty draft');
+  assert.strictEqual(amountQueries.length, 0, 'amount Escape makes no DOM query for copies');
+  assert.strictEqual(merchantCopy.value, base[0].merchant, 'amount Escape leaves a merchant copy untouched');
+  assert.strictEqual(merchantCopy.defaultValue, base[0].merchant,
+    'amount Escape leaves a merchant copy default untouched');
 
   // ---- an old save acknowledgement cannot clear characters typed while it was in flight ----
   ['merchant'].forEach(function (field) {
