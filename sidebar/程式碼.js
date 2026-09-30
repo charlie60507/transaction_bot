@@ -26,8 +26,7 @@ const CFG = {
   IDX_CATEGORY_MANUAL: 10, // K: 種類(手動) — primary category
 
   // 我的消費: how much of the charge was actually MY consumption; blank ⇒ all of it.
-  // Located by HEADER NAME, never by a fixed index — TAG already lives somewhere past K
-  // and hardcoding a position would collide with it. Absent header ⇒ the feature is
+  // Located by HEADER NAME, never by a fixed index. Absent header ⇒ the feature is
   // simply inert and every row reads as "all mine", i.e. exactly today's behaviour.
   HDR_MINE: '我的消費',
   HDR_ROW_ID: '交易 ID',
@@ -179,7 +178,6 @@ function getAllTxns() {
   const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
   if (!sh || sh.getLastRow() <= 1) return [];
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
-  const tagIdx = getTagColIndex_(sh);            // -1 if no TAG header
   const mineIdx = getMineColIndex_(sh);          // -1 if no 我的消費 header
   const rowIdIdx = getRowIdColIndex_(sh);         // -1 only for legacy/offline fixtures
   const out = [];
@@ -216,7 +214,6 @@ function getAllTxns() {
         ? null : (isNaN(Number(row[mineIdx])) ? null : Number(row[mineIdx])),
       cat: rowCategory_(row) || '未分類',
       merchant: String(row[CFG.IDX_MERCHANT] || ''),
-      tag: tagIdx === -1 ? '' : String(row[tagIdx] || '').trim(),
       bank: String(row[CFG.IDX_BANK] || ''),
       last4: String(row[CFG.IDX_LAST4] || ''),
       link: String(row[CFG.IDX_LINK] || ''),
@@ -312,7 +309,6 @@ function isAmountCorrectionType_(type) {
  *   merchant -> F (交易內容/商店; the row title shown in the heatmap day list)
  *   cat    -> K (種類手動; leaves auto G untouched)
  *   type   -> J (收支別; must be 支出/收入/轉帳)
- *   tag    -> TAG column (by header)
  *   mine   -> 我的消費 column (by header); '' or null clears it (⇒ whole charge is mine)
  *   amount -> raw 金額 for transfers; displayed amount for expenses (我的消費 when split)
  *   posted -> A (已記帳 checkbox; boolean)
@@ -366,11 +362,6 @@ function updateTxn(messageId, patch, wantTxns) {
     if (['支出', '收入', '轉帳'].indexOf(t) === -1) throw new Error('收支別不合法: ' + t);
     sh.getRange(rowNum, CFG.IDX_INOUT + 1).setValue(t);
   }
-  if ('tag' in patch) {
-    const tagIdx = getTagColIndex_(sh);
-    if (tagIdx === -1) throw new Error('找不到 TAG 欄');
-    sh.getRange(rowNum, tagIdx + 1).setValue(String(patch.tag || ''));
-  }
   if (editsAmount) {
     // A transfer always corrects raw 金額 without consulting 我的消費. For expenses, the
     // displayed amount is 我的消費 on split rows and raw 金額 on ordinary rows, preserving
@@ -411,7 +402,7 @@ function updateTxn(messageId, patch, wantTxns) {
  * Append a manually-entered transaction (cash / non-email sources). Gets a
  * synthetic `manual-<uuid>` MessageId (col I) so it can be edited/deleted like
  * any row and never collides with the bot's dedup. 已記帳 (A) defaults to true.
- * fields: { date:'YYYY-MM-DD', time:'HH:mm'|'', amount, type, source, merchant, cat, tag }
+ * fields: { date:'YYYY-MM-DD', time:'HH:mm'|'', amount, type, source, merchant, cat }
  * `time` is optional — cash is often recorded without caring what time it was. Returns the
  * mapped txn (same shape as getAllTxns) for optimistic UI.
  */
@@ -431,7 +422,6 @@ function addTxn(fields) {
   const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
   if (!sh) throw new Error('找不到 Transactions 工作表');
   const rowIdIdx = ensureRowIdColIndex_(sh);
-  const tagIdx = getTagColIndex_(sh);
   const ncol = sh.getLastColumn();
   const id = 'manual-' + Utilities.getUuid();
   const source = String(fields.source || '現金');
@@ -453,7 +443,6 @@ function addTxn(fields) {
   row[CFG.IDX_MESSAGEID] = id;
   row[CFG.IDX_INOUT] = type;
   row[CFG.IDX_CATEGORY_MANUAL] = cat;
-  if (tagIdx !== -1) row[tagIdx] = String(fields.tag || '');
   if (rowIdIdx !== -1) row[rowIdIdx] = rowId;
 
   // Insert into the date-ordered position rather than appending, so the sheet stays
@@ -468,7 +457,7 @@ function addTxn(fields) {
     y: dt.getFullYear(), m: dt.getMonth() + 1, d: dt.getDate(),
     hm: rowHM_(dt),
     type: type, amount: amount, charged: amount, mine: null, cat: cat || '未分類',
-    merchant: String(fields.merchant || ''), tag: String(fields.tag || ''),
+    merchant: String(fields.merchant || ''),
     bank: source, last4: '', link: '',
     id: txnKey_(row, 0), rowId: rowId, posted: true
   };
@@ -634,7 +623,6 @@ function rowCategory_(row) {
   return String(row[CFG.IDX_CATEGORY_MANUAL] || '').trim();
 }
 
-/** 0-based index of the "TAG" header in Transactions, or -1 if absent */
 /**
  * Timestamp of a column-C cell, or NaN when it holds no usable date. Dates normally
  * arrive as Date objects, but a hand-typed cell can come back as a string — both must
@@ -717,15 +705,10 @@ function insertPositionForDate_(sh, dt) {
   return { row: last + 1, appending: true };
 }
 
-function getTagColIndex_(sh) {
-  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
-  return headers.indexOf('TAG');
-}
-
 /**
  * 0-based index of the 我的消費 header in Transactions, or -1 if absent.
  *
- * Matches on the TRIMMED cell, unlike getTagColIndex_'s exact indexOf. This header is typed by
+ * Matches on the TRIMMED cell rather than an exact indexOf. This header is typed by
  * hand into the sheet rather than written by the bot, and a trailing space is invisible in the
  * cell but makes an exact match fail — which surfaces only as a write error much later, with
  * nothing on screen to explain it.
@@ -748,7 +731,7 @@ function headerRow_(sh) {
  *
  * Asking the owner to add the header by hand was a mistake: it is a silent prerequisite that
  * fails much later, at write time, in a completely different part of the UI. Measured cost of
- * that design — two rounds of "寫入失敗" against a sheet whose row 1 ended at L[TAG] with no
+ * that design — two rounds of "寫入失敗" against a sheet whose row 1 ended at column L with no
  * 我的消費 anywhere.
  *
  * Creating it is safe and purely additive: the header goes one past the last column that holds

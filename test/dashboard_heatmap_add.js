@@ -32,7 +32,7 @@ function recordingRun(calls) {
 
 const FIELDS = {
   'a-date': '2026-08-18', 'a-time': '', 'a-amt': '80', 'a-type': '支出',
-  'a-source': '現金', 'a-mer': '午餐', 'a-cat': '飲食', 'a-tag': ''
+  'a-source': '現金', 'a-mer': '午餐', 'a-cat': '飲食'
 };
 
 function submitHarness(opts) {
@@ -61,7 +61,7 @@ function submitHarness(opts) {
 
 function run() {
   const modalDoc = form({
-    'a-date': '', 'a-time': '19:40', 'a-cat': '', 'a-tag': 'old', 'a-source': '',
+    'a-date': '', 'a-time': '19:40', 'a-cat': '', 'a-source': '',
     'a-amt': '9', 'a-mer': 'old'
   });
   const modal = loadFns(['openAddModal', 'closeAddModal'], {

@@ -10,7 +10,7 @@ const BOT = path.resolve(__dirname, '..', 'sidebar', 'cards_transaction_bot.js')
 const SERVER = path.resolve(__dirname, '..', 'sidebar', '程式碼.js');
 const HEADERS = [
   '已記帳', '銀行', '授權日期時間', '卡末四碼', '金額_NTD', '交易內容/商店', '類別',
-  'Gmail連結', 'MessageId', '收支別', '種類(手動)', 'TAG', '我的消費'
+  'Gmail連結', 'MessageId', '收支別', '種類(手動)', '我的消費'
 ];
 const CFG = {
   SPREADSHEET_ID: 'fixture-sheet', DATA_SHEET: 'Transactions', DELETED_SHEET: 'Deleted',
@@ -169,7 +169,7 @@ function loadServer(spreadsheet) {
     'txnKey_', 'asTxnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_', 'findRowByKey_', 'getAllTxns',
     'isAmountCorrectionType_', 'updateTxn', 'addTxn', 'getOrCreateDeleted_', 'deleteTxn',
     'sheetHasRowId_', 'sheetHasBaseKey_', 'getSpreadsheet_', 'rowCategory_', 'cellDateTime_', 'rowHM_',
-    'lastDataRow_', 'insertPositionForDate_', 'getTagColIndex_', 'getMineColIndex_',
+    'lastDataRow_', 'insertPositionForDate_', 'getMineColIndex_',
     'headerRow_', 'ensureMineColIndex_', 'rowMine_'
   ];
   const sandbox = {
@@ -190,8 +190,8 @@ function loadServer(spreadsheet) {
 }
 
 function run() {
-  const historical = [false, '現金', new Date('2026-08-01T04:00:00Z'), '', 500, '歷史轉帳', '', '', 'historical-transfer', '轉帳', '其他', '', ''];
-  const expense = [true, '富邦', new Date('2026-08-02T04:00:00Z'), '7788', 200, '一般支出', '', '', 'historical-expense', '支出', '飲食', '', ''];
+  const historical = [false, '現金', new Date('2026-08-01T04:00:00Z'), '', 500, '歷史轉帳', '', '', 'historical-transfer', '轉帳', '其他', ''];
+  const expense = [true, '富邦', new Date('2026-08-02T04:00:00Z'), '7788', 200, '一般支出', '', '', 'historical-expense', '支出', '飲食', ''];
   const transactions = new Sheet('Transactions', [HEADERS, historical, expense]);
   const deleted = new Sheet('Deleted', [HEADERS]);
   const meta = new Sheet('META', [

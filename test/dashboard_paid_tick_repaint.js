@@ -26,12 +26,12 @@ const { loadFns, extractInlineScript, extractFunction, PANEL } = require('./extr
 // Exactly the fields getAllTxns returns. Hardcoded here on purpose: if the signature is ever
 // narrowed to a subset, the per-field loop below fails on the dropped field.
 const SERVER_FIELDS = ['id', 'y', 'm', 'd', 'hm', 'type', 'amount', 'charged', 'mine',
-  'cat', 'merchant', 'tag', 'bank', 'last4', 'link', 'posted'];
+  'cat', 'merchant', 'bank', 'last4', 'link', 'posted'];
 
 function row(overrides) {
   return Object.assign({
     id: 'msg-a|1000|120|1234|0', rowId: '', y: 2026, m: 8, d: 12, hm: '09:00', type: '支出',
-    amount: 120, charged: 120, mine: null, cat: '飲食', merchant: '星巴克', tag: '',
+    amount: 120, charged: 120, mine: null, cat: '飲食', merchant: '星巴克',
     bank: '富邦', last4: '1234', link: 'https://mail/x', posted: false
   }, overrides);
 }
@@ -138,7 +138,7 @@ function harness(initial, opts) {
 
 const ADD_FORM = {
   'a-date': '2026-08-12', 'a-amt': '80', 'a-time': '', 'a-type': '支出',
-  'a-source': '現金', 'a-mer': '午餐', 'a-cat': '飲食', 'a-tag': ''
+  'a-source': '現金', 'a-mer': '午餐', 'a-cat': '飲食'
 };
 
 /** One editable control. `caret` gives it a readable selection; `selectionThrows` reproduces
@@ -174,9 +174,7 @@ function rebuildingDom(key, before, after) {
 }
 
 function duplicateTextDom(id, field, initial) {
-  const selector = field === 'merchant'
-    ? '[data-emer="' + id + '"]'
-    : '[data-ef="tag"][data-id="' + id + '"]';
+  const selector = '[data-emer="' + id + '"]';
   const nodes = [0, 1].map(function () { return { value: initial, defaultValue: initial }; });
   return {
     nodes: nodes,
@@ -186,7 +184,6 @@ function duplicateTextDom(id, field, initial) {
     querySelectorAll: function (sel) {
       if (sel === selector) return nodes;
       if (field === 'merchant' && sel.indexOf('[data-emer]') >= 0) return nodes;
-      if (field === 'tag' && sel.indexOf('[data-ef="tag"]') >= 0) return nodes;
       return [];
     }
   };
@@ -354,9 +351,9 @@ function run() {
   assert.deepStrictEqual(numAfter[0].ranges, [], 'no caret is written when none could be read');
 
   // ---- IME-aware drafts: composition defers destructive repaint and flushes once ----
-  ['merchant', 'tag'].forEach(function (field) {
+  ['merchant'].forEach(function (field) {
     const h = harness(base);
-    const initial = field === 'merchant' ? '買晚餐' : '生活';
+    const initial = '買晚餐';
     const finalValue = initial + '餐廳';
     h.beginComposition(base[0].id, field, initial);
     h.captureDraft(base[0].id, field, finalValue);
@@ -667,7 +664,7 @@ function run() {
   addRecordBeforeAck.submitAdd();
   const recordPending = addRecordBeforeAck.TXNS[addRecordBeforeAck.TXNS.length - 1];
   const recordPendingKey = addRecordBeforeAck.textRowKey(recordPending.id);
-  addRecordBeforeAck.captureDraft(recordPendingKey, 'tag', '待回覆標籤');
+  addRecordBeforeAck.captureDraft(recordPendingKey, 'merchant', '待回覆說明');
   addRecordBeforeAck.commitRow(recordPendingKey, false);
   assert.strictEqual(addRecordBeforeAck.calls.length, 0,
     'Record intent also waits while the manual row has only a temporary id');
@@ -675,7 +672,7 @@ function run() {
   assert.strictEqual(addRecordBeforeAck.calls.length, 1, 'the queued Record drains after add acknowledgement');
   assert.strictEqual(addRecordBeforeAck.calls[0].id, 'manual-11');
   assert.deepStrictEqual(JSON.parse(JSON.stringify(addRecordBeforeAck.calls[0].patch)), {
-    posted: false, tag: '待回覆標籤'
+    posted: false, merchant: '待回覆說明'
   });
 
   const addEditBeforeAck = harness(base);
@@ -785,7 +782,7 @@ function run() {
 
   // Escape cancels the logical draft, not just the visible node. The synthetic change/blur that
   // follows browser blur must therefore have nothing left to save.
-  ['merchant', 'tag'].forEach(function (field) {
+  ['merchant'].forEach(function (field) {
     const original = base[0][field];
     const dom = duplicateTextDom(base[0].id, field, original);
     const h = harness(base, { document: dom });
@@ -814,8 +811,39 @@ function run() {
   assert.strictEqual(activeCancel.calls[1].patch.merchant, base[0].merchant,
     'the compensating write restores the pre-draft committed value');
 
+  // The amount corrector (data-ef="amount") shares the Escape handler, but only merchant has
+  // mounted copies to keep in step. Escape on the amount must restore the committed amount into
+  // the focused input alone: textInputMatches queries nothing, so a merchant copy of the same row
+  // is never overwritten with the amount.
+  const amountQueries = [];
+  const merchantCopy = { value: base[0].merchant, defaultValue: base[0].merchant };
+  const amountDom = {
+    activeElement: null,
+    getElementById: function () { return null; },
+    querySelector: function (sel) { amountQueries.push(sel); return null; },
+    querySelectorAll: function (sel) { amountQueries.push(sel); return [merchantCopy]; }
+  };
+  const amountEsc = harness(base, { document: amountDom });
+  assert.deepStrictEqual(Array.from(amountEsc.textInputMatches(base[0].id, 'amount')), [],
+    'textInputMatches returns no copies for the amount field');
+  assert.strictEqual(amountQueries.length, 0, 'textInputMatches queries nothing for the amount field');
+  amountEsc.captureDraft(base[0].id, 'amount', '999');
+  let amountPrevented = 0, amountBlurred = 0;
+  const amountInput = { value: '999', defaultValue: String(base[0].amount),
+    blur: function () { amountBlurred++; } };
+  amountEsc.handleTextKeydown({ key: 'Escape', preventDefault: function () { amountPrevented++; } },
+    amountInput, base[0].id, 'amount');
+  assert.strictEqual(amountInput.value, String(base[0].amount), 'amount Escape restores the committed amount');
+  assert.strictEqual(amountPrevented, 1, 'amount Escape is handled');
+  assert.strictEqual(amountBlurred, 1, 'amount Escape blurs the corrector');
+  assert.strictEqual(amountEsc.textDraft(base[0].id, 'amount'), null, 'amount Escape drops the dirty draft');
+  assert.strictEqual(amountQueries.length, 0, 'amount Escape makes no DOM query for copies');
+  assert.strictEqual(merchantCopy.value, base[0].merchant, 'amount Escape leaves a merchant copy untouched');
+  assert.strictEqual(merchantCopy.defaultValue, base[0].merchant,
+    'amount Escape leaves a merchant copy default untouched');
+
   // ---- an old save acknowledgement cannot clear characters typed while it was in flight ----
-  ['merchant', 'tag'].forEach(function (field) {
+  ['merchant'].forEach(function (field) {
     const h = harness(base);
     h.captureDraft(base[0].id, field, '第一版');
     h.saveTextDraft(base[0].id, field);
@@ -879,25 +907,22 @@ function run() {
   assert.strictEqual(aba.textDraft(base[0].id, 'merchant').revision, recreatedDraft.revision,
     'an ABA-recreated same-value draft retains its new identity');
 
-  // ---- immediate Record includes both dirty text fields in its one authoritative patch ----
+  // ---- immediate Record includes the dirty merchant draft in its one authoritative patch ----
   const record = harness(base);
   record.captureDraft(base[0].id, 'merchant', '買晚餐餐廳');
-  record.captureDraft(base[0].id, 'tag', '約會');
   record.commitRow(base[0].id, true);
   assert.strictEqual(record.calls.length, 1, 'Record issues one request');
   assert.deepStrictEqual(JSON.parse(JSON.stringify(record.calls[0].patch)), {
-    posted: true, merchant: '買晚餐餐廳', tag: '約會'
-  }, 'Record combines posted, merchant and TAG in one patch');
+    posted: true, merchant: '買晚餐餐廳'
+  }, 'Record combines posted and merchant in one patch');
   assert.strictEqual(record.TXNS[0].merchant, '買晚餐餐廳', 'Record applies merchant optimistically');
-  assert.strictEqual(record.TXNS[0].tag, '約會', 'Record applies TAG optimistically');
 
   const trimmedRecord = harness(base);
   trimmedRecord.captureDraft(base[0].id, 'merchant', '  晚餐  ');
-  trimmedRecord.captureDraft(base[0].id, 'tag', '  約會  ');
   trimmedRecord.commitRow(base[0].id, true);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(trimmedRecord.calls[0].patch)), {
-    posted: true, merchant: '晚餐', tag: '約會'
-  }, 'Record trims merchant and TAG only when building the committed patch');
+    posted: true, merchant: '晚餐'
+  }, 'Record trims merchant only when building the committed patch');
 
   // Text typed after Record has gone out is a newer revision, not part of that patch. It waits
   // behind the row commit, then drains immediately against the row that remains in the model.
@@ -915,13 +940,13 @@ function run() {
     'the drained write contains the text typed while Record was in flight');
 
   const editDuringFailedRecord = harness(base);
-  editDuringFailedRecord.captureDraft(base[0].id, 'tag', 'Record 標籤');
+  editDuringFailedRecord.captureDraft(base[0].id, 'merchant', 'Record 說明');
   editDuringFailedRecord.commitRow(base[0].id, true);
-  editDuringFailedRecord.captureDraft(base[0].id, 'tag', '稍後標籤');
-  editDuringFailedRecord.saveTextDraft(base[0].id, 'tag');
+  editDuringFailedRecord.captureDraft(base[0].id, 'merchant', '稍後說明');
+  editDuringFailedRecord.saveTextDraft(base[0].id, 'merchant');
   editDuringFailedRecord.calls[0].failure(new Error('record failed'));
   assert.strictEqual(editDuringFailedRecord.calls.length, 2, 'Record failure also drains the newer revision');
-  assert.strictEqual(editDuringFailedRecord.calls[1].patch.tag, '稍後標籤',
+  assert.strictEqual(editDuringFailedRecord.calls[1].patch.merchant, '稍後說明',
     'a failed Record cannot strand text entered while it was in flight');
 
   // Escape during Record likewise survives as a compensating write. Without this drain, the
@@ -959,7 +984,7 @@ function run() {
   assert.strictEqual(rekeyDuringRecord.calls[1].id, REKEYED_ID, 'the next Record uses the current server id');
 
   // ---- actual duplicate DOM copies share drafts and acknowledged values ----
-  ['merchant', 'tag'].forEach(function (field) {
+  ['merchant'].forEach(function (field) {
     const dom = duplicateTextDom(base[0].id, field, base[0][field]);
     const h = harness(base, { document: dom });
     dom.nodes[0].value = '  同步新值  ';
@@ -1016,9 +1041,7 @@ function run() {
   assert.ok(/oncompositionend[\s\S]*endComposition/.test(attachSrc), 'attach binds compositionend');
   assert.ok(/oninput[\s\S]*captureDraft/.test(attachSrc), 'attach captures live input');
   assert.strictEqual((attachSrc.match(/handleTextKeydown\(e,this,/g) || []).length, 2,
-    'merchant and TAG keydown both use the IME-aware handler');
-  assert.ok(/field==='tag'[\s\S]*onblur=function\(\)\{[^}]*saveTextDraft\(id,field\); \}/.test(attachSrc),
-    'TAG blur retries a preserved dirty draft');
+    'merchant and the amount corrector keydown both use the IME-aware handler');
   assert.ok(/data-emer[\s\S]*onblur=function\(\)\{[^}]*saveTextDraft\(id,'merchant'\); \}/.test(attachSrc),
     'merchant blur retries a preserved dirty draft');
   assert.ok(/commitRow\(id,!t\.posted\)/.test(attachSrc), 'Record uses the combined row commit');

@@ -12,7 +12,6 @@ function sample(overrides) {
     amount: 120,
     type: '支出',
     cat: '飲食',
-    tag: '',
     posted: false,
     link: '',
     charged: 120,
