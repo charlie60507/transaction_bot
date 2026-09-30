@@ -87,3 +87,58 @@ Still true, and load-bearing:
 
 - Changing the deploy trigger, the gate, or the pinned deployment id is a
   policy change — ask first.
+
+## The Sheet — layout and direct data access
+
+The spreadsheet (`CFG.SPREADSHEET_ID`) has exactly three tabs: `Transactions`
+(gid `1842423494`), `Deleted` (`110900880`) and `META` (`2135287369`). The legacy
+hidden formula dashboards (`_calc`, `_dash`, `Dashboard`, `儀表板`) were deleted on
+2026-10-01 together with the TAG column.
+
+**`Transactions` columns** (the header row is the contract):
+
+    A 已記帳 | B 銀行 | C 授權日期時間 | D 卡末四碼 | E 金額_NTD | F 交易內容/商店 |
+    G 類別 | H Gmail連結 | I MessageId | J 收支 | K 種類(手動) | L 我的消費 | M 交易 ID
+
+A–K are fixed indices (`CFG.IDX_*`). `我的消費` and `交易 ID` are located by
+header name only, so inserting or deleting a column right of K is safe for code.
+Nothing left of L may move. `Deleted` mirrors the same columns, so change both
+tabs together. The bot writes A–I (its `HEADER` Script Property) plus `交易 ID`.
+
+**`META` columns:** A 交易關鍵字 and B 種類 hold the keyword rules. C 收支. D 種類清單 is the
+category list; the picker, the rule dropdown and the Gemini fallback all read it.
+**E is empty but must stay.** It was the retired TAG清單, and deleting the column
+would shift G. F is a spacer. G 帳戶清單 is fixed at column G (`CFG.META_ACCOUNT_COL`).
+
+Category boundaries (the owner's rules, used for manual and rule classification):
+- `汽車` / `重機`: fixed costs of owning a vehicle (insurance, plates, loan, accessories, registration).
+- `交通`: per-use costs (charging, fuel, parking, rides).
+- `房屋`: one-off home purchases (renovation, design, furniture, appliances, mortgage and home insurance).
+- `家居`: recurring household running costs (utilities, internet, phone, laundry, daily goods).
+
+**Reading.** The sheet is link-viewable, so a whole tab exports without auth:
+`https://docs.google.com/spreadsheets/d/<id>/export?format=csv&gid=<gid>`. Never
+use the `gviz/tq?tqx=out:csv` endpoint. It silently truncates long tabs (it
+returned 135 of 1,280 rows).
+
+**Writing** goes through the Sheets API as the service account
+`sheet-writer@cards-dashboard.iam.gserviceaccount.com`. That account is an Editor
+on this spreadsheet only, and it lives in the owner's personal GCP project
+`cards-dashboard`, which has the Sheets API enabled. Get a token by impersonating it:
+
+    gcloud auth print-access-token --account=charlie60507@gmail.com \
+      --impersonate-service-account=sheet-writer@cards-dashboard.iam.gserviceaccount.com \
+      --scopes=https://www.googleapis.com/auth/spreadsheets
+
+- Always pass `--account`. The machine's active gcloud account is the company one.
+- Two other credential routes do not work:
+  - gcloud's default ADC login is blocked by Google from requesting the `spreadsheets` scope.
+  - The clasp token has no Sheets scope.
+- Revoke access by removing the service account from the sheet's share list.
+
+Data-change discipline:
+- Locate rows by `交易 ID`, never by row number, because the bot re-sorts the sheet.
+- Before writing, check every target cell's current value and abort the whole batch on any mismatch.
+- Back up the affected tabs outside the repo first; the repo is public. Backups live in
+  `~/Documents/transaction-bot-backups/`.
+- Afterwards, re-export and diff cell by cell against the pre-change export.
