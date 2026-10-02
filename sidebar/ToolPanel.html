@@ -412,6 +412,32 @@
   function isCurMonth(r){ return r.level==='month'&&r.year===NOW.year&&r.month===NOW.month; }
   function isPartialCur(r){ return isCurMonth(r)&&NOW.day<daysInMonth(NOW.year,NOW.month); }
   function inScope(t,r){ if(r.level==='all') return true; if(r.level==='year') return t.y===r.year; return t.y===r.year&&t.m===r.month; }
+
+  // ---------- partial history (#58): never show a number computed from part of the rows ----------
+  /** True when TXNS holds every row of month m of year y: always once the history is complete,
+   *  otherwise only from the first loaded month (HISTORY.before) on. */
+  function historyCovers(y,m){
+    return HISTORY.complete||!HISTORY.before||(y*100+m)>=(HISTORY.before.y*100+HISTORY.before.m);
+  }
+  /** Whether a period's numbers need rows not loaded yet: 全部期間, a year that starts before the
+   *  loaded range, a month before it. Both tabs also read the last six months whatever the period
+   *  (recurring() for the projection and 定期訂閱, the six-month trend chart), so those count too. */
+  function scopeNeedsHistory(r){
+    if(HISTORY.complete) return false;
+    var six=monthsBack(6)[0];
+    if(!historyCovers(six.y,six.m)) return true;
+    if(r.level==='all') return true;
+    if(r.level==='year') return !historyCovers(r.year,1);
+    return !historyCovers(r.year,r.month);
+  }
+  /** The short text a view shows in place of a number that needs the whole history. */
+  function historyWaitText(){ return HISTORY.failed?'完整歷史載入失敗':'載入完整歷史中…'; }
+  /** The first loaded month, for notes on views that show loaded rows only. */
+  function historyFromText(){ return HISTORY.before?HISTORY.before.y+'/'+HISTORY.before.m:''; }
+  /** Retry control for a failed background history read; empty otherwise. */
+  function historyRetry(){
+    return HISTORY.failed?' <button class="ev-toggle" style="margin-left:6px" data-hretry title="'+esc(HISTORY.failed)+'">重試</button>':'';
+  }
   var SEARCH_CAP = 40;
   function numericQuery(q){
     var s=String(q||'').trim().replace(/[$,]/g,'');
@@ -479,6 +505,11 @@
   function lg(color,name,total,grand){ var pct=grand>0?Math.round(total/grand*100):0; return '<div class="lg"><span class="sw" style="background:'+color+'"></span><span class="lg-name">'+esc(name)+'</span><span class="lg-amt num">$'+fmt(total)+'</span><span class="lg-pct num">'+pct+'%</span></div>'; }
   function kpi(label,valHtml,subHtml,cls){ return '<div class="kpi"><div class="k-label">'+label+'</div><div class="k-value num '+(cls||'')+'">'+valHtml+'</div>'+(subHtml||'')+'</div>'; }
 
+  /** What a tab shows for a period whose numbers need the history still loading (#58). */
+  function historyPanel(r){
+    return '<div class="empty">'+esc(periodLabel(r))+' · '+historyWaitText()+historyRetry()+'</div>';
+  }
+
   // ---------- 分析: everything about the ONE selected period ----------
   // Categories used to be answered twice: this tab's rowCard list gave amount + share +
   // drilldown, and a separate 排行 panel on another tab gave the vs-previous-period ▲▼ for the
@@ -488,6 +519,7 @@
   // heatmap, the split, the per-category detail — sits here together.
   function periodTab(){
     var r=resolveScope(state.scope), partial=isPartialCur(r);
+    if(scopeNeedsHistory(r)) return historyPanel(r);
     var grossExp=sumScope(isConsumption,r);
     var refunds=sumScope(isRefund,r);
     var expTotal=grossExp-refunds;
@@ -500,8 +532,11 @@
     // same rule the previous-period version used, for the same reason.
     var selKey=(r.level==='month')?r.year+'-'+('0'+r.month).slice(-2):null;
     var prog=monthProgress(r);
-    var baseExp=selKey?monthlyBaseline(isConsumption,selKey):null;
-    var baseInc=selKey?monthlyBaseline(isIncome,selKey):null;
+    // The baseline is a median over EVERY month with data, so until the history is complete it
+    // would be a number computed from part of them: the loading text stands in for it.
+    var waitBase=!!selKey&&!HISTORY.complete;
+    var baseExp=selKey&&!waitBase?monthlyBaseline(isConsumption,selKey):null;
+    var baseInc=selKey&&!waitBase?monthlyBaseline(isIncome,selKey):null;
 
     var subs=recurring(), subTot=subs.reduce(function(s,x){return s+x.amt;},0), subNames={}; subs.forEach(function(x){ subNames[x.name]=1; });
     var dim=daysInMonth(r.year,r.month), proj=isCurMonth(r)?projectMonth(expList,Math.min(NOW.day,dim),dim,subNames,subTot)-refunds:null;
@@ -511,13 +546,13 @@
     else { saveRate=incTotal>0?Math.round(net/incTotal*100):null; saveLbl='儲蓄率'; }
 
     var advTotal=advIn(expList);
-    var expSub='<div class="k-sub">'+avgDeltaStr(expTotal,baseExp,true,prog)+'</div>'+(refunds>0?'<div class="k-sub2 num">已折抵退款 −$'+fmt(refunds)+'</div>':'')
+    var expSub='<div class="k-sub">'+(waitBase?historyWaitText():avgDeltaStr(expTotal,baseExp,true,prog))+'</div>'+(refunds>0?'<div class="k-sub2 num">已折抵退款 −$'+fmt(refunds)+'</div>':'')
       +(advTotal>0?'<div class="k-sub2 num adv">刷卡 $'+fmt(grossExp+advTotal)+' · 代墊 $'+fmt(advTotal)+' 不計入</div>':'');
     var avgPer=expCount?Math.round(grossExp/expCount):0;
 
     var h='<div class="kpis">'
       + kpi('總支出','$'+fmt(expTotal), expSub, 'spend')
-      + kpi('總收入','$'+fmt(incTotal), '<div class="k-sub">'+avgDeltaStr(incTotal,baseInc,false,prog)+'</div>', 'income')
+      + kpi('總收入','$'+fmt(incTotal), '<div class="k-sub">'+(waitBase?historyWaitText():avgDeltaStr(incTotal,baseInc,false,prog))+'</div>', 'income')
       + kpi('結餘',(net>=0?'+':'−')+'$'+fmt(Math.abs(net)),
           '<div class="k-sub">'+saveLbl+' '+(saveRate!=null?saveRate+'%':'—')+'</div>'+(saveRate!=null?'<div class="meter"><i style="width:'+Math.max(0,Math.min(100,saveRate))+'%;background:'+meterColor(saveRate)+'"></i></div>':'')+saveNote,
           net>=0?'pos':'neg')
@@ -542,7 +577,7 @@
 
     // Per-category monthly means for the chip on each list row. Null outside month scope, which
     // drops the whole column rather than filling it with em-dashes.
-    var catBase=selKey?catBaselines(selKey):null;
+    var catBase=waitBase?'wait':(selKey?catBaselines(selKey):null);
 
     h+='<div class="toolbar"><h2>支出明細 · 依類別 <span class="th">金額 · 占比 · 對比常態月 · 點開看交易</span></h2></div>';
     if(!items.length) h+='<div class="empty">此範圍沒有支出</div>';
@@ -553,6 +588,7 @@
   // ---------- 趨勢: only what needs MORE THAN ONE period to mean anything ----------
   function trendTab(){
     var r=resolveScope(state.scope);
+    if(scopeNeedsHistory(r)) return historyPanel(r);
     var expList=TXNS.filter(function(t){return isConsumption(t)&&inScope(t,r);});
     var cardExpList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
     var subs=recurring(), subTot=subs.reduce(function(s,x){return s+x.amt;},0), subNames={}; subs.forEach(function(x){ subNames[x.name]=1; });
@@ -681,6 +717,7 @@
    *  at all rather than an em-dash. `prog` scales the baseline for a month still in progress. */
   function catDelta(name,cur,catBase,prog){
     if(!catBase) return '';
+    if(catBase==='wait') return '<span class="delta flat" title="'+historyWaitText()+'">…</span>';
     var b=catBase.byCat[name];
     if(!b||!b.ref) return '<span class="delta up" title="其他月份沒有這一類">新</span>';
     var ref=b.ref*prog, tip=baseTip({basis:b.basis,months:catBase.months},ref,prog);
@@ -825,6 +862,18 @@
   // a backdated manual add here (addTxn adopts no list, so it leaves this stale on purpose). Only
   // adoptTxns writes it, so a response settle() discards can never advance it.
   var OLDER_FP=null;
+  // How much of the history TXNS holds (#58). boot asks for the recent 13 months first and
+  // fetches the rest in the background; until that lands `complete` is false and `before` is the
+  // first loaded month, so every view that needs older rows can tell it would be showing a
+  // partial number. `loadedFp` is the server's fingerprint of the rows boot sent (getTxnsBefore
+  // checks it); `loading` is true while the background read is out; `failed` holds the error
+  // message after a failed read, which swaps the loading state for a retry control.
+  // A whole list from ANY source — an edit or delete acknowledgement, refreshTxns, or a
+  // getTxnsBefore that found the page's rows out of date — IS the complete history, and marks it
+  // so; a background response arriving after that is ignored. OLDER_FP stays null while the
+  // history is incomplete, so no edit can claim older rows the page has not loaded: the server
+  // answers every edit in that window with the whole list.
+  var HISTORY={ complete:true, before:null, loadedFp:null, loading:false, failed:null };
   // Merchant is a logical row field, even when editRow() mounts the same transaction
   // more than once. Keep its unsaved value outside the DOM so a whole-panel rebuild cannot
   // make the server snapshot overwrite what the owner is still typing.
@@ -1020,9 +1069,92 @@
     if(INFLIGHT>0) INFLIGHT--;
     var changed=false;
     if(isStale(seq)) STALE_DROPPED=true;
-    else if(txns){ STALE_DROPPED=false; changed=adoptTxns(txns, olderFp); }
+    else if(txns){
+      STALE_DROPPED=false; changed=adoptTxns(txns, olderFp);
+      // While the history is incomplete OLDER_FP is null, so the server could only answer with
+      // the whole list: adopting it completes the history, and the views waiting on it repaint.
+      if(!HISTORY.complete){ historyComplete(); changed=true; }
+    }
     if(STALE_DROPPED && INFLIGHT===0) refreshTxns();
     return changed;
+  }
+
+  /** Mark TXNS as holding the whole history; any background read still out is ignored on arrival. */
+  function historyComplete(){
+    HISTORY.complete=true; HISTORY.failed=null; HISTORY.loadedFp=null;
+  }
+
+  /**
+   * Place `inserts` among `base`: inserts[j] goes in front of base[at[j]] (after the last base
+   * row when at[j] is missing or past the end), keeping both lists' own order. The counts index
+   * the server's view of `base`: if the page has dropped a base row the server still counts (an
+   * optimistic delete) or holds one it does not (an add that landed after the read), an insert
+   * lands one slot off. Only display order on a DESC or unsorted sheet can shift; the bot keeps
+   * the sheet ASC, where every older row sits in front of the recent ones anyway. Both merges that
+   * rebuild the full list's order use it: an edit acknowledgement's window rows among the older
+   * rows (ackTxns), and the background history among the recent rows (mergeOlderTxns).
+   */
+  function spliceAt(base,inserts,at){
+    var out=[], j=0;
+    for(var k=0;k<=base.length;k++){
+      while(j<inserts.length&&(at[j]==null?base.length:+at[j])<=k) out.push(inserts[j++]);
+      if(k<base.length) out.push(base[k]);
+    }
+    while(j<inserts.length) out.push(inserts[j++]);
+    return out;
+  }
+
+  /**
+   * The full list a getTxnsBefore response stands for, ready for adoptTxns: the rows dated before
+   * the loaded range (`older`) spliced among the page's own rows by `loadedBefore`, which counts
+   * the recent rows preceding each one in the sheet. The server sends that shape only when the
+   * page's recent rows are provably the sheet's (see getTxnsBefore), so the counts index exactly
+   * these rows and the result is the full list's order. Rows still waiting on addTxn are left out
+   * here, as from any server list; adoptTxns re-appends them. A row added here and dated before
+   * the loaded range can already be in `older` once its add has landed; the server's copy, in its
+   * sheet position, replaces the page's (reconcileTextRowIds carries its identity across by rowId).
+   */
+  function mergeOlderTxns(list,res){
+    var older=(res&&res.older)||[], seen={};
+    older.forEach(function(t){ if(t.rowId) seen[t.rowId]=1; });
+    var loaded=(list||[]).filter(function(t){ return !t._pendingAdd&&!(t.rowId&&seen[t.rowId]); });
+    return spliceAt(loaded, older, (res&&res.loadedBefore)||[]);
+  }
+
+  /**
+   * Fetch the history boot left out, once, in the background. On success the older rows are
+   * merged in order and the page repaints once; a whole list (the page's recent rows changed
+   * since boot) is adopted as the complete history instead. A whole list is adopted only on the
+   * terms refreshTxns reads under: nothing in flight when the read went out, and no mutation issued
+   * since. Otherwise it may predate a write the screen already shows optimistically (a retry
+   * clicked while a tick is still on its way, say), so it is dropped and booked as a refetch
+   * (refreshTxns, whose whole list completes the history in turn). The merge path needs no such
+   * guard: it adds only rows dated before the loaded range and leaves every loaded row exactly as
+   * the page holds it. On failure the recent view stays as it is and the views that need history
+   * show a retry control instead of their loading state.
+   */
+  function loadHistory(){
+    if(HISTORY.complete||HISTORY.loading||!HISTORY.before) return;
+    HISTORY.loading=true; HISTORY.failed=null;
+    var seq=MUTATION_SEQ, quiet=INFLIGHT===0;
+    google.script.run
+      .withSuccessHandler(function(res){
+        HISTORY.loading=false;
+        if(HISTORY.complete) return;
+        if(res&&res.txns){
+          if(!quiet||isStale(seq)){ STALE_DROPPED=true; if(INFLIGHT===0) refreshTxns(); return; }
+          adoptTxns(res.txns, res.olderFp);
+        } else {
+          adoptTxns(mergeOlderTxns(TXNS,res), res&&res.olderFp);
+        }
+        historyComplete(); repaint();
+      })
+      .withFailureHandler(function(err){
+        HISTORY.loading=false;
+        if(HISTORY.complete) return;
+        HISTORY.failed=(err&&err.message)?err.message:String(err); repaint();
+      })
+      .getTxnsBefore(HISTORY.before.y, HISTORY.before.m, HISTORY.loadedFp);
   }
 
   /**
@@ -1053,13 +1185,7 @@
     if(changed&&changed.rowId&&!inWindow(changed)){
       older=older.map(function(t){ return t.rowId===changed.rowId?changed:t; });
     }
-    var recent=res.recent.txns||[], at=res.recent.olderBefore||[], out=[], j=0;
-    for(var k=0;k<=older.length;k++){
-      while(j<recent.length&&(at[j]==null?older.length:+at[j])<=k) out.push(recent[j++]);
-      if(k<older.length) out.push(older[k]);
-    }
-    while(j<recent.length) out.push(recent[j++]);
-    return out;
+    return spliceAt(older, res.recent.txns||[], res.recent.olderBefore||[]);
   }
 
   /**
@@ -1083,9 +1209,17 @@
       .withSuccessHandler(function(data){
         REFRESHING=false;
         if(isStale(seq)){ STALE_DROPPED=true; if(INFLIGHT===0) refreshTxns(); return; }
-        if(adoptTxns(data)) repaint();
+        var changed=adoptTxns(data);
+        // getAllTxns is the whole list, so it completes a partial history too.
+        if(!HISTORY.complete){ historyComplete(); changed=true; }
+        if(changed) repaint();
       })
-      .withFailureHandler(function(){ REFRESHING=false; STALE_DROPPED=true; })
+      .withFailureHandler(function(err){
+        REFRESHING=false; STALE_DROPPED=true;
+        // While the history is incomplete and no background read is out, this read was the one
+        // meant to complete it: show the retry control rather than an endless loading state.
+        if(!HISTORY.complete&&!HISTORY.loading){ HISTORY.failed=(err&&err.message)?err.message:String(err); repaint(); }
+      })
       .getAllTxns();
   }
 
@@ -1755,21 +1889,32 @@
       ? pend.concat(TXNS.filter(function(t){ return t.posted && daysAgo(t) <= INBOX_DONE_DAYS; }))
       : pend;
     if(state.inboxScope === 'year') pool = pool.filter(function(t){ return t.y === NOW.year; });
+    // The queue is unbounded by date, so until the history is complete older pending rows may be
+    // missing: the loaded ones stay listed and editable (that is what the fast first paint is
+    // for), but the totals above them wait, and nothing claims the queue is empty.
+    var partialQ = !HISTORY.complete && (state.inboxScope !== 'year' || !historyCovers(NOW.year,1));
 
     var pendScoped = pool.filter(function(t){ return !t.posted; });
     var pendSpend = pendScoped.filter(isConsumption).reduce(function(s,t){ return s+t.amount; },0);
     var oldest = pendScoped.slice().sort(function(a,b){ return dayKeyOf(a).localeCompare(dayKeyOf(b)); })[0];
     var dayCount = Object.keys(pendScoped.reduce(function(m,t){ m[dayKeyOf(t)]=1; return m; },{})).length;
 
-    var h = '<div class="kpis k3">'
+    var wait = '<span class="hint">'+historyWaitText()+'</span>';
+    var h = partialQ
+      ? '<div class="kpis k3">'
+        + kpi('待記帳筆數', wait, '', '') + kpi('待記帳支出', wait, '', '') + kpi('最舊一筆', wait, '', '')
+        + '</div>'
+      : '<div class="kpis k3">'
       + kpi('待記帳筆數', fmt(pendScoped.length), '<div class="k-sub">橫跨 '+dayCount+' 天</div>', pendScoped.length?'spend':'')
       + kpi('待記帳支出', '$'+fmt(pendSpend), '<div class="k-sub">含已分類轉帳</div>', 'spend')
       + kpi('最舊一筆', oldest?ageLabel(daysAgo(oldest)):'—',
             '<div class="k-sub">'+(oldest?oldest.y+'/'+oldest.m+'/'+oldest.d:'沒有積壓')+'</div>', '')
       + '</div>';
+    if(partialQ) h += '<div class="hint" style="margin-bottom:var(--sp2)">'+historyWaitText()+' · 下面只列 '+historyFromText()+' 起的待記帳'+historyRetry()+'</div>';
 
     h += '<div class="toolbar"><h2>待記帳佇列 <span class="th">所有日期 · 最新的在最上面 · 改完按「✓ 已記帳」就消失</span></h2></div>';
 
+    if(!pool.length && partialQ) return h + '<div class="empty">'+historyFromText()+' 起沒有待處理的交易 · '+historyWaitText()+historyRetry()+'</div>';
     if(!pool.length){
       return h + '<div class="empty">🎉 全部記帳完成,沒有待處理的交易。'
         + '<br><span style="font-size:12px">新的信件進來後會自動出現在這裡。</span></div>';
@@ -1851,6 +1996,8 @@
   function searchPanel(q){
     var hits=searchHits(TXNS,q), extra=Math.max(0,hits.length-SEARCH_CAP);
     var h='<div class="toolbar"><h2>搜尋結果 <span class="th">全期間 · 最新在前</span></h2></div>';
+    // Until the history is complete the results come from the loaded rows only, and say so.
+    if(!HISTORY.complete) h+='<div class="hint" style="margin-bottom:var(--sp2)">'+historyWaitText()+' · 目前只搜尋 '+historyFromText()+' 起的交易'+historyRetry()+'</div>';
     if(!hits.length) return h+'<div class="empty">找不到「'+esc(String(q).trim())+'」的交易</div>';
     h+='<div class="panel"><div class="rc-meta num" style="margin-bottom:var(--sp2)">'+hits.length+' 筆'+(extra?' · 還有 '+extra+' 筆':'')+'</div>';
     hits.slice(0,SEARCH_CAP).forEach(function(t){ h+=editRow(t); });
@@ -1863,7 +2010,8 @@
     var periodTxt = isInbox ? (state.inboxScope==='year'?NOW.year+' 年 · 待記帳':'全部期間 · 待記帳')
                   : esc(periodLabel(r));
     function tb(id,tt,sub){ return '<button data-tab="'+id+'" class="'+(tab===id?'active':'')+'"><span class="tt">'+tt+'</span><span class="tsub">'+sub+'</span></button>'; }
-    var inboxSub = nPend ? '<span class="cnt">'+nPend+'</span>筆待處理' : '已全部記帳';
+    // The badge counts every pending row of any date, so it waits for the whole history.
+    var inboxSub = !HISTORY.complete ? historyWaitText() : (nPend ? '<span class="cnt">'+nPend+'</span>筆待處理' : '已全部記帳');
     var h='<div class="head"><div class="head-top"><span class="title-row"><span class="title">交易 Dashboard</span>'+sheetLink()+'</span><span class="head-actions"><span class="period">'+periodTxt+'</span><button class="settingsbtn" data-settings aria-label="開啟設定">設定</button><button class="addbtn" data-add>＋ 新增</button></span></div>'
       +'<div class="tabs">'+tb('analysis','分析','這段期間花在哪、哪天花的?')+tb('trend','趨勢','幾個月下來的變化?')+tb('inbox','待記帳',inboxSub)+'</div>';
     if(isInbox){
@@ -1873,6 +2021,8 @@
     } else {
       h+='<div class="controls"><span class="clabel">期間</span><button class="ctl'+(state.scope==='all'?' active':'')+'" data-scope="all">全部</button><button class="ctl'+(state.scope==='month'?' active':'')+'" data-scope="month">當月</button><button class="ctl'+(state.scope==='year'?' active':'')+'" data-scope="year">當年</button><span class="clabel" style="margin-left:6px">或指定</span><span class="sel'+(isPick()?' picked':' dim')+'"><select id="selYear">'+yearOptions()+'</select><select id="selMonth">'+monthOptions()+'</select></span>'+headSearch()+'</div>';
     }
+    // A failed background history read keeps one retry control in view whatever the tab.
+    if(!HISTORY.complete&&HISTORY.failed) h+='<div class="hint">完整歷史載入失敗:'+esc(HISTORY.failed)+' · 需要完整歷史的數字暫不顯示'+historyRetry()+'</div>';
     h+='</div>';
     h+= String(state.q||'').trim() ? searchPanel(state.q)
       : (tab==='analysis' ? periodTab() : (tab==='trend' ? trendTab() : (tab==='inbox' ? inboxTab() : periodTab())));
@@ -1934,6 +2084,7 @@
       };
     });
     var addB=app.querySelector('[data-add]'); if(addB) addB.onclick=function(){ openAddModal(null); };
+    app.querySelectorAll('[data-hretry]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); loadHistory(); render(); }; });
     var settingsB=app.querySelector('[data-settings]'); if(settingsB) settingsB.onclick=openSettingsModal;
     app.querySelectorAll('[data-del]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); deleteTxnRow(this.getAttribute('data-trow')||this.getAttribute('data-del')); }; });
     app.querySelectorAll('.ctl[data-iscope]').forEach(function(b){ b.onclick=function(){ state.inboxScope=this.getAttribute('data-iscope'); render(); }; });
@@ -1978,19 +2129,25 @@
     OLDER_FP=(olderFp==null)?null:String(olderFp);
     return txnsSignature(TXNS)!==before;
   }
+  /** First paint from the recent 13 months (getDashboardData's partial list), then the rest of the
+   *  history in the background (loadHistory). A server answering with the whole list (no
+   *  `complete: false`) needs no second read. */
   function boot(){
     document.getElementById('app').innerHTML = '<div class="loading">載入中…</div>';
     google.script.run
       .withSuccessHandler(function(data){
         ACCOUNT_SOURCES=(data&&data.accounts)||[];
+        var partial=!!(data&&data.complete===false&&data.before);
+        HISTORY={ complete:!partial, before:partial?data.before:null, loadedFp:partial?data.loadedFp:null, loading:false, failed:null };
         adoptTxns(data&&data.txns, data&&data.olderFp); render();
+        if(partial) loadHistory();
       })
       .withFailureHandler(function(err){
         var msg = (err && err.message) ? err.message : String(err);
         document.getElementById('app').innerHTML =
           '<div class="error">載入失敗:' + esc(msg) + '<br>請重新整理再試。</div>';
       })
-      .getDashboardData();
+      .getDashboardData({ sinceMonths: 13 });
   }
   document.getElementById('a-cancel').onclick=closeAddModal;
   document.getElementById('a-save').onclick=submitAdd;

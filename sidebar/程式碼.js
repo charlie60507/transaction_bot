@@ -270,8 +270,11 @@ function txnsFromRows_(rows, mineIdx, rowIdIdx) {
 function txnSnapshot_(sh, now) {
   if (!sh || sh.getLastRow() <= 1) return { txns: [], olderFp: null };
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
-  const mineIdx = getMineColIndex_(sh);
-  const rowIdIdx = getRowIdColIndex_(sh);
+  return snapshotOfRows_(rows, getMineColIndex_(sh), getRowIdColIndex_(sh), now);
+}
+
+/** txnSnapshot_ from rows already read (row 2 onward, full width). */
+function snapshotOfRows_(rows, mineIdx, rowIdIdx, now) {
   const since = recentSince_(now);
   return {
     txns: txnsFromRows_(rows, mineIdx, rowIdIdx),
@@ -470,15 +473,145 @@ function renumbersOlderSiblings_(rows, days, editedIdx, before) {
 }
 
 /** Initial dashboard payload. Account settings travel with the transaction snapshot so
- *  the add dialog never has to race a second request during boot. */
-function getDashboardData() {
+ *  the add dialog never has to race a second request during boot.
+ *
+ *  Without `opts` (or without a usable `opts.sinceMonths`) this is the whole list exactly as
+ *  before: `{ txns, olderFp, accounts }`.
+ *
+ *  With `opts.sinceMonths` = N it is the page's fast first paint: only the displayed rows dated on
+ *  or after the first day of the month N-1 months before the current one (CFG.TZ), as
+ *  `{ txns, complete: false, before: {y, m}, loadedFp, accounts }`. `before` is that first loaded
+ *  month: every row dated before it is still missing, and getTxnsBefore(before.y, before.m,
+ *  loadedFp) fetches it. `loadedFp` fingerprints the rows that WERE sent (see loadedFingerprint_),
+ *  so the later call can prove the page's copy is still the sheet's. No `olderFp` comes with a
+ *  partial list on purpose: an edit acknowledgement may keep the page's older rows only when the
+ *  page holds ALL of them, so until the history is complete the page sends no fingerprint and
+ *  every edit gets the whole list back (which completes the history too). When nothing is dated
+ *  before `before`, the partial list IS the whole list: it comes back in the whole-list shape
+ *  with `complete: true` and its `olderFp`. */
+function getDashboardData(opts) {
   const lock = LockService.getScriptLock();
   lock.waitLock(15 * 1000);
   try {
     const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
     if (sh) ensureRowIdColIndex_(sh);
-    const snap = txnSnapshot_(sh, new Date());
-    return { txns: snap.txns, olderFp: snap.olderFp, accounts: getAccountSources_() };
+    const months = opts ? Number(opts.sinceMonths) : NaN;
+    if (!(months >= 1) || Math.floor(months) !== months) {
+      const snap = txnSnapshot_(sh, new Date());
+      return { txns: snap.txns, olderFp: snap.olderFp, accounts: getAccountSources_() };
+    }
+    return Object.assign(recentSnapshot_(sh, months, new Date()), { accounts: getAccountSources_() });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** First month of a recent load of `months` months ending with the current one, in CFG.TZ, as
+ *  {y, m}: 13 months in October 2026 starts at October 2025. */
+function monthsBackStart_(now, months) {
+  const p = Utilities.formatDate(now, CFG.TZ, 'yyyy-M').split('-');
+  // Calendar arithmetic only, as in recentSince_: the CFG.TZ month is already decided.
+  const s = new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1 - (months - 1), 1));
+  return { y: s.getUTCFullYear(), m: s.getUTCMonth() + 1 };
+}
+
+/** getDashboardData's partial list (see there), from one read. */
+function recentSnapshot_(sh, months, now) {
+  if (!sh || sh.getLastRow() <= 1) return { txns: [], olderFp: null, complete: true };
+  const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+  const mineIdx = getMineColIndex_(sh);
+  const rowIdIdx = getRowIdColIndex_(sh);
+  const from = monthsBackStart_(now, months);
+  const days = rowDays_(rows, { y: from.y, m: from.m, d: 1 });
+  if (days.indexOf(false) === -1) return Object.assign(snapshotOfRows_(rows, mineIdx, rowIdIdx, now), { complete: true });
+  return {
+    txns: txnsOnSide_(rows, days, true, mineIdx, rowIdIdx),
+    complete: false,
+    before: from,
+    loadedFp: loadedFingerprint_(rows, days, from, mineIdx, rowIdIdx)
+  };
+}
+
+/**
+ * The getAllTxns objects of the displayed rows on one side of a month boundary, in sheet order:
+ * `days` is rowDays_ for the first day of that month, `recent` picks the rows on or after it
+ * (true) or before it (false).
+ *
+ * Composite `id`s equal the full list's although each side is numbered on its own. The base key
+ * an occurrence counts within includes the raw date cell (see recentAck_), so every row sharing a
+ * base key falls on the same CFG.TZ day, hence in the same month: a month boundary never splits a
+ * duplicate group, and numbering one side alone reproduces the full list's numbers.
+ */
+function txnsOnSide_(rows, days, recent, mineIdx, rowIdIdx) {
+  const out = [];
+  const seenKey = {};
+  for (let i = 0; i < rows.length; i++) {
+    if (days[i] === null || (days[i] !== false) !== recent) continue;
+    const raw = rows[i][CFG.IDX_DATE];
+    const ymdt = recent ? days[i] : rowYmdt_(raw instanceof Date ? raw : new Date(raw));
+    out.push(txnFromRow_(rows[i], ymdt, nextOccurrence_(seenKey, rows[i]), mineIdx, rowIdIdx));
+  }
+  return out;
+}
+
+/**
+ * Fingerprint of the rows a partial list sends: every displayed row dated on or after `from`
+ * (whole rows, in sheet order, window rows included), plus the column positions and `from`. The
+ * same hash as olderFingerprint_ over the other side of the boundary. getTxnsBefore compares it
+ * with the sheet: a match proves the page holds exactly the sheet's recent rows, in the sheet's
+ * order, which is what lets it splice the older rows in by position and hand out an `olderFp`
+ * covering rows it did not itself send. Any change since (an edit elsewhere, a bot row, a split
+ * or 已記帳 written by this page without a list coming back) breaks the match.
+ */
+function loadedFingerprint_(rows, days, from, mineIdx, rowIdIdx) {
+  return olderFingerprint_(rows, days.map(function (d) { return d ? false : null; }),
+    { y: from.y, m: from.m, d: 1 }, mineIdx, rowIdIdx);
+}
+
+/**
+ * The rest of a partial boot: the displayed rows dated before month `m` of year `y` (CFG.TZ),
+ * the `before` getDashboardData sent. `loadedFp` is the loadedFp that came with it.
+ *
+ *   page's recent rows still match → { ok, older, loadedBefore, olderFp }
+ *   anything else                  → { ok, txns, olderFp }, the whole list
+ *
+ * `older` are getAllTxns objects in sheet order, numbered as the full list numbers them (see
+ * txnsOnSide_). `loadedBefore[i]` is how many displayed rows dated on or after the boundary
+ * precede `older[i]` in the sheet, so the page splices each one in exactly where the full list
+ * has it — in front of everything under the bot's ASC sort, after everything under DESC, and
+ * wherever a hand-typed text date or an unsorted sheet puts it. Those counts describe the page's
+ * rows only while the page's rows are the sheet's, which is what the `loadedFp` match proves; on a
+ * mismatch the whole list is the exact answer instead, and it completes the history all the same.
+ * `olderFp` is the fingerprint of every row older than the edit window as the sheet now stands
+ * (olderFingerprint_), i.e. of the rows the page holds once it has merged this response: its
+ * recent rows by the match, the rest from this very read.
+ */
+function getTxnsBefore(y, m, loadedFp) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15 * 1000);
+  try {
+    const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
+    if (sh) ensureRowIdColIndex_(sh);
+    if (!sh || sh.getLastRow() <= 1) return { ok: true, txns: [], olderFp: null };
+    const from = { y: Number(y), m: Number(m) };
+    if (!(from.y > 0) || !(from.m >= 1 && from.m <= 12)) throw new Error('月份不合法: ' + y + '-' + m);
+    const now = new Date();
+    const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+    const mineIdx = getMineColIndex_(sh);
+    const rowIdIdx = getRowIdColIndex_(sh);
+    const days = rowDays_(rows, { y: from.y, m: from.m, d: 1 });
+    const since = recentSince_(now);
+    const olderFp = olderFingerprint_(rows, rowDays_(rows, since), since, mineIdx, rowIdIdx);
+    if (loadedFp == null || String(loadedFp) !== loadedFingerprint_(rows, days, from, mineIdx, rowIdIdx)) {
+      return { ok: true, txns: txnsFromRows_(rows, mineIdx, rowIdIdx), olderFp: olderFp };
+    }
+    const loadedBefore = [];
+    let loaded = 0;
+    for (let i = 0; i < rows.length; i++) {
+      if (days[i] === null) continue;
+      if (days[i] === false) loadedBefore.push(loaded); else loaded++;
+    }
+    return { ok: true, older: txnsOnSide_(rows, days, false, mineIdx, rowIdIdx), loadedBefore: loadedBefore, olderFp: olderFp };
   } finally {
     lock.releaseLock();
   }

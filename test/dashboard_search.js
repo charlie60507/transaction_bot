@@ -30,6 +30,7 @@ function run() {
   const fns = loadFns(['numericQuery', 'txnMatchesQuery', 'searchHits', 'searchPanel'], {
     TXNS: txns,
     SEARCH_CAP: 40,
+    HISTORY: { complete: true },
     state: { q: '' },
     esc: function (s) { return String(s); },
     editRow: function (t) { return '<div class="erow" data-erow="' + t.id + '"></div>'; }
@@ -56,6 +57,7 @@ function run() {
   const capFns = loadFns(['numericQuery', 'txnMatchesQuery', 'searchHits', 'searchPanel'], {
     TXNS: many,
     SEARCH_CAP: 40,
+    HISTORY: { complete: true },
     state: { q: '連鎖' },
     esc: function (s) { return String(s); },
     editRow: function (t) { return '<div class="erow" data-erow="' + t.id + '"></div>'; }
