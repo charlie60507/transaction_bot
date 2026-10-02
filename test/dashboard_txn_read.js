@@ -72,7 +72,7 @@ function formatDate(date, tz, pattern) {
 function loadServer(sheet, opts) {
   opts = opts || {};
   const src = fs.readFileSync(SERVER, 'utf8');
-  const names = ['txnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_', 'getAllTxns', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_',
+  const names = ['txnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_', 'getAllTxns', 'txnsFromRows_', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_',
     'rowCategory_', 'rowMine_', 'getMineColIndex_', 'headerRow_', 'rowHM_', 'hmFromHms_'];
   let uuidSeq = 0;
   const calls = { formatDate: 0, flush: 0 };

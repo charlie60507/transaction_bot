@@ -109,7 +109,7 @@ function harness(initial, opts) {
   const doc = opts.document || domStub(ADD_FORM);
   const fns = loadFns(PANEL_FNS, {
     TXNS: serverCopy(initial || []),
-    MUTATION_SEQ: 0, INFLIGHT: 0, STALE_DROPPED: false, REFRESHING: false,
+    MUTATION_SEQ: 0, INFLIGHT: 0, STALE_DROPPED: false, REFRESHING: false, OLDER_FP: null,
     TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_WRITE_QUEUES: {},
     TEXT_CANCEL_BLURS: {}, ROW_COMMIT_INTENTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
     COMPOSITION_FLUSH_SCHEDULED: false, TEXT_ROW_SERIAL: 0, TEXT_REMOVED_ROW_KEYS: {},
@@ -1290,8 +1290,8 @@ function run() {
 
   // ---- the server half: opt-in list, flushed before it is read ----
   const server = fs.readFileSync(path.resolve(__dirname, '..', 'sidebar', '程式碼.js'), 'utf8');
-  assert.ok(/function updateTxn\(messageId, patch, wantTxns\)/.test(server), 'the fresh list is an opt-in third parameter');
-  assert.ok(/if \(wantTxns\) \{\s*SpreadsheetApp\.flush\(\);\s*if \(wantTxns === 'recent'\) return recentAck_\(sh, messageId, new Date\(\)\);\s*return \{ ok: true, txns: getAllTxns\(\) \};/.test(server),
+  assert.ok(/function updateTxn\(messageId, patch, wantTxns, olderFp\)/.test(server), 'the fresh list is an opt-in third parameter (the fourth is the recent ack\'s fingerprint)');
+  assert.ok(/if \(wantTxns\) \{\s*SpreadsheetApp\.flush\(\);\s*if \(wantTxns === 'recent'\) return recentAck_\(sh, rows, rowNum, olderFp, new Date\(\)\);\s*return \{ ok: true, txns: getAllTxns\(\) \};/.test(server),
     'pending writes are flushed before the list is read, or the page would adopt a pre-write snapshot');
   assert.ok(/\}\s*return \{ ok: true \};\s*\}/.test(server), 'the default return shape is unchanged for the two-argument call sites');
 }
