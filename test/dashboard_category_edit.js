@@ -55,7 +55,7 @@ function serverFixture(type, mineValue) {
     }
   };
   const serverRow = row;
-  const sandbox = loadServerFns(['getRowIdColIndex_', 'ensureRowIdColIndex_', 'txnKey_', 'rowMine_', 'getAllTxns', 'hmFromHms_', 'isAmountCorrectionType_', 'updateTxn'], {
+  const sandbox = loadServerFns(['getRowIdColIndex_', 'ensureRowIdColIndex_', 'txnKey_', 'rowMine_', 'getAllTxns', 'txnsFromRows_', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_', 'hmFromHms_', 'isAmountCorrectionType_', 'updateTxn'], {
     CFG: CFG,
     getSpreadsheet_: () => ({ getSheetByName: () => sheet }),
     asTxnKey_: key => String(key),
@@ -95,8 +95,13 @@ function run() {
   // nothing about editing. The contract is now one round trip: updateTxn returns the
   // authoritative list itself, and applyEdit never fetches it separately.
   const applyEditSrc = extractFunction(extractInlineScript(src), 'applyEdit');
-  assert.ok(/\.updateTxn\(\s*serverId,\s*patch,\s*true\s*\)/.test(applyEditSrc),
+  // The ack is the incremental 'recent' one (#57): still requested in the same call, and still
+  // adopted, but carrying the last 14 days plus the edited row instead of the whole history.
+  // OLDER_FP goes out with it and the fingerprint that comes back is adopted with the list.
+  assert.ok(/\.updateTxn\(\s*serverId,\s*patch,\s*'recent',\s*OLDER_FP\s*\)/.test(applyEditSrc),
     'successful edits refresh authoritative transactions in the same call that writes them');
+  assert.ok(/settle\(\s*seq,\s*ackTxns\(\s*TXNS,\s*res\s*\),\s*res\s*&&\s*res\.olderFp\s*\)/.test(applyEditSrc),
+    'the acknowledgement the write returns is adopted, not ignored');
   assert.ok(!/getAllTxns/.test(applyEditSrc),
     'the edit path does not follow a successful write with a second fetch');
   assert.ok(/row-card \.drill[\s\S]*?stopPropagation/.test(src), 'editor controls cannot toggle the category card');

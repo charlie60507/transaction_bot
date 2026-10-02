@@ -817,6 +817,14 @@
   // re-books itself if a mutation supersedes it too, so the debt survives an arbitrarily long run
   // of writes. Convergence is that refetch, not the guard.
   var MUTATION_SEQ=0, INFLIGHT=0, STALE_DROPPED=false, REFRESHING=false;
+  // The server's fingerprint (olderFingerprint_ in 程式碼.js) of the rows older than the edit
+  // window, for the list adoptTxns last adopted — or null when that list came without one. Each
+  // incremental edit sends it back; the server compares it with the sheet BEFORE writing and
+  // returns the whole list instead of the recent rows when they differ. That is what keeps an edit
+  // equal to a reload when older rows changed elsewhere (another tab, the sheet itself) or through
+  // a backdated manual add here (addTxn adopts no list, so it leaves this stale on purpose). Only
+  // adoptTxns writes it, so a response settle() discards can never advance it.
+  var OLDER_FP=null;
   // Merchant is a logical row field, even when editRow() mounts the same transaction
   // more than once. Keep its unsaved value outside the DOM so a whole-panel rebuild cannot
   // make the server snapshot overwrite what the owner is still typing.
@@ -1001,20 +1009,57 @@
 
   /**
    * Book the end of one mutation. `txns` is the authoritative list its response carried, or null
-   * for the call sites that deliberately do not ask for one. Returns true when adopting that list
-   * changed something the page renders, so the caller repaints — and false otherwise, including
-   * every discarded response.
+   * for the call sites that deliberately do not ask for one; `olderFp` is the fingerprint that
+   * came with it (see OLDER_FP). Returns true when adopting that list changed something the page
+   * renders, so the caller repaints — and false otherwise, including every discarded response.
    *
    * Called from BOTH handlers of every call site that bumped the counter: a rejected write settles
    * too, or the in-flight count never reaches zero and the debt is never paid.
    */
-  function settle(seq, txns){
+  function settle(seq, txns, olderFp){
     if(INFLIGHT>0) INFLIGHT--;
     var changed=false;
     if(isStale(seq)) STALE_DROPPED=true;
-    else if(txns){ STALE_DROPPED=false; changed=adoptTxns(txns); }
+    else if(txns){ STALE_DROPPED=false; changed=adoptTxns(txns, olderFp); }
     if(STALE_DROPPED && INFLIGHT===0) refreshTxns();
     return changed;
+  }
+
+  /**
+   * The list an edit acknowledgement stands for, ready for settle(): the whole list when the
+   * server sent one (`txns`), or the recent acknowledgement (updateTxn's 'recent' mode) merged
+   * into `list`. Null when the response carries neither.
+   *
+   * The merge rebuilds what the full list would be. Every row dated on or after `since` is
+   * dropped and replaced by the server's window rows; this is what still brings in rows the bot
+   * appended since the page loaded (it only appends inside its 7-day scan), and drops rows
+   * deleted elsewhere inside the window. The edited row is replaced by `rowId` when it is older
+   * than the window. Rows older than the window are otherwise kept exactly as they are.
+   * `olderBefore[i]` (how many older rows precede window row i in the sheet) splices the window
+   * back where the full list has it, so the order matches a reload whatever the sheet's sort.
+   * Keeping the older rows is safe only because the server sent the recent shape at all: it does
+   * so only when OLDER_FP still matched the sheet's older rows, and sends `txns` otherwise.
+   * Rows still waiting on addTxn are left out here exactly as a server list leaves them out;
+   * adoptTxns re-appends them the same way for both paths.
+   */
+  function ackTxns(list,res){
+    if(!res) return null;
+    if(res.txns) return res.txns;
+    if(!res.recent) return null;
+    var since=res.recent.since, sinceKey=(+since.y)*10000+(+since.m)*100+(+since.d);
+    var changed=res.changed||null;
+    function inWindow(t){ return (+t.y)*10000+(+t.m)*100+(+t.d)>=sinceKey; }
+    var older=(list||[]).filter(function(t){ return !t._pendingAdd&&!inWindow(t); });
+    if(changed&&changed.rowId&&!inWindow(changed)){
+      older=older.map(function(t){ return t.rowId===changed.rowId?changed:t; });
+    }
+    var recent=res.recent.txns||[], at=res.recent.olderBefore||[], out=[], j=0;
+    for(var k=0;k<=older.length;k++){
+      while(j<recent.length&&(at[j]==null?older.length:+at[j])<=k) out.push(recent[j++]);
+      if(k<older.length) out.push(older[k]);
+    }
+    while(j<recent.length) out.push(recent[j++]);
+    return out;
   }
 
   /**
@@ -1160,14 +1205,17 @@
     var serverId=resolveTextRowId(rowKey);
     google.script.run
       .withSuccessHandler(function(res){
-        // ONE round trip: the ack and the authoritative list arrive together, so the old
+        // ONE round trip: the ack and the authoritative data arrive together, so the old
         // succeeded-write-then-failed-refetch state — sheet written, screen reverted, nothing
         // left to correct it — cannot happen. Amount is part of the composite row key, so the
-        // list is still adopted after every write; it simply no longer repaints when the server
-        // agrees with what the screen already shows. A newly arrived bot row DOES change the
-        // signature, so ticking 已記帳 stays this page's de facto refresh. settle() owns the
+        // result is still adopted after every write; it simply no longer repaints when the server
+        // agrees with what the screen already shows. The ack is the 'recent' one (the last 14
+        // days plus the edited row, merged by ackTxns into the list a reload would show), not the
+        // whole history: a newly arrived bot row is always inside that window and DOES change the
+        // signature, so ticking 已記帳 stays this page's de facto refresh. OLDER_FP rides along so
+        // the server can send the whole list instead when older rows changed. settle() owns the
         // ordering: a snapshot a later mutation superseded is dropped AND booked for a refetch.
-        if(settle(seq, res && res.txns)) repaint();
+        if(settle(seq, ackTxns(TXNS, res), res && res.olderFp)) repaint();
         done();
       })
       .withFailureHandler(function(err){
@@ -1176,7 +1224,7 @@
         if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey);
         toast('寫入失敗:'+((err&&err.message)||err), true); done();
       })
-      .updateTxn(serverId, patch, true);
+      .updateTxn(serverId, patch, 'recent', OLDER_FP);
     },function(){ settle(seq,null); });
   }
 
@@ -1202,7 +1250,7 @@
             delete TEXT_DRAFTS[draftKey(rowKey,field)]; syncTextCopies(rowKey,field,value,true,false);
           } else if(!q.pending) syncTextCopies(id,field,value,true,true);
         }
-        if(settle(seq,res&&res.txns)) repaint();
+        if(settle(seq,ackTxns(TXNS,res),res&&res.olderFp)) repaint();
         drainTextWrite(rowKey,field);
         done();
       })
@@ -1221,7 +1269,7 @@
         drainTextWrite(rowKey,field);
         done();
       })
-      .updateTxn(resolveTextRowId(rowKey),patch,true);
+      .updateTxn(resolveTextRowId(rowKey),patch,'recent',OLDER_FP);
     });
   }
 
@@ -1286,7 +1334,7 @@
           }
         });
         delete ROW_COMMIT_INTENTS[id];
-        if(settle(seq,res&&res.txns)) repaint();
+        if(settle(seq,ackTxns(TXNS,res),res&&res.olderFp)) repaint();
         ['merchant'].forEach(function(field){ drainTextWrite(id,field); });
         done();
       })
@@ -1302,7 +1350,7 @@
         ['merchant'].forEach(function(field){ drainTextWrite(id,field); });
         done();
       })
-      .updateTxn(resolveTextRowId(id),intent.patch,true);
+      .updateTxn(resolveTextRowId(id),intent.patch,'recent',OLDER_FP);
     });
   }
 
@@ -1367,7 +1415,7 @@
       .withSuccessHandler(function(res){
         delBusy=false;
         delete ROW_DELETE_INTENTS[rowKey]; TEXT_REMOVED_ROW_KEYS[rowKey]=true;
-        settle(delSeq, res && res.txns);
+        settle(delSeq, res && res.txns, res && res.olderFp);
         closeDelModal(); repaint(); toast('已刪除');
       })
       .withFailureHandler(function(err){
@@ -1911,8 +1959,10 @@
 
   // ---------- boot: fetch real data, then render ----------
   /** Adopt a server list and report whether anything the page renders actually changed, so a
-   *  write whose result matches the optimistic prediction repaints nothing. */
-  function adoptTxns(data){
+   *  write whose result matches the optimistic prediction repaints nothing. `olderFp` is the
+   *  fingerprint that came with the list; a list without one (refreshTxns' getAllTxns) clears
+   *  OLDER_FP, which costs the next edit one whole list and never a wrong one. */
+  function adoptTxns(data, olderFp){
     var before=txnsSignature(TXNS);
     var next = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount;
       // charged/mine arrive from the server; default them so a page served before the
@@ -1925,6 +1975,7 @@
       t.hm = (t.hm==null) ? '' : String(t.hm);
       t.posted = (t.posted===true); t.id = String(t.id||''); t.rowId=String(t.rowId||''); return t; });
     preservePendingAddRows(next); reconcileTextRowIds(TXNS,next); TXNS=next;
+    OLDER_FP=(olderFp==null)?null:String(olderFp);
     return txnsSignature(TXNS)!==before;
   }
   function boot(){
@@ -1932,7 +1983,7 @@
     google.script.run
       .withSuccessHandler(function(data){
         ACCOUNT_SOURCES=(data&&data.accounts)||[];
-        adoptTxns(data&&data.txns); render();
+        adoptTxns(data&&data.txns, data&&data.olderFp); render();
       })
       .withFailureHandler(function(err){
         var msg = (err && err.message) ? err.message : String(err);
