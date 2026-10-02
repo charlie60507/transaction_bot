@@ -86,7 +86,7 @@ function domStub(fields) {
   };
 }
 
-const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'txnById', 'nextMutation', 'isStale', 'settle',
+const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'ackTxns', 'txnById', 'nextMutation', 'isStale', 'settle',
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
   'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
@@ -239,7 +239,7 @@ function run() {
   assert.deepStrictEqual(tick.toasts.map(function (t) { return t.msg; }), ['已記帳 · 從清單移除'],
     'the success message appears at tap time, not a round trip later');
   assert.strictEqual(tick.calls.length, 1, 'one server call, not a write followed by a refetch');
-  assert.strictEqual(tick.calls[0].wantTxns, true, 'the edit asks for the fresh list in the same call');
+  assert.strictEqual(tick.calls[0].wantTxns, 'recent', 'the edit asks for the fresh (recent-window) data in the same call');
   const acked = serverCopy(base);
   acked[0].posted = true;
   tick.calls[0].success({ ok: true, txns: acked });
@@ -1291,7 +1291,7 @@ function run() {
   // ---- the server half: opt-in list, flushed before it is read ----
   const server = fs.readFileSync(path.resolve(__dirname, '..', 'sidebar', '程式碼.js'), 'utf8');
   assert.ok(/function updateTxn\(messageId, patch, wantTxns\)/.test(server), 'the fresh list is an opt-in third parameter');
-  assert.ok(/if \(wantTxns\) \{\s*SpreadsheetApp\.flush\(\);\s*return \{ ok: true, txns: getAllTxns\(\) \};/.test(server),
+  assert.ok(/if \(wantTxns\) \{\s*SpreadsheetApp\.flush\(\);\s*if \(wantTxns === 'recent'\) return recentAck_\(sh, messageId, new Date\(\)\);\s*return \{ ok: true, txns: getAllTxns\(\) \};/.test(server),
     'pending writes are flushed before the list is read, or the page would adopt a pre-write snapshot');
   assert.ok(/\}\s*return \{ ok: true \};\s*\}/.test(server), 'the default return shape is unchanged for the two-argument call sites');
 }

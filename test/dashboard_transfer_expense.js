@@ -166,7 +166,7 @@ function loadServer(spreadsheet) {
   const source = fs.readFileSync(SERVER, 'utf8');
   let uuidSeq = 0;
   const names = [
-    'txnKey_', 'asTxnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_', 'findRowByKey_', 'getAllTxns',
+    'txnKey_', 'asTxnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_', 'findRowByKey_', 'getAllTxns', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_',
     'isAmountCorrectionType_', 'updateTxn', 'addTxn', 'getOrCreateDeleted_', 'deleteTxn',
     'sheetHasRowId_', 'sheetHasBaseKey_', 'getSpreadsheet_', 'rowCategory_', 'cellDateTime_', 'rowHM_', 'hmFromHms_',
     'lastDataRow_', 'insertPositionForDate_', 'getMineColIndex_',

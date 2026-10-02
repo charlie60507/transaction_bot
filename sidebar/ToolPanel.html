@@ -1018,6 +1018,41 @@
   }
 
   /**
+   * The list an edit acknowledgement stands for, ready for settle(): the whole list when the
+   * server sent one (`txns`), or the recent acknowledgement (updateTxn's 'recent' mode) merged
+   * into `list`. Null when the response carries neither.
+   *
+   * The merge rebuilds what the full list would be. Every row dated on or after `since` is
+   * dropped and replaced by the server's window rows; this is what still brings in rows the bot
+   * appended since the page loaded (it only appends inside its 7-day scan), and drops rows
+   * deleted elsewhere inside the window. The edited row is replaced by `rowId` when it is older
+   * than the window. Rows older than the window are otherwise kept exactly as they are.
+   * `olderBefore[i]` (how many older rows precede window row i in the sheet) splices the window
+   * back where the full list has it, so the order matches a reload whatever the sheet's sort.
+   * Rows still waiting on addTxn are left out here exactly as a server list leaves them out;
+   * adoptTxns re-appends them the same way for both paths.
+   */
+  function ackTxns(list,res){
+    if(!res) return null;
+    if(res.txns) return res.txns;
+    if(!res.recent) return null;
+    var since=res.recent.since, sinceKey=(+since.y)*10000+(+since.m)*100+(+since.d);
+    var changed=res.changed||null;
+    function inWindow(t){ return (+t.y)*10000+(+t.m)*100+(+t.d)>=sinceKey; }
+    var older=(list||[]).filter(function(t){ return !t._pendingAdd&&!inWindow(t); });
+    if(changed&&changed.rowId&&!inWindow(changed)){
+      older=older.map(function(t){ return t.rowId===changed.rowId?changed:t; });
+    }
+    var recent=res.recent.txns||[], at=res.recent.olderBefore||[], out=[], j=0;
+    for(var k=0;k<=older.length;k++){
+      while(j<recent.length&&(at[j]==null?older.length:+at[j])<=k) out.push(recent[j++]);
+      if(k<older.length) out.push(older[k]);
+    }
+    while(j<recent.length) out.push(recent[j++]);
+    return out;
+  }
+
+  /**
    * Pay the debt a discarded response left behind: ONE read of the authoritative list, adopted
    * only while it is still current, repainting only when it differs from what is on screen.
    *
@@ -1160,14 +1195,16 @@
     var serverId=resolveTextRowId(rowKey);
     google.script.run
       .withSuccessHandler(function(res){
-        // ONE round trip: the ack and the authoritative list arrive together, so the old
+        // ONE round trip: the ack and the authoritative data arrive together, so the old
         // succeeded-write-then-failed-refetch state — sheet written, screen reverted, nothing
         // left to correct it — cannot happen. Amount is part of the composite row key, so the
-        // list is still adopted after every write; it simply no longer repaints when the server
-        // agrees with what the screen already shows. A newly arrived bot row DOES change the
+        // result is still adopted after every write; it simply no longer repaints when the server
+        // agrees with what the screen already shows. The ack is the 'recent' one (the last 14
+        // days plus the edited row, merged by ackTxns into the list a reload would show), not the
+        // whole history: a newly arrived bot row is always inside that window and DOES change the
         // signature, so ticking 已記帳 stays this page's de facto refresh. settle() owns the
         // ordering: a snapshot a later mutation superseded is dropped AND booked for a refetch.
-        if(settle(seq, res && res.txns)) repaint();
+        if(settle(seq, ackTxns(TXNS, res))) repaint();
         done();
       })
       .withFailureHandler(function(err){
@@ -1176,7 +1213,7 @@
         if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey);
         toast('寫入失敗:'+((err&&err.message)||err), true); done();
       })
-      .updateTxn(serverId, patch, true);
+      .updateTxn(serverId, patch, 'recent');
     },function(){ settle(seq,null); });
   }
 
@@ -1202,7 +1239,7 @@
             delete TEXT_DRAFTS[draftKey(rowKey,field)]; syncTextCopies(rowKey,field,value,true,false);
           } else if(!q.pending) syncTextCopies(id,field,value,true,true);
         }
-        if(settle(seq,res&&res.txns)) repaint();
+        if(settle(seq,ackTxns(TXNS,res))) repaint();
         drainTextWrite(rowKey,field);
         done();
       })
@@ -1221,7 +1258,7 @@
         drainTextWrite(rowKey,field);
         done();
       })
-      .updateTxn(resolveTextRowId(rowKey),patch,true);
+      .updateTxn(resolveTextRowId(rowKey),patch,'recent');
     });
   }
 
@@ -1286,7 +1323,7 @@
           }
         });
         delete ROW_COMMIT_INTENTS[id];
-        if(settle(seq,res&&res.txns)) repaint();
+        if(settle(seq,ackTxns(TXNS,res))) repaint();
         ['merchant'].forEach(function(field){ drainTextWrite(id,field); });
         done();
       })
@@ -1302,7 +1339,7 @@
         ['merchant'].forEach(function(field){ drainTextWrite(id,field); });
         done();
       })
-      .updateTxn(resolveTextRowId(id),intent.patch,true);
+      .updateTxn(resolveTextRowId(id),intent.patch,'recent');
     });
   }
 

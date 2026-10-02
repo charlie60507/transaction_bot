@@ -177,6 +177,66 @@ function findRowByKey_(sh, key) {
   return -1;
 }
 
+/**
+ * Occurrence number of `row` among the displayed rows sharing its base key, counting the rows
+ * already passed through `seen`. The base key is the composite id without its occurrence.
+ */
+function nextOccurrence_(seen, row) {
+  const base = txnKey_(row, 0).split('|').slice(0, 4).join('|');
+  return seen[base] = (seen[base] === undefined ? 0 : seen[base] + 1);
+}
+
+/**
+ * The one row-to-object mapping every transaction payload uses (the full list and the recent
+ * edit acknowledgement), so the two can never disagree about a field.
+ * `ymdt` is the row's date already formatted once in CFG.TZ as 'yyyy-M-d-HH:mm:ss', split on '-'.
+ */
+function txnFromRow_(row, ymdt, occurrence, mineIdx, rowIdIdx) {
+  const inout = String(row[CFG.IDX_INOUT] || '').trim();
+  const type = inout === '轉帳' ? '轉帳' : (inout === '收入' ? '收入' : '支出');
+  const isTransfer = type === '轉帳';
+  // A transfer is money moved between the user's own accounts — identified
+  // ONLY by the 收支別 (J) column reading '轉帳', never by the merchant
+  // category. Anything else transferred out still counts as normal spend.
+  return {
+    y: Number(ymdt[0]),
+    m: Number(ymdt[1]),
+    d: Number(ymdt[2]),
+    // Preformatted 'HH:mm' rather than a timestamp: the page holds no timezone knowledge
+    // (its only clock is NOW, injected by doGet as already-localised numbers), and
+    // lexicographic order on 'HH:mm' IS chronological order with '' sorting first — which
+    // is exactly where a row with no known time belongs. See rowHM_ for what "no time" means.
+    hm: hmFromHms_(ymdt[3]),
+    type: type,
+    // Expense `amount` is MY CONSUMPTION, already netted of anything fronted for other
+    // people. A transfer has no personal-consumption meaning, so it always keeps the raw
+    // amount and ignores any stale value in that column. Normalising here rather than in the
+    // page is deliberate: every one of the dashboard's dozen aggregation sites sums t.amount.
+    // `charged` keeps the real card amount for display; `mine` is the raw cell so the
+    // editor knows whether the row is split at all (null ⇒ not split).
+    amount: isTransfer ? (Number(row[CFG.IDX_AMOUNT]) || 0) : rowMine_(row, mineIdx),
+    charged: Number(row[CFG.IDX_AMOUNT]) || 0,
+    mine: (isTransfer || mineIdx === -1 || row[mineIdx] === '' || row[mineIdx] === null || row[mineIdx] === undefined)
+      ? null : (isNaN(Number(row[mineIdx])) ? null : Number(row[mineIdx])),
+    cat: rowCategory_(row) || '未分類',
+    merchant: String(row[CFG.IDX_MERCHANT] || ''),
+    bank: String(row[CFG.IDX_BANK] || ''),
+    last4: String(row[CFG.IDX_LAST4] || ''),
+    link: String(row[CFG.IDX_LINK] || ''),
+    // `id` remains the legacy composite for display/tests; `rowId` is the mutation identity.
+    id: txnKey_(row, occurrence),
+    rowId: rowIdIdx === -1 ? '' : String(row[rowIdIdx] || ''),
+    posted: row[CFG.IDX_POSTED] === true
+  };
+}
+
+/** A displayed row's date formatted once in CFG.TZ, split into [y, M, d, 'HH:mm:ss'].
+ *  One formatDate per row: four separate calls per row were ~22k Java-bridge round trips per
+ *  open at 5.5k rows. */
+function rowYmdt_(dt) {
+  return Utilities.formatDate(dt, CFG.TZ, 'yyyy-M-d-HH:mm:ss').split('-');
+}
+
 /** Flat array of ALL transactions for the client-side dashboard.
  *  Fat-frontend: NO aggregation here — the v5 page does all of it. */
 function getAllTxns() {
@@ -191,51 +251,96 @@ function getAllTxns() {
     const raw = row[CFG.IDX_DATE];
     const dt = raw instanceof Date ? raw : new Date(raw);
     if (isNaN(dt.getTime())) continue;           // skip blank / unparseable rows
-    const inout = String(row[CFG.IDX_INOUT] || '').trim();
-    const type = inout === '轉帳' ? '轉帳' : (inout === '收入' ? '收入' : '支出');
-    const isTransfer = type === '轉帳';
-    // A transfer is money moved between the user's own accounts — identified
-    // ONLY by the 收支別 (J) column reading '轉帳', never by the merchant
-    // category. Anything else transferred out still counts as normal spend.
-    // One formatDate per row: y/m/d and the time all come from the same CFG.TZ string.
-    // Four separate calls per row were ~22k Java-bridge round trips per open at 5.5k rows.
-    const ymdt = Utilities.formatDate(dt, CFG.TZ, 'yyyy-M-d-HH:mm:ss').split('-');
-    out.push({
-      y: Number(ymdt[0]),
-      m: Number(ymdt[1]),
-      d: Number(ymdt[2]),
-      // Preformatted 'HH:mm' rather than a timestamp: the page holds no timezone knowledge
-      // (its only clock is NOW, injected by doGet as already-localised numbers), and
-      // lexicographic order on 'HH:mm' IS chronological order with '' sorting first — which
-      // is exactly where a row with no known time belongs. See rowHM_ for what "no time" means.
-      hm: hmFromHms_(ymdt[3]),
-      type: type,
-      // Expense `amount` is MY CONSUMPTION, already netted of anything fronted for other
-      // people. A transfer has no personal-consumption meaning, so it always keeps the raw
-      // amount and ignores any stale value in that column. Normalising here rather than in the
-      // page is deliberate: every one of the dashboard's dozen aggregation sites sums t.amount.
-      // `charged` keeps the real card amount for display; `mine` is the raw cell so the
-      // editor knows whether the row is split at all (null ⇒ not split).
-      amount: isTransfer ? (Number(row[CFG.IDX_AMOUNT]) || 0) : rowMine_(row, mineIdx),
-      charged: Number(row[CFG.IDX_AMOUNT]) || 0,
-      mine: (isTransfer || mineIdx === -1 || row[mineIdx] === '' || row[mineIdx] === null || row[mineIdx] === undefined)
-        ? null : (isNaN(Number(row[mineIdx])) ? null : Number(row[mineIdx])),
-      cat: rowCategory_(row) || '未分類',
-      merchant: String(row[CFG.IDX_MERCHANT] || ''),
-      bank: String(row[CFG.IDX_BANK] || ''),
-      last4: String(row[CFG.IDX_LAST4] || ''),
-      link: String(row[CFG.IDX_LINK] || ''),
-      // `id` remains the legacy composite for display/tests; `rowId` is the mutation identity.
-      id: (function () {
-        const base = txnKey_(row, 0).split('|').slice(0, 4).join('|');
-        const n = seenKey[base] = (seenKey[base] === undefined ? 0 : seenKey[base] + 1);
-        return txnKey_(row, n);
-      })(),
-      rowId: rowIdIdx === -1 ? '' : String(row[rowIdIdx] || ''),
-      posted: row[CFG.IDX_POSTED] === true
-    });
+    out.push(txnFromRow_(row, rowYmdt_(dt), nextOccurrence_(seenKey, row), mineIdx, rowIdIdx));
   }
   return out;
+}
+
+/** First day of the recent edit-acknowledgement window: today minus 14 days in CFG.TZ, as
+ *  {y, m, d}. 14 days covers the dynamic refresh with room to spare: the bot only appends
+ *  transactions from its 7-day Gmail scan and dates them by authorization time, filtering out
+ *  anything dated outside those 7 days, so every row it appended is inside the window. */
+function recentSince_(now) {
+  const DAYS = 14;
+  const p = Utilities.formatDate(now, CFG.TZ, 'yyyy-M-d').split('-');
+  // Calendar arithmetic only: the CFG.TZ date is already decided, so UTC carries no zone here.
+  const s = new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]) - DAYS));
+  return { y: s.getUTCFullYear(), m: s.getUTCMonth() + 1, d: s.getUTCDate() };
+}
+
+/**
+ * The incremental edit acknowledgement: every displayed row dated on or after `since` (in
+ * CFG.TZ), plus the edited row located by its `交易 ID` whatever its date. Caller holds the
+ * lock and has flushed.
+ *
+ *   { ok, recent: { since, txns, olderBefore }, changed }
+ *
+ * `olderBefore[i]` is how many displayed rows dated BEFORE `since` precede `txns[i]` in the
+ * sheet. With it the page splices the window back exactly where the full list has it, whatever
+ * the sheet's order (the bot's SORT_ORDER may be ASC, DESC or NONE, and a hand-typed text date
+ * sorts after every real date) — instead of assuming the window is a suffix.
+ *
+ * Composite `id`s equal the full list's without numbering the whole sheet. The base key that
+ * `occurrence` counts within (txnKey_ minus its last segment) INCLUDES the raw date cell — the
+ * exact timestamp for a Date, the raw text otherwise — so every row sharing a base key has the
+ * identical date and therefore falls on the same CFG.TZ day. A window made of whole days thus
+ * holds either all of a base key's rows or none of them, in sheet order, and numbering only the
+ * window rows reproduces the full list's numbers. The edited row outside the window is numbered
+ * the same way, among the rows sharing its base key.
+ *
+ * A sheet without the `交易 ID` column (offline fixtures only; updateTxn backfills it in
+ * production) cannot locate the edited row by identity, so it gets the full list instead, in the
+ * `txns` shape the page already adopts.
+ */
+function recentAck_(sh, rowId, now) {
+  const rowIdIdx = getRowIdColIndex_(sh);
+  if (rowIdIdx === -1) return { ok: true, txns: getAllTxns() };
+  const since = recentSince_(now);
+  const sinceKey = since.y * 10000 + since.m * 100 + since.d;
+  // Rows clearly older than the window skip the formatDate bridge call entirely. UTC midnight of
+  // `since` minus two days precedes CFG.TZ midnight of `since` in every timezone (offsets stay
+  // within -12h..+14h); rows past that bound get the exact CFG.TZ day test.
+  const coarseMs = Date.UTC(since.y, since.m - 1, since.d) - 2 * 86400000;
+  const last = sh.getLastRow();
+  const rows = last <= 1 ? [] : sh.getRange(2, 1, last - 1, sh.getLastColumn()).getValues();
+  const mineIdx = getMineColIndex_(sh);
+  const txns = [];
+  const olderBefore = [];
+  const seenKey = {};
+  let older = 0;
+  let changed = null;
+  let changedIdx = -1;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const raw = row[CFG.IDX_DATE];
+    const dt = raw instanceof Date ? raw : new Date(raw);
+    if (isNaN(dt.getTime())) continue;           // same skip as getAllTxns
+    const isChanged = String(row[rowIdIdx] || '') === rowId;
+    let ymdt = null;
+    if (dt.getTime() >= coarseMs) {
+      ymdt = rowYmdt_(dt);
+      if (Number(ymdt[0]) * 10000 + Number(ymdt[1]) * 100 + Number(ymdt[2]) >= sinceKey) {
+        const t = txnFromRow_(row, ymdt, nextOccurrence_(seenKey, row), mineIdx, rowIdIdx);
+        txns.push(t);
+        olderBefore.push(older);
+        if (isChanged) changed = t;
+        continue;
+      }
+    }
+    older++;
+    if (isChanged) changedIdx = i;
+  }
+  if (changedIdx !== -1) {
+    // Older than the window: number it among the earlier rows sharing its base key, all of
+    // which carry its exact date (see above).
+    const row = rows[changedIdx];
+    const raw = row[CFG.IDX_DATE];
+    const dt = raw instanceof Date ? raw : new Date(raw);
+    const seen = {};
+    for (let i = 0; i < changedIdx; i++) if (isDisplayedTxn_(rows[i])) nextOccurrence_(seen, rows[i]);
+    changed = txnFromRow_(row, rowYmdt_(dt), nextOccurrence_(seen, row), mineIdx, rowIdIdx);
+  }
+  return { ok: true, recent: { since: since, txns: txns, olderBefore: olderBefore }, changed: changed };
 }
 
 /** Initial dashboard payload. Account settings travel with the transaction snapshot so
@@ -324,11 +429,16 @@ function isAmountCorrectionType_(type) {
  *
  * `wantTxns` is opt-in and OFF by default, so the call sites that ignore the return value
  * (the split editor, the per-day bulk post) are byte-for-byte unaffected. When it is set the
- * ack carries the authoritative list as `txns`, in the same shape `getAllTxns` returns, so an
- * edit is one round trip instead of two — a write can no longer succeed and then be reverted
- * by a failed refetch. `SpreadsheetApp.flush()` first, exactly as `deleteTxn` does: without it
- * the read can return a snapshot taken before this call's own setValue landed, and the page
- * would then correctly conclude "nothing changed" about a value the server disagrees with.
+ * ack carries authoritative data in the same call, so an edit is one round trip instead of
+ * two — a write can no longer succeed and then be reverted by a failed refetch:
+ *   true     → `{ ok, txns }`, the whole list exactly as `getAllTxns` returns it.
+ *   'recent' → `{ ok, recent, changed }` (see recentAck_): only the rows dated in the last 14
+ *              days plus the edited row. The page merges that into its list; the window still
+ *              brings in rows the bot appended since the page loaded, which is why the ack
+ *              exists at all, without reading and shipping the whole history on every edit.
+ * `SpreadsheetApp.flush()` first, exactly as `deleteTxn` does: without it the read can return
+ * a snapshot taken before this call's own setValue landed, and the page would then correctly
+ * conclude "nothing changed" about a value the server disagrees with.
  */
 function updateTxn(messageId, patch, wantTxns) {
   messageId = asTxnKey_(messageId);
@@ -398,6 +508,7 @@ function updateTxn(messageId, patch, wantTxns) {
   }
   if (wantTxns) {
     SpreadsheetApp.flush();
+    if (wantTxns === 'recent') return recentAck_(sh, messageId, new Date());
     return { ok: true, txns: getAllTxns() };
   }
   return { ok: true };
