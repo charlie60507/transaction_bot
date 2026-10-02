@@ -126,11 +126,16 @@ function ensureRowIdColIndex_(sh) {
   }
   const count = Math.max(0, sh.getLastRow() - 1);
   if (!count) return idx;
-  const rows = sh.getRange(2, 1, count, sh.getLastColumn()).getValues();
+  // Only two columns decide this: the date (is the row displayed?) and the id itself. Reading
+  // the full width here made every open and every edit pay for the whole sheet once more.
+  const dates = sh.getRange(2, CFG.IDX_DATE + 1, count, 1).getValues();
+  const current = sh.getRange(2, idx + 1, count, 1).getValues();
+  const probe = [];                               // row-like array so isDisplayedTxn_ stays the one rule
   var changed=false;
-  const ids = rows.map(row => {
-    const current=String(row[idx] || '');
-    if(current||!isDisplayedTxn_(row)) return [current];
+  const ids = current.map((cell, i) => {
+    const id=String(cell[0] || '');
+    probe[CFG.IDX_DATE] = dates[i][0];
+    if(id||!isDisplayedTxn_(probe)) return [id];
     changed=true; return [Utilities.getUuid()];
   });
   if(changed){ sh.getRange(2, idx + 1, count, 1).setValues(ids); SpreadsheetApp.flush(); }
@@ -192,15 +197,18 @@ function getAllTxns() {
     // A transfer is money moved between the user's own accounts — identified
     // ONLY by the 收支別 (J) column reading '轉帳', never by the merchant
     // category. Anything else transferred out still counts as normal spend.
+    // One formatDate per row: y/m/d and the time all come from the same CFG.TZ string.
+    // Four separate calls per row were ~22k Java-bridge round trips per open at 5.5k rows.
+    const ymdt = Utilities.formatDate(dt, CFG.TZ, 'yyyy-M-d-HH:mm:ss').split('-');
     out.push({
-      y: Number(Utilities.formatDate(dt, CFG.TZ, 'yyyy')),
-      m: Number(Utilities.formatDate(dt, CFG.TZ, 'M')),
-      d: Number(Utilities.formatDate(dt, CFG.TZ, 'd')),
+      y: Number(ymdt[0]),
+      m: Number(ymdt[1]),
+      d: Number(ymdt[2]),
       // Preformatted 'HH:mm' rather than a timestamp: the page holds no timezone knowledge
       // (its only clock is NOW, injected by doGet as already-localised numbers), and
       // lexicographic order on 'HH:mm' IS chronological order with '' sorting first — which
       // is exactly where a row with no known time belongs. See rowHM_ for what "no time" means.
-      hm: rowHM_(dt),
+      hm: hmFromHms_(ymdt[3]),
       type: type,
       // Expense `amount` is MY CONSUMPTION, already netted of anything fronted for other
       // people. A transfer has no personal-consumption meaning, so it always keeps the raw
@@ -652,7 +660,11 @@ function cellDateTime_(v) {
  * could classify a row as timeless while it displays 08:00. One formatted read decides both.
  */
 function rowHM_(dt) {
-  const hms = Utilities.formatDate(dt, CFG.TZ, 'HH:mm:ss');
+  return hmFromHms_(Utilities.formatDate(dt, CFG.TZ, 'HH:mm:ss'));
+}
+
+/** rowHM_'s rule on an already-formatted CFG.TZ 'HH:mm:ss', for callers that format once. */
+function hmFromHms_(hms) {
   return hms === '00:00:00' ? '' : hms.slice(0, 5);
 }
 

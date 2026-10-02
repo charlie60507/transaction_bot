@@ -168,7 +168,7 @@ function loadServer(spreadsheet) {
   const names = [
     'txnKey_', 'asTxnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_', 'findRowByKey_', 'getAllTxns',
     'isAmountCorrectionType_', 'updateTxn', 'addTxn', 'getOrCreateDeleted_', 'deleteTxn',
-    'sheetHasRowId_', 'sheetHasBaseKey_', 'getSpreadsheet_', 'rowCategory_', 'cellDateTime_', 'rowHM_',
+    'sheetHasRowId_', 'sheetHasBaseKey_', 'getSpreadsheet_', 'rowCategory_', 'cellDateTime_', 'rowHM_', 'hmFromHms_',
     'lastDataRow_', 'insertPositionForDate_', 'getMineColIndex_',
     'headerRow_', 'ensureMineColIndex_', 'rowMine_'
   ];
