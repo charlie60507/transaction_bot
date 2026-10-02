@@ -366,6 +366,7 @@ function fingerprintCell_(v) {
  *
  *   fingerprint matches → { ok, recent: { since, txns, olderBefore }, changed, olderFp }
  *   anything else       → { ok, txns, olderFp }, the whole list
+ * (also the whole list when an older edit renumbers its siblings; see renumbersOlderSiblings_)
  *
  * The recent shape carries every displayed row dated on or after `since` (in CFG.TZ), plus the
  * edited row whatever its date. The page keeps its own copy of every older row, which is right
@@ -394,7 +395,8 @@ function fingerprintCell_(v) {
  * identical date and therefore falls on the same CFG.TZ day. A window made of whole days thus
  * holds either all of a base key's rows or none of them, in sheet order, and numbering only the
  * window rows reproduces the full list's numbers. The edited row outside the window is numbered
- * the same way, among the rows sharing its base key.
+ * the same way, among the rows sharing its base key; when the edit moved it into or out of a
+ * group, the rows it renumbered go back with the whole list instead.
  *
  * A sheet without the `交易 ID` column (offline fixtures only; updateTxn backfills it in
  * production) cannot locate the edited row by identity, so it gets the full list instead, in the
@@ -410,10 +412,11 @@ function recentAck_(sh, rows, rowNum, clientFp, now) {
   const days = rowDays_(rows, since);
   const preFp = olderFingerprint_(rows, days, since, mineIdx, rowIdIdx);
   const editedIdx = rowNum - 2;
+  const before = rows[editedIdx];
   rows[editedIdx] = sh.getRange(rowNum, 1, 1, width).getValues()[0];
   // A window row is not part of the fingerprint, so only an older edited row changes it.
   const olderFp = days[editedIdx] === false ? olderFingerprint_(rows, days, since, mineIdx, rowIdIdx) : preFp;
-  if (clientFp == null || String(clientFp) !== preFp) {
+  if (clientFp == null || String(clientFp) !== preFp || renumbersOlderSiblings_(rows, days, editedIdx, before)) {
     return { ok: true, txns: txnsFromRows_(rows, mineIdx, rowIdIdx), olderFp: olderFp };
   }
   const txns = [];
@@ -440,6 +443,30 @@ function recentAck_(sh, rows, rowNum, clientFp, now) {
       nextOccurrence_(seen, row), mineIdx, rowIdIdx);
   }
   return { ok: true, recent: { since: since, txns: txns, olderBefore: olderBefore }, changed: changed, olderFp: olderFp };
+}
+
+/**
+ * True when an edit to a row older than the window changes the composite ids of OTHER older rows,
+ * which the recent shape does not carry. 金額 is part of the base key, so an amount edit moves the
+ * row out of its same-day duplicate group (its later siblings shift down: |1 → |0) or into
+ * another one (the rows after it shift up). An occurrence counts only EARLIER rows, so exactly the
+ * displayed rows AFTER the edited one that share its old or new base key are renumbered; rows
+ * before it, and the edited row itself (numbered in `changed`), are not. recentAck_ then sends
+ * the whole list, which renumbers exactly as a reload does. Duplicate groups are rare, and the
+ * last member of a group leaving it renumbers nothing, so this costs little.
+ */
+function renumbersOlderSiblings_(rows, days, editedIdx, before) {
+  if (days[editedIdx] !== false) return false;   // window rows are renumbered with the window
+  function base(row) { return txnKey_(row, 0).split('|').slice(0, 4).join('|'); }
+  const oldBase = base(before);
+  const newBase = base(rows[editedIdx]);
+  if (oldBase === newBase) return false;
+  for (let i = editedIdx + 1; i < rows.length; i++) {
+    if (days[i] === null) continue;
+    const b = base(rows[i]);
+    if (b === oldBase || b === newBase) return true;
+  }
+  return false;
 }
 
 /** Initial dashboard payload. Account settings travel with the transaction snapshot so

@@ -65,7 +65,7 @@ function formatDate(date, tz, pattern) {
 
 const SERVER_FNS = ['txnKey_', 'asTxnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_',
   'findRowByKey_', 'getAllTxns', 'txnsFromRows_', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_', 'recentSince_', 'recentAck_',
-  'txnSnapshot_', 'rowDays_', 'olderFingerprint_', 'fingerprintCell_', 'getDashboardData', 'deleteTxn', 'getOrCreateDeleted_',
+  'txnSnapshot_', 'rowDays_', 'olderFingerprint_', 'fingerprintCell_', 'renumbersOlderSiblings_', 'getDashboardData', 'deleteTxn', 'getOrCreateDeleted_',
   'rowCategory_', 'rowMine_', 'getMineColIndex_', 'ensureMineColIndex_', 'headerRow_', 'rowHM_', 'hmFromHms_',
   'isAmountCorrectionType_', 'updateTxn', 'addTxn', 'insertPositionForDate_', 'lastDataRow_', 'cellDateTime_',
   'sheetHasRowId_', 'sheetHasBaseKey_'];
@@ -511,8 +511,50 @@ function testOwnWritesStayIncremental() {
   assertReload(page, server, 'overlapping edits');
 }
 
+// An older edit that moves a row into or out of a same-day duplicate group renumbers the
+// group's OTHER rows in a full reload (amount is part of the base key). Those siblings are not
+// in the recent shape, so such an edit must come back as the whole list.
+function testOlderDuplicateGroups() {
+  function pageOn(rows) {
+    const server = loadServer(new EditableSheet(rows));
+    return { server, page: client(boot(server)) };
+  }
+
+  const leave = pageOn(fixtureRows());
+  edit(leave.page, leave.server, 'amount edit on a non-last member of an older duplicate group',
+    { rowId: 'old-dup-0', field: 'amount', value: 95 }, 'full');
+  assert.ok(leave.page.TXNS.find(t => t.rowId === 'old-dup-1').id.endsWith('|88|1234|0'),
+    'the sibling left behind is renumbered |1 → |0');
+
+  // A singleton older row of the same message, date and card, sitting before the 88 group.
+  const rows = fixtureRows();
+  rows.splice(rows.findIndex(r => r[12] === 'old-dup-0'), 0,
+    txnRow('old-solo', new Date('2026-09-05T02:00:00Z'), 'grp', 77, '1234', '舊單筆'));
+  const join = pageOn(rows);
+  edit(join.page, join.server, 'older row joins an existing older duplicate group',
+    { rowId: 'old-solo', field: 'amount', value: 88 }, 'full');
+  assert.deepStrictEqual(['old-solo', 'old-dup-0', 'old-dup-1'].map(id => join.page.TXNS.find(t => t.rowId === id).id.split('|').pop()),
+    ['0', '1', '2'], 'the group it joined is renumbered around it');
+
+  // Joining a group as its LAST member, or leaving it as its last member, renumbers no other
+  // row (an occurrence counts only earlier rows), so those edits stay incremental.
+  const tailRows = fixtureRows();
+  tailRows.splice(tailRows.findIndex(r => r[12] === 'old-dup-1') + 1, 0,
+    txnRow('old-solo', new Date('2026-09-05T02:00:00Z'), 'grp', 77, '1234', '舊單筆'));
+  const tail = pageOn(tailRows);
+  edit(tail.page, tail.server, 'older row joins a group as its last member', { rowId: 'old-solo', field: 'amount', value: 88 }, 'recent');
+  assert.ok(tail.page.TXNS.find(t => t.rowId === 'old-solo').id.endsWith('|88|1234|2'), 'it takes the next occurrence');
+  edit(tail.page, tail.server, 'older row leaves a group as its last member', { rowId: 'old-solo', field: 'amount', value: 66 }, 'recent');
+
+  // No sibling under either base key: still incremental, even though the id changes.
+  const solo = pageOn(fixtureRows());
+  edit(solo.page, solo.server, 'amount edit on an older row with no sibling', { rowId: 'old-1', field: 'amount', value: 101 }, 'recent');
+  assert.ok(solo.page.TXNS.find(t => t.rowId === 'old-1').id.indexOf('|101|') > 0, 'its new id is adopted');
+  edit(solo.page, solo.server, 'older non-amount edit inside a duplicate group', { rowId: 'old-dup-0', field: 'cat', value: '交通' }, 'recent');
+}
+
 const CASES = { testServerWindow, testFingerprintCoverage, testCompositeIds, testClientMerge,
-  testOlderRowsChangedElsewhere, testBackdatedManualAdd, testOwnWritesStayIncremental };
+  testOlderRowsChangedElsewhere, testBackdatedManualAdd, testOwnWritesStayIncremental, testOlderDuplicateGroups };
 
 function run() {
   Object.keys(CASES).forEach(name => CASES[name]());
