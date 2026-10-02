@@ -1086,7 +1086,11 @@
 
   /**
    * Place `inserts` among `base`: inserts[j] goes in front of base[at[j]] (after the last base
-   * row when at[j] is missing or past the end), keeping both lists' own order. Both merges that
+   * row when at[j] is missing or past the end), keeping both lists' own order. The counts index
+   * the server's view of `base`: if the page has dropped a base row the server still counts (an
+   * optimistic delete) or holds one it does not (an add that landed after the read), an insert
+   * lands one slot off. Only display order on a DESC or unsorted sheet can shift; the bot keeps
+   * the sheet ASC, where every older row sits in front of the recent ones anyway. Both merges that
    * rebuild the full list's order use it: an edit acknowledgement's window rows among the older
    * rows (ackTxns), and the background history among the recent rows (mergeOlderTxns).
    */
@@ -1120,9 +1124,10 @@
   /**
    * Fetch the history boot left out, once, in the background. On success the older rows are
    * merged in order and the page repaints once; a whole list (the page's recent rows changed
-   * since boot) is adopted as the complete history instead. A whole list is subject to the same
-   * ordering rule as every other list: when a mutation was issued after this read went out, it
-   * may predate a write the screen already shows, so it is dropped and booked as a refetch
+   * since boot) is adopted as the complete history instead. A whole list is adopted only on the
+   * terms refreshTxns reads under: nothing in flight when the read went out, and no mutation issued
+   * since. Otherwise it may predate a write the screen already shows optimistically (a retry
+   * clicked while a tick is still on its way, say), so it is dropped and booked as a refetch
    * (refreshTxns, whose whole list completes the history in turn). The merge path needs no such
    * guard: it adds only rows dated before the loaded range and leaves every loaded row exactly as
    * the page holds it. On failure the recent view stays as it is and the views that need history
@@ -1131,13 +1136,13 @@
   function loadHistory(){
     if(HISTORY.complete||HISTORY.loading||!HISTORY.before) return;
     HISTORY.loading=true; HISTORY.failed=null;
-    var seq=MUTATION_SEQ;
+    var seq=MUTATION_SEQ, quiet=INFLIGHT===0;
     google.script.run
       .withSuccessHandler(function(res){
         HISTORY.loading=false;
         if(HISTORY.complete) return;
         if(res&&res.txns){
-          if(isStale(seq)){ STALE_DROPPED=true; if(INFLIGHT===0) refreshTxns(); return; }
+          if(!quiet||isStale(seq)){ STALE_DROPPED=true; if(INFLIGHT===0) refreshTxns(); return; }
           adoptTxns(res.txns, res.olderFp);
         } else {
           adoptTxns(mergeOlderTxns(TXNS,res), res&&res.olderFp);

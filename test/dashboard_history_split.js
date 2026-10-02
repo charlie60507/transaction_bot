@@ -535,8 +535,57 @@ function testBackgroundFailureAndRetry() {
   assert.strictEqual(show(p2, { tab: 'analysis', scope: 'all' }).indexOf('data-hretry'), -1, 'and the retry control is gone');
 }
 
+// A retry clicked while a tick is still in flight, after a bot row has landed since boot: the
+// retried read comes back as the whole list, read BEFORE the tick's write. It must not overwrite
+// the tick on screen; it is dropped and the tick's own whole list completes the history.
+function testRetryRacesInFlightEdit() {
+  const sheet = fixture('asc');
+  const server = loadServer(sheet);
+  const p = partialPage(server);
+  take(p, 'getTxnsBefore').failure(new Error('逾時'));
+  const target = p.TXNS.find(t => !t.posted && t.rowId);
+  assert.ok(target, 'precondition: a loaded pending row to tick');
+  p.applyEdit(target.rowId, 'posted', true);
+  const tick = take(p, 'updateTxn');
+  const at = sheet.rows.findIndex(r => r[2] === '2024-07-04T01:00:00Z');
+  sheet.rows.splice(at, 0, txnRow('bot-new', new Date('2026-09-30T01:00:00Z'), 'z', 499, '9999', '新的機器人列', { 10: '' }));
+  p.loadHistory();
+  const retry = take(p, 'getTxnsBefore');
+  const res = wire(server.getTxnsBefore.apply(null, retry.args));
+  assert.ok(res.txns, 'precondition: the retried read returns the whole list');
+  assert.strictEqual(res.txns.find(t => t.rowId === target.rowId).posted, false, 'precondition: read before the tick landed');
+  retry.success(res);
+  assert.strictEqual(p.TXNS.find(t => t.rowId === target.rowId).posted, true, 'the retried whole list does not overwrite the in-flight tick');
+  assert.strictEqual(p.HISTORY.complete, false, 'and is not adopted as the history');
+  noPending(p, 'getAllTxns', 'no refetch while the tick is still in flight');
+  const tickRes = wire(server.updateTxn.apply(null, tick.args));
+  tick.success(tickRes);
+  noPending(p, 'getAllTxns', 'the tick\'s whole list settles the dropped read without another one');
+  assertReload(p, server, 'tick after a dropped retry');
+  assert.ok(p.TXNS.find(t => t.rowId === target.rowId).posted && p.TXNS.some(t => t.rowId === 'bot-new'), 'the tick and the bot row are both on the page');
+
+  // Same race, but the tick fails: the dropped read is refetched once nothing is in flight.
+  const sheet2 = fixture('asc');
+  const server2 = loadServer(sheet2);
+  const p2 = partialPage(server2);
+  take(p2, 'getTxnsBefore').failure(new Error('逾時'));
+  const target2 = p2.TXNS.find(t => !t.posted && t.rowId);
+  p2.applyEdit(target2.rowId, 'posted', true);
+  const tick2 = take(p2, 'updateTxn');
+  sheet2.rows.splice(sheet2.rows.findIndex(r => r[2] === '2024-07-04T01:00:00Z'), 0,
+    txnRow('bot-new', new Date('2026-09-30T01:00:00Z'), 'z', 499, '9999', '新的機器人列', { 10: '' }));
+  p2.loadHistory();
+  const retry2 = take(p2, 'getTxnsBefore');
+  retry2.success(wire(server2.getTxnsBefore.apply(null, retry2.args)));
+  assert.strictEqual(p2.TXNS.find(t => t.rowId === target2.rowId).posted, true, 'failing tick: the retried list is still dropped while it is in flight');
+  tick2.failure(new Error('寫入失敗'));
+  take(p2, 'getAllTxns').success(wire(server2.getAllTxns()));
+  assertReload(p2, server2, 'refetch after a failed tick and a dropped retry', true);
+  assert.strictEqual(p2.TXNS.find(t => t.rowId === target2.rowId).posted, false, 'the failed tick is not shown as written');
+}
+
 const CASES = { testServerSplit, testPartialViews, testEditDuringPartial, testFullListAckDuringPartial,
-  testLateAndRacingBackground, testBackgroundFailureAndRetry };
+  testLateAndRacingBackground, testBackgroundFailureAndRetry, testRetryRacesInFlightEdit };
 
 function run() {
   Object.keys(CASES).forEach(name => CASES[name]());
