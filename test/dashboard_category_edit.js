@@ -55,7 +55,7 @@ function serverFixture(type, mineValue) {
     }
   };
   const serverRow = row;
-  const sandbox = loadServerFns(['getRowIdColIndex_', 'ensureRowIdColIndex_', 'txnKey_', 'rowMine_', 'getAllTxns', 'isAmountCorrectionType_', 'updateTxn'], {
+  const sandbox = loadServerFns(['getRowIdColIndex_', 'ensureRowIdColIndex_', 'txnKey_', 'rowMine_', 'getAllTxns', 'hmFromHms_', 'isAmountCorrectionType_', 'updateTxn'], {
     CFG: CFG,
     getSpreadsheet_: () => ({ getSheetByName: () => sheet }),
     asTxnKey_: key => String(key),
@@ -65,7 +65,7 @@ function serverFixture(type, mineValue) {
     rowHM_: () => '12:00',
     rowCategory_: value => String(value[CFG.IDX_CATEGORY_MANUAL] || ''),
     LockService: { getScriptLock: () => ({ waitLock: function () {}, releaseLock: function () {} }) },
-    Utilities: { formatDate: (date, tz, part) => ({ yyyy: '2026', M: '9', d: '13' })[part] },
+    Utilities: { formatDate: (date, tz, part) => ({ yyyy: '2026', M: '9', d: '13', 'yyyy-M-d-HH:mm:ss': '2026-9-13-12:00:00' })[part] },
     SpreadsheetApp: { flush: () => { flushes++; } }
   });
   return {
