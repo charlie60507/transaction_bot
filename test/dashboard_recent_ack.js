@@ -65,10 +65,11 @@ function formatDate(date, tz, pattern) {
 
 const SERVER_FNS = ['txnKey_', 'asTxnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_',
   'findRowByKey_', 'getAllTxns', 'txnsFromRows_', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_', 'recentSince_', 'recentAck_',
-  'txnSnapshot_', 'rowDays_', 'olderFingerprint_', 'fingerprintCell_', 'renumbersOlderSiblings_', 'getDashboardData', 'deleteTxn', 'getOrCreateDeleted_',
+  'txnSnapshot_', 'snapshotOfRows_', 'rowDays_', 'olderFingerprint_', 'fingerprintCell_', 'renumbersOlderSiblings_', 'getDashboardData', 'deleteTxn', 'getOrCreateDeleted_',
   'rowCategory_', 'rowMine_', 'getMineColIndex_', 'ensureMineColIndex_', 'headerRow_', 'rowHM_', 'hmFromHms_',
   'isAmountCorrectionType_', 'updateTxn', 'addTxn', 'insertPositionForDate_', 'lastDataRow_', 'cellDateTime_',
-  'sheetHasRowId_', 'sheetHasBaseKey_'];
+  'sheetHasRowId_', 'sheetHasBaseKey_', 'monthsBackStart_', 'recentSnapshot_', 'txnsOnSide_', 'loadedFingerprint_',
+  'getTxnsBefore'];
 
 function loadServer(sheet, opts) {
   opts = opts || {};
@@ -277,7 +278,7 @@ function testCompositeIds() {
 }
 
 // ---------------------------------------------------------------- client
-const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'ackTxns', 'txnById', 'nextMutation', 'isStale', 'settle',
+const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'ackTxns', 'spliceAt', 'historyComplete', 'txnById', 'nextMutation', 'isStale', 'settle',
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
   'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
@@ -312,6 +313,7 @@ function client(payload) {
   };
   const fns = loadFns(PANEL_FNS, {
     TXNS: [], OLDER_FP: null,
+    HISTORY: { complete: true, before: null, loadedFp: null, loading: false, failed: null },
     MUTATION_SEQ: 0, INFLIGHT: 0, STALE_DROPPED: false, REFRESHING: false,
     TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_WRITE_QUEUES: {},
     TEXT_CANCEL_BLURS: {}, ROW_COMMIT_INTENTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
@@ -564,5 +566,6 @@ if (require.main === module) {
   run();
   console.log('✓ dashboard_recent_ack');
 } else {
-  module.exports = { run, CASES };
+  // The fixture sheet and server loader are reused by the partial-history tests (#58).
+  module.exports = { run, CASES, loadServer, EditableSheet, row, txnRow, HEADERS, CFG, NOW, wire, formDocument };
 }

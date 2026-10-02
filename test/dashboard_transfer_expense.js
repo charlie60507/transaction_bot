@@ -167,7 +167,7 @@ function loadServer(spreadsheet) {
   let uuidSeq = 0;
   const names = [
     'txnKey_', 'asTxnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_', 'findRowByKey_', 'getAllTxns', 'txnsFromRows_', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_',
-    'txnSnapshot_', 'recentSince_', 'rowDays_', 'olderFingerprint_', 'fingerprintCell_',
+    'txnSnapshot_', 'snapshotOfRows_', 'recentSince_', 'rowDays_', 'olderFingerprint_', 'fingerprintCell_',
     'isAmountCorrectionType_', 'updateTxn', 'addTxn', 'getOrCreateDeleted_', 'deleteTxn',
     'sheetHasRowId_', 'sheetHasBaseKey_', 'getSpreadsheet_', 'rowCategory_', 'cellDateTime_', 'rowHM_', 'hmFromHms_',
     'lastDataRow_', 'insertPositionForDate_', 'getMineColIndex_',
