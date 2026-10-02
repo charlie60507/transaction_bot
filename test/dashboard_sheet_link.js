@@ -2,6 +2,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const { loadFns, extractFunction, extractInlineScript, PANEL } = require('./extract_panel');
 
 const SERVER = path.resolve(__dirname, '..', 'sidebar', '程式碼.js');
@@ -34,8 +35,20 @@ function run() {
     'add-button cluster must not shrink off a narrow row');
 
   const server = fs.readFileSync(SERVER, 'utf8');
-  assert.ok(/t\.sheetUrl\s*=\s*getSpreadsheet_\(\)\.getUrl\(\)/.test(server),
-    'doGet must inject getSpreadsheet_().getUrl() as sheetUrl');
+  // #62: doGet builds the same URL from CFG.SPREADSHEET_ID instead of opening the spreadsheet to
+  // ask for it, so page load no longer pays an openById.
+  const doGet = extractFunction(server, 'doGet');
+  assert.ok(/t\.sheetUrl\s*=\s*'https:\/\/docs\.google\.com\/spreadsheets\/d\/'\s*\+\s*CFG\.SPREADSHEET_ID\s*\+\s*'\/edit'/.test(doGet),
+    'doGet must inject the spreadsheet\'s /edit URL, built from CFG.SPREADSHEET_ID, as sheetUrl');
+  assert.ok(!/getSpreadsheet_\(|openById/.test(doGet), 'doGet does not open the spreadsheet');
+  const doGetFn = vm.runInNewContext('(' + doGet + ')', {
+    HtmlService: { createTemplateFromFile: () => tpl },
+    nowYMD_: () => ({ year: 2026, month: 10, day: 3 }),
+    CFG: { SPREADSHEET_ID: 'MOCK_SHEET_ID' }
+  });
+  const tpl = { evaluate: () => ({ setTitle() { return this; }, addMetaTag() { return this; } }) };
+  doGetFn();
+  assert.strictEqual(tpl.sheetUrl, href, 'the injected URL is exactly the spreadsheet\'s edit URL');
 }
 
 if (require.main === module) {

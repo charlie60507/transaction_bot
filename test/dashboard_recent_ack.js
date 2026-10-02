@@ -69,7 +69,8 @@ const SERVER_FNS = ['txnKey_', 'asTxnKey_', 'isDisplayedTxn_', 'getRowIdColIndex
   'rowCategory_', 'rowMine_', 'getMineColIndex_', 'ensureMineColIndex_', 'headerRow_', 'rowHM_', 'hmFromHms_',
   'isAmountCorrectionType_', 'updateTxn', 'addTxn', 'insertPositionForDate_', 'lastDataRow_', 'cellDateTime_',
   'sheetHasRowId_', 'sheetHasBaseKey_', 'monthsBackStart_', 'recentSnapshot_', 'txnsOnSide_', 'loadedFingerprint_',
-  'getTxnsBefore'];
+  'getTxnsBefore', 'rowIdColIndexIn_', 'mineColIndexIn_', 'readTxnSheet_', 'readTxnsForLoad_', 'backfillRowIds_',
+  'ymdtFormatter_', 'tzOffsetAt_', 'ymdtOnSide_', 'daysFromYmdts_'];
 
 function loadServer(sheet, opts) {
   opts = opts || {};
@@ -146,8 +147,9 @@ function wire(x) { return JSON.parse(JSON.stringify(x)); }
 function ymdKey(t) { return t.y * 10000 + t.m * 100 + t.d; }
 const SINCE_KEY = ymdKey(SINCE);
 
-// What the page holds right after boot: getDashboardData() as it crosses the wire.
-function boot(server) { return wire(server.getDashboardData()); }
+// What the page holds right after boot: getDashboardData() as it crosses the wire. The server
+// sends it as a JSON string and the page parses it (#62).
+function boot(server) { return JSON.parse(server.getDashboardData()); }
 function shape(res) { return res.recent ? 'recent' : (res.txns ? 'full' : 'none'); }
 
 // ---------------------------------------------------------------- server
@@ -174,9 +176,18 @@ function testServerWindow() {
     .filter(f => ymdKey(f) < SINCE_KEY).length);
   assert.deepStrictEqual(res.recent.olderBefore, olderBefore, 'olderBefore counts the older rows preceding each window row');
   assert.deepStrictEqual(res.recent.olderBefore, [4, 4, 4, 4, 4, 4], 'txt-old trails the window in the sheet');
-  // One formatDate for `since`, one per row past the coarse bound (bound-out + the six window
-  // rows); none for the rows clearly older than the window, and none twice.
-  assert.strictEqual(formatsForAck, 1 + 7, 'rows clearly older than the window are never formatted');
+  // A constant number of formatDate calls per ack, whatever the number of rows (#62): one for
+  // `since` and two to confirm the CFG.TZ offset (at now and at the earliest row); every row
+  // dated 1980 or later is then formatted arithmetically. (Before #62 this was one call per row
+  // past the coarse bound, 1 + 7 here.)
+  assert.strictEqual(formatsForAck, 1 + 2, 'a constant number of formatDate calls per ack, none per row');
+  const bigger = new EditableSheet(fixtureRows().slice(0, -1).concat(
+    Array.from({ length: 40 }, (_, i) => txnRow('extra-' + i, new Date(Date.UTC(2026, 8, 20 + (i % 10), i % 24)), 'x' + i, 10 + i, '0000', '多' + i)), [[false]]));
+  const biggerServer = loadServer(bigger);
+  const biggerFp = boot(biggerServer).olderFp;
+  biggerServer.calls.formatDate = 0;
+  biggerServer.updateTxn('w-1', { cat: '交通' }, 'recent', biggerFp);
+  assert.strictEqual(biggerServer.calls.formatDate, formatsForAck, 'forty more window rows cost no more formatDate calls');
   assert.strictEqual(res.olderFp, fp0, 'an edit inside the window leaves the older fingerprint as it was');
   assert.strictEqual(res.olderFp, boot(server).olderFp, 'the returned fingerprint describes the sheet as it now stands');
   const reads = sheet.reads.length;
@@ -567,5 +578,5 @@ if (require.main === module) {
   console.log('✓ dashboard_recent_ack');
 } else {
   // The fixture sheet and server loader are reused by the partial-history tests (#58).
-  module.exports = { run, CASES, loadServer, EditableSheet, row, txnRow, HEADERS, CFG, NOW, wire, formDocument };
+  module.exports = { run, CASES, loadServer, EditableSheet, row, txnRow, HEADERS, CFG, NOW, wire, formDocument, fixtureRows };
 }

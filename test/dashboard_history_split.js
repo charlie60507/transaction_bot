@@ -25,6 +25,9 @@ const { loadServer, EditableSheet, row, txnRow, HEADERS, wire, formDocument } = 
 const BEFORE = { y: 2025, m: 10 };
 const BEFORE_KEY = 202510;
 function ymKey(t) { return t.y * 100 + t.m; }
+// getDashboardData and getTxnsBefore return their payload as a JSON string, which the page parses
+// (#62); server-side assertions read it the same way, client cases hand the page the string itself.
+function parsed(s) { assert.strictEqual(typeof s, 'string', 'load calls return a JSON string'); return JSON.parse(s); }
 
 // ---------------------------------------------------------------- fixture
 // Nearly four years of rows, so 全部期間, older years, baselines and the 待記帳 backlog all reach
@@ -98,10 +101,10 @@ function testServerSplit() {
     const sheet = fixture(order);
     const server = loadServer(sheet);
     const full = wire(server.getAllTxns());
-    const whole = wire(server.getDashboardData());
+    const whole = parsed(server.getDashboardData());
     assert.ok(full.some(t => ymKey(t) < BEFORE_KEY) && full.some(t => ymKey(t) >= BEFORE_KEY), order + ': precondition, rows on both sides');
 
-    const recent = wire(server.getDashboardData({ sinceMonths: 13 }));
+    const recent = parsed(server.getDashboardData({ sinceMonths: 13 }));
     assert.deepStrictEqual(Object.keys(recent).sort(), ['accounts', 'before', 'complete', 'loadedFp', 'txns'],
       order + ': the partial shape, with no older-rows fingerprint for edits to send');
     assert.strictEqual(recent.complete, false, order + ': marked incomplete');
@@ -112,7 +115,7 @@ function testServerSplit() {
       order + ': 1 Oct 00:00 Taipei is loaded (it is still 30 Sep in UTC)');
     assert.ok(!recent.txns.some(t => t.merchant === '邊界外'), order + ': 30 Sep 23:59 Taipei is not');
 
-    const rest = wire(server.getTxnsBefore(recent.before.y, recent.before.m, recent.loadedFp));
+    const rest = parsed(server.getTxnsBefore(recent.before.y, recent.before.m, recent.loadedFp));
     assert.deepStrictEqual(Object.keys(rest).sort(), ['loadedBefore', 'ok', 'older', 'olderFp'], order + ': the older-rows shape');
     assert.deepStrictEqual(rest.older, full.filter(t => ymKey(t) < BEFORE_KEY),
       order + ': the older part is exactly the full list\'s rows before that month, every field and id, in order');
@@ -133,33 +136,33 @@ function testServerSplit() {
 
     // Without opts, or with unusable ones, nothing changes.
     [undefined, {}, { sinceMonths: 0 }, { sinceMonths: 'x' }, { sinceMonths: 2.5 }].forEach(opts => {
-      assert.deepStrictEqual(wire(server.getDashboardData(opts)), whole, order + ': opts ' + JSON.stringify(opts) + ' behave exactly as before');
+      assert.deepStrictEqual(parsed(server.getDashboardData(opts)), whole, order + ': opts ' + JSON.stringify(opts) + ' behave exactly as before');
     });
     assert.deepStrictEqual(Object.keys(whole).sort(), ['accounts', 'olderFp', 'txns'], order + ': the whole-list shape is unchanged');
     assert.deepStrictEqual(whole.txns, full, order + ': and so is its list');
 
     // A page whose recent rows no longer match the sheet gets the whole list instead.
     [undefined, null, 'stale'].forEach(fp => {
-      assert.deepStrictEqual(wire(server.getTxnsBefore(2025, 10, fp)), { ok: true, txns: full, olderFp: whole.olderFp },
+      assert.deepStrictEqual(parsed(server.getTxnsBefore(2025, 10, fp)), { ok: true, txns: full, olderFp: whole.olderFp },
         order + ': loadedFp ' + fp + ' gets the whole list');
     });
     sheet.rows[sheet.rows.findIndex(r => r[8] === 'cathay-new')][5] = '別處改的';
-    assert.deepStrictEqual(Object.keys(wire(server.getTxnsBefore(2025, 10, recent.loadedFp))).sort(), ['ok', 'olderFp', 'txns'],
+    assert.deepStrictEqual(Object.keys(parsed(server.getTxnsBefore(2025, 10, recent.loadedFp))).sort(), ['ok', 'olderFp', 'txns'],
       order + ': a recent row changed since boot gets the whole list');
   });
 
   // Every displayed row is inside the range: the partial list IS the whole list, so it says so.
   const young = new EditableSheet([HEADERS.slice(), txnRow('y1', new Date('2026-05-01T03:00:00Z'), 'y', 10, '1', '新')]);
   const youngServer = loadServer(young);
-  const all = wire(youngServer.getDashboardData({ sinceMonths: 13 }));
-  assert.deepStrictEqual(all, Object.assign(wire(youngServer.getDashboardData()), { complete: true }),
+  const all = parsed(youngServer.getDashboardData({ sinceMonths: 13 }));
+  assert.deepStrictEqual(all, Object.assign(parsed(youngServer.getDashboardData()), { complete: true }),
     'nothing older than the range: the whole-list shape, with complete: true');
 
   // The fingerprint guards every recent row, window rows included, and nothing older.
   const sheet = fixture('asc');
   const server = loadServer(sheet);
-  const fp0 = wire(server.getDashboardData({ sinceMonths: 13 })).loadedFp;
-  const fpAfter = mutate => { const s = fixture('asc'); mutate(s.rows); return wire(loadServer(s).getDashboardData({ sinceMonths: 13 })).loadedFp; };
+  const fp0 = parsed(server.getDashboardData({ sinceMonths: 13 })).loadedFp;
+  const fpAfter = mutate => { const s = fixture('asc'); mutate(s.rows); return parsed(loadServer(s).getDashboardData({ sinceMonths: 13 })).loadedFp; };
   assert.notStrictEqual(fpAfter(rows => { rows[rows.findIndex(r => r[8] === 'cathay-win')][0] = true; }), fp0, 'a window row is covered');
   assert.notStrictEqual(fpAfter(rows => { rows[rows.findIndex(r => r[8] === 'cathay-edge')][5] = 'x'; }), fp0, 'a row on the first loaded day is covered');
   assert.strictEqual(fpAfter(rows => { rows[rows.findIndex(r => r[8] === 'edge-out')][5] = 'x'; }), fp0, 'a row before the range is not');
@@ -217,21 +220,21 @@ function partialPage(server) {
   const p = page(TODAY);
   const boot = take(p, 'getDashboardData');
   assert.deepStrictEqual(wire(boot.args), [{ sinceMonths: 13 }], 'boot asks for the recent 13 months');
-  boot.success(wire(server.getDashboardData(boot.args[0])));
+  boot.success(server.getDashboardData(boot.args[0]));   // the JSON string, as it crosses the wire
   return p;
 }
 /** A page booted from the whole list, i.e. the dashboard as it loaded before #58. */
 function fullPage(server) {
   const p = page(TODAY);
-  take(p, 'getDashboardData').success(wire(server.getDashboardData()));
+  take(p, 'getDashboardData').success(server.getDashboardData());
   noPending(p, 'getTxnsBefore', 'a whole list needs no background read');
   return p;
 }
 function answerHistory(p, server) {
   const c = take(p, 'getTxnsBefore');
-  const res = wire(server.getTxnsBefore.apply(null, c.args));
-  c.success(res);
-  return res;
+  const raw = server.getTxnsBefore.apply(null, c.args);
+  c.success(raw);
+  return parsed(raw);
 }
 
 // Every view the dashboard has, as state + an optional open heat day.
@@ -286,7 +289,7 @@ function testPartialViews() {
     const ref = fullPage(server);
     assert.strictEqual(p.HISTORY.complete, false, order + ': boot leaves the history incomplete');
     const bg = take(p, 'getTxnsBefore');
-    assert.deepStrictEqual(wire(bg.args), [2025, 10, wire(server.getDashboardData({ sinceMonths: 13 })).loadedFp],
+    assert.deepStrictEqual(wire(bg.args), [2025, 10, parsed(server.getDashboardData({ sinceMonths: 13 })).loadedFp],
       order + ': and fetches the rest in the background, with the fingerprint of what it got');
     bg.taken = false;
     assert.strictEqual(p.OLDER_FP, null, order + ': no fingerprint an edit could send while history is partial');
@@ -371,7 +374,7 @@ function testEditDuringPartial() {
     // The background read is answered by the server BEFORE the edit (the page's rows still match:
     // the older-rows shape) or AFTER it (they no longer match: the whole list).
     const bg = take(p, 'getTxnsBefore');
-    const early = lateShape === 'merge' ? wire(server.getTxnsBefore.apply(null, bg.args)) : null;
+    const early = lateShape === 'merge' ? server.getTxnsBefore.apply(null, bg.args) : null;
     // Then an older row is deleted somewhere else: the early response still carries it.
     const goneId = rid(server, 'cathay-old', 0);
     sheet.rows.splice(sheet.rows.findIndex(r => r[12] === goneId), 1);
@@ -381,8 +384,8 @@ function testEditDuringPartial() {
     assert.ok(e.res.txns && !e.res.recent, lateShape + ': so the server answers with the whole list');
     e.deliver();
     assertReload(p, server, lateShape + ': the edit\'s whole list completes the history');
-    const late = early || wire(server.getTxnsBefore.apply(null, bg.args));
-    assert.ok(lateShape === 'merge' ? late.older : late.txns, lateShape + ': precondition, the late response has the ' + lateShape + ' shape');
+    const late = early || server.getTxnsBefore.apply(null, bg.args);
+    assert.ok(lateShape === 'merge' ? parsed(late).older : parsed(late).txns, lateShape + ': precondition, the late response has the ' + lateShape + ' shape');
     const sig = p.txnsSignature(p.TXNS);
     bg.success(late);
     assert.strictEqual(p.txnsSignature(p.TXNS), sig, lateShape + ': a late background response changes nothing (no duplicate, no reorder)');
@@ -422,7 +425,7 @@ function testFullListAckDuringPartial() {
   assertReload(p, server, 'a delete during the partial phase');
   assert.ok(p.TXNS.find(t => t.id.split('|')[0] === 'cathay-new').id.endsWith('|0'), 'its duplicate siblings are renumbered');
   const sig = p.txnsSignature(p.TXNS);
-  bg.success(wire(server.getTxnsBefore.apply(null, bg.args)));
+  bg.success(server.getTxnsBefore.apply(null, bg.args));
   assert.strictEqual(p.txnsSignature(p.TXNS), sig, 'the late background read after a delete changes nothing');
   assertSameViews(p, fullPage(server), 'after a delete during the partial phase');
 
@@ -433,7 +436,7 @@ function testFullListAckDuringPartial() {
   take(p2, 'getAllTxns').success(wire(server2.getAllTxns()));
   assert.strictEqual(p2.HISTORY.complete, true, 'a refresh during the partial phase completes the history');
   assert.strictEqual(p2.OLDER_FP, null, 'with no fingerprint, exactly as a refresh always leaves it');
-  take(p2, 'getTxnsBefore').success(wire(server2.getTxnsBefore(2025, 10, 'whatever')));
+  take(p2, 'getTxnsBefore').success(server2.getTxnsBefore(2025, 10, 'whatever'));
   assert.deepStrictEqual(wire(p2.TXNS.map(t => t.rowId)), wire(fullPage(server2).TXNS.map(t => t.rowId)), 'the late read changes nothing');
 }
 
@@ -522,7 +525,7 @@ function testBackgroundFailureAndRetry() {
   const again = take(p, 'getTxnsBefore');
   assert.strictEqual(p.HISTORY.failed, null, 'retrying clears the failure');
   assert.ok(body(p, { tab: 'analysis', scope: 'all' }).indexOf(WAIT) >= 0, 'and shows the loading state again');
-  again.success(wire(server.getTxnsBefore.apply(null, again.args)));
+  again.success(server.getTxnsBefore.apply(null, again.args));
   assertReload(p, server, 'after a retry');
   assertSameViews(p, fullPage(server), 'after a retry');
 
@@ -551,10 +554,11 @@ function testRetryRacesInFlightEdit() {
   sheet.rows.splice(at, 0, txnRow('bot-new', new Date('2026-09-30T01:00:00Z'), 'z', 499, '9999', '新的機器人列', { 10: '' }));
   p.loadHistory();
   const retry = take(p, 'getTxnsBefore');
-  const res = wire(server.getTxnsBefore.apply(null, retry.args));
+  const raw = server.getTxnsBefore.apply(null, retry.args);
+  const res = parsed(raw);
   assert.ok(res.txns, 'precondition: the retried read returns the whole list');
   assert.strictEqual(res.txns.find(t => t.rowId === target.rowId).posted, false, 'precondition: read before the tick landed');
-  retry.success(res);
+  retry.success(raw);
   assert.strictEqual(p.TXNS.find(t => t.rowId === target.rowId).posted, true, 'the retried whole list does not overwrite the in-flight tick');
   assert.strictEqual(p.HISTORY.complete, false, 'and is not adopted as the history');
   noPending(p, 'getAllTxns', 'no refetch while the tick is still in flight');
@@ -576,7 +580,7 @@ function testRetryRacesInFlightEdit() {
     txnRow('bot-new', new Date('2026-09-30T01:00:00Z'), 'z', 499, '9999', '新的機器人列', { 10: '' }));
   p2.loadHistory();
   const retry2 = take(p2, 'getTxnsBefore');
-  retry2.success(wire(server2.getTxnsBefore.apply(null, retry2.args)));
+  retry2.success(server2.getTxnsBefore.apply(null, retry2.args));
   assert.strictEqual(p2.TXNS.find(t => t.rowId === target2.rowId).posted, true, 'failing tick: the retried list is still dropped while it is in flight');
   tick2.failure(new Error('寫入失敗'));
   take(p2, 'getAllTxns').success(wire(server2.getAllTxns()));
@@ -595,5 +599,5 @@ if (require.main === module) {
   run();
   console.log('✓ dashboard_history_split');
 } else {
-  module.exports = { run, CASES };
+  module.exports = { run, CASES, fixtureRows };
 }

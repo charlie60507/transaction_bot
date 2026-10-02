@@ -156,7 +156,7 @@ function loadBot(spreadsheet, threads) {
   };
   vm.createContext(sandbox);
   const serverSource = fs.readFileSync(SERVER, 'utf8');
-  vm.runInContext(['isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_']
+  vm.runInContext(['isDisplayedTxn_', 'getRowIdColIndex_', 'rowIdColIndexIn_', 'ensureRowIdColIndex_']
     .map(name => extractFunction(serverSource, name)).join('\n'), sandbox);
   vm.runInContext(fs.readFileSync(BOT, 'utf8'), sandbox, { filename: BOT });
   return sandbox;
@@ -171,7 +171,8 @@ function loadServer(spreadsheet) {
     'isAmountCorrectionType_', 'updateTxn', 'addTxn', 'getOrCreateDeleted_', 'deleteTxn',
     'sheetHasRowId_', 'sheetHasBaseKey_', 'getSpreadsheet_', 'rowCategory_', 'cellDateTime_', 'rowHM_', 'hmFromHms_',
     'lastDataRow_', 'insertPositionForDate_', 'getMineColIndex_',
-    'headerRow_', 'ensureMineColIndex_', 'rowMine_'
+    'headerRow_', 'ensureMineColIndex_', 'rowMine_',
+    'ymdtFormatter_', 'tzOffsetAt_', 'ymdtOnSide_', 'rowIdColIndexIn_', 'mineColIndexIn_'
   ];
   const sandbox = {
     console, Date, CFG,

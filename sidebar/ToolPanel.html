@@ -1138,9 +1138,10 @@
     HISTORY.loading=true; HISTORY.failed=null;
     var seq=MUTATION_SEQ, quiet=INFLIGHT===0;
     google.script.run
-      .withSuccessHandler(function(res){
+      .withSuccessHandler(function(raw){
         HISTORY.loading=false;
         if(HISTORY.complete) return;
+        var res=JSON.parse(raw);   // getTxnsBefore returns its payload as a JSON string
         if(res&&res.txns){
           if(!quiet||isStale(seq)){ STALE_DROPPED=true; if(INFLIGHT===0) refreshTxns(); return; }
           adoptTxns(res.txns, res.olderFp);
@@ -2131,11 +2132,13 @@
   }
   /** First paint from the recent 13 months (getDashboardData's partial list), then the rest of the
    *  history in the background (loadHistory). A server answering with the whole list (no
-   *  `complete: false`) needs no second read. */
+   *  `complete: false`) needs no second read. The payload arrives as a JSON string (the server
+   *  stringifies it; google.script.run is slow at serializing large nested objects). */
   function boot(){
     document.getElementById('app').innerHTML = '<div class="loading">載入中…</div>';
     google.script.run
-      .withSuccessHandler(function(data){
+      .withSuccessHandler(function(raw){
+        var data=JSON.parse(raw);
         ACCOUNT_SOURCES=(data&&data.accounts)||[];
         var partial=!!(data&&data.complete===false&&data.before);
         HISTORY={ complete:!partial, before:partial?data.before:null, loadedFp:partial?data.loadedFp:null, loading:false, failed:null };
