@@ -24,6 +24,8 @@ class Sheet {
   constructor(rows) { this.rows = rows.map(r => r.slice()); this.reads = []; this.writes = []; }
   getLastRow() { return this.rows.length; }
   getLastColumn() { return this.rows.reduce((max, r) => Math.max(max, r.length), 0); }
+  // getLastRow() x getLastColumn() from A1, like Apps Script (a blank sheet still yields A1).
+  getDataRange() { return this.getRange(1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1)); }
   getRange(row, col, numRows, numCols) {
     const sheet = this;
     numRows = numRows == null ? 1 : numRows;
@@ -73,6 +75,7 @@ function loadServer(sheet, opts) {
   opts = opts || {};
   const src = fs.readFileSync(SERVER, 'utf8');
   const names = ['txnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_', 'getAllTxns', 'txnsFromRows_', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_',
+    'ymdtFormatter_', 'tzOffsetAt_', 'rowIdColIndexIn_', 'mineColIndexIn_',
     'rowCategory_', 'rowMine_', 'getMineColIndex_', 'headerRow_', 'rowHM_', 'hmFromHms_'];
   let uuidSeq = 0;
   const calls = { formatDate: 0, flush: 0 };
@@ -137,7 +140,15 @@ function testGetAllTxns() {
   assert.deepStrictEqual(txns, EXPECTED_TXNS, 'getAllTxns output is identical to the pre-change capture');
   // Key order is part of the payload contract the page and its tests hardcode.
   txns.forEach((t, i) => assert.deepStrictEqual(Object.keys(t), Object.keys(EXPECTED_TXNS[i]), 'row ' + i + ' key order is unchanged'));
-  assert.strictEqual(server.calls.formatDate, EXPECTED_TXNS.length, 'exactly one formatDate per displayed row');
+  // #62: a constant number of formatDate calls per run, not one per row. Two calls confirm the
+  // CFG.TZ offset (at now and at the earliest row); every row dated 1980 or later is then formatted
+  // arithmetically. (Before #62 this asserted one call per displayed row.)
+  assert.strictEqual(server.calls.formatDate, 2, 'a constant number of formatDate calls, none per row');
+  const doubled = txnFixtureRows();
+  const doubledSheet = new Sheet(doubled.slice(0, -1).concat(doubled.slice(1, -1), [[false]]));
+  const doubledServer = loadServer(doubledSheet);
+  assert.strictEqual(doubledServer.getAllTxns().length, 2 * EXPECTED_TXNS.length, 'precondition: twice the rows');
+  assert.strictEqual(doubledServer.calls.formatDate, 2, 'twice the rows cost no more formatDate calls');
 }
 
 function backfillRows() {

@@ -70,6 +70,28 @@ function run() {
   assert.strictEqual(server.addAccountSource('中信').join('|'), '中信', 'duplicate add is idempotent');
   assert.strictEqual(server.addAccountSource('CASH').join('|'), '中信|CASH');
   assert.strictEqual(server.addAccountSource('cash').join('|'), '中信|CASH', 'Latin names dedupe case-insensitively');
+
+  // #62: the boot passes the spreadsheet it already opened, and META G is read in one call.
+  const reads = [];
+  const counted = new Sheet(sheet.rows);
+  counted.getRange = function (row, col, numRows, numCols) {
+    const range = new Range(this, row, col, numRows, numCols);
+    const values = range.getValues.bind(range);
+    range.getValues = () => { reads.push(['values', row, col, range.numRows, range.numCols]); return values(); };
+    range.getValue = () => { reads.push(['value', row, col]); return values()[0][0]; };
+    return range;
+  };
+  let opened = 0;
+  server.getSpreadsheet_ = () => { opened++; return { getSheetByName: () => null }; };
+  const ss = { getSheetByName: name => name === 'META' ? counted : null };
+  assert.strictEqual(server.getAccountSources_(ss).join('|'), '中信|CASH', 'same names, same order, from the passed spreadsheet');
+  assert.strictEqual(opened, 0, 'the passed spreadsheet is used; nothing is opened again');
+  assert.deepStrictEqual(reads, [['values', 1, 7, counted.getLastRow(), 1]], 'header and names come from one read of column G');
+  server.getSpreadsheet_ = () => ss;
+  assert.strictEqual(server.getAccountSources_().join('|'), '中信|CASH', 'without an argument it still opens the spreadsheet itself');
+  const noHeader = new Sheet([['a', 'b', '', '', '', '', '別的'], ['', '', '', '', '', '', 'x']]);
+  assert.deepStrictEqual(Array.from(server.getAccountSources_({ getSheetByName: () => noHeader })), [], 'another header in G is not an account list');
+  assert.deepStrictEqual(Array.from(server.getAccountSources_({ getSheetByName: () => new Sheet([['a'], ['b']]) })), [], 'a META narrower than G has none');
 }
 
 if (require.main === module) {

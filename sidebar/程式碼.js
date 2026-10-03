@@ -43,11 +43,13 @@ function onOpen() {
     .addToUi();
 }
 
-/** Web App entry: serve the dashboard page (injects real NOW in sheet TZ + sheet URL). */
+/** Web App entry: serve the dashboard page (injects real NOW in sheet TZ + sheet URL).
+ *  The URL is built from CFG.SPREADSHEET_ID rather than read from getUrl(): opening the
+ *  spreadsheet only to ask for its address cost a whole openById per page load. */
 function doGet(e) {
   const t = HtmlService.createTemplateFromFile('ToolPanel');
   t.now = nowYMD_();
-  t.sheetUrl = getSpreadsheet_().getUrl();
+  t.sheetUrl = 'https://docs.google.com/spreadsheets/d/' + CFG.SPREADSHEET_ID + '/edit';
   return t.evaluate()
     .setTitle('交易工具')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
@@ -110,7 +112,12 @@ function isDisplayedTxn_(row) {
 function getRowIdColIndex_(sh) {
   const cols = sh ? sh.getLastColumn() : 0;
   if (!cols) return -1;
-  const headers = sh.getRange(1, 1, 1, cols).getValues()[0];
+  return rowIdColIndexIn_(sh.getRange(1, 1, 1, cols).getValues()[0]);
+}
+
+/** getRowIdColIndex_'s rule on a header row the caller already holds. The one definition: the
+ *  load paths read the header with their rows, and both must locate the column identically. */
+function rowIdColIndexIn_(headers) {
   for (let i = 0; i < headers.length; i++) if (String(headers[i] || '').trim() === CFG.HDR_ROW_ID) return i;
   return -1;
 }
@@ -140,6 +147,75 @@ function ensureRowIdColIndex_(sh) {
   });
   if(changed){ sh.getRange(2, idx + 1, count, 1).setValues(ids); SpreadsheetApp.flush(); }
   return idx;
+}
+
+/**
+ * The whole Transactions sheet in ONE read, as `{ header, rows }`: `header` is row 1 and `rows`
+ * start at sheet row 2, full width (every downstream index assumes that: `rowNum = i + 2`,
+ * findRowByKey_'s rows, recentAck_'s `rowNum - 2`). getDataRange spans exactly getLastRow() x
+ * getLastColumn(), the same rectangle the per-path reads used to ask for.
+ *
+ * Both load paths (getDashboardData, getTxnsBefore) read through this one helper on purpose: the
+ * fingerprints hash whole rows and the column positions, so a different width or column order
+ * between the two would make getTxnsBefore's loadedFp check fail on every boot.
+ */
+function readTxnSheet_(sh) {
+  const values = sh.getDataRange().getValues();
+  return { header: values[0] || [], rows: values.slice(1) };
+}
+
+/**
+ * The load paths' read: readTxnSheet_ plus the `交易 ID` check ensureRowIdColIndex_ makes, done on
+ * the rows already read instead of a separate pass. Caller holds the lock. Returns
+ * `{ rows, mineIdx, rowIdIdx }`, with the ids written in this call already patched into `rows`.
+ *
+ * Same rule as ensureRowIdColIndex_: every DISPLAYED row of the whole sheet (isDisplayedTxn_), not
+ * only the rows a response will carry, gets an id when it lacks one. Differences, all deliberate:
+ * - Only the missing cells are written (one setValues per contiguous run), never the whole column,
+ *   so an id typed into another cell meanwhile cannot be overwritten. Flushed before returning,
+ *   so the write lands before the caller releases the lock.
+ * - The ids are patched into `rows` AFTER the write and BEFORE the caller computes anything: the
+ *   fingerprints hash the id column, and a fingerprint of the pre-backfill rows would never match
+ *   the next getTxnsBefore's.
+ * - A sheet without the header (one-off) goes through ensureRowIdColIndex_ itself, which creates
+ *   and backfills the column, and is then read again: the first read's rows are one cell narrower.
+ * - Without Utilities.getUuid (offline fixtures) nothing is written and `rowIdIdx` still comes
+ *   from the header, exactly as the separate ensureRowIdColIndex_ call left it.
+ * The bot and the mutation paths keep calling ensureRowIdColIndex_.
+ */
+function readTxnsForLoad_(sh) {
+  let read = readTxnSheet_(sh);
+  let rowIdIdx = rowIdColIndexIn_(read.header);
+  if (typeof Utilities !== 'undefined' && typeof Utilities.getUuid === 'function') {
+    if (rowIdIdx === -1) {
+      ensureRowIdColIndex_(sh);
+      read = readTxnSheet_(sh);
+      rowIdIdx = rowIdColIndexIn_(read.header);
+    } else {
+      backfillRowIds_(sh, read.rows, rowIdIdx);
+    }
+  }
+  return { rows: read.rows, mineIdx: mineColIndexIn_(read.header), rowIdIdx: rowIdIdx };
+}
+
+/** readTxnsForLoad_'s backfill on rows already read: generate, write the missing cells, flush,
+ *  then patch the in-memory rows (in that order; see there). */
+function backfillRowIds_(sh, rows, rowIdIdx) {
+  const fresh = [];                               // [row index, new id], ascending
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i][rowIdIdx] || '') || !isDisplayedTxn_(rows[i])) continue;
+    fresh.push([i, Utilities.getUuid()]);
+  }
+  if (!fresh.length) return;
+  for (let s = 0; s < fresh.length;) {
+    let e = s;
+    while (e + 1 < fresh.length && fresh[e + 1][0] === fresh[e][0] + 1) e++;
+    sh.getRange(fresh[s][0] + 2, rowIdIdx + 1, e - s + 1, 1)
+      .setValues(fresh.slice(s, e + 1).map(function (f) { return [f[1]]; }));
+    s = e + 1;
+  }
+  SpreadsheetApp.flush();
+  fresh.forEach(function (f) { rows[f[0]][rowIdIdx] = f[1]; });
 }
 
 /**
@@ -240,6 +316,58 @@ function rowYmdt_(dt) {
   return Utilities.formatDate(dt, CFG.TZ, 'yyyy-M-d-HH:mm:ss').split('-');
 }
 
+/**
+ * rowYmdt_ for many rows at once, without a formatDate bridge call per row (~0.85 ms each, measured
+ * 3.6 s for one getTxnsBefore). Returns `fmt(dt)` yielding exactly rowYmdt_(dt): [y, M, d] unpadded
+ * and 'HH:mm:ss' zero-padded, so hmFromHms_'s '00:00:00' rule sees the same text.
+ *
+ * Arithmetic is used only where it is provably the same answer: CFG.TZ is Asia/Taipei, which has
+ * kept a fixed offset since its last daylight-saving period ended in 1979, and the instant is on
+ * or after 1980-01-01. The offset is not hard-coded: it is derived ONCE per call from formatDate at
+ * `now` and at the earliest such row (the existing pattern parsed against UTC fields), and used
+ * only when the two agree. Anything else — another CFG.TZ, an earlier instant, a disagreement, a
+ * reply that does not parse — takes formatDate per row, exactly as before. Checking only the
+ * min/max of the rows would not do for an arbitrary zone (a daylight-saving stretch in between has
+ * the same offset at both ends); here the two calls only confirm the runtime agrees with the
+ * history the 1980 bound relies on.
+ *
+ * A text date has already gone through `new Date(raw)` (script timezone) by the time it gets here,
+ * like every caller did before; this only replaces the formatting of the resulting instant.
+ */
+function ymdtFormatter_(rows, now) {
+  const FROM = Date.UTC(1980, 0, 1);
+  let off = NaN;
+  if (CFG.TZ === 'Asia/Taipei') {
+    let earliest = Infinity;
+    for (let i = 0; i < rows.length; i++) {
+      const raw = rows[i][CFG.IDX_DATE];
+      const t = (raw instanceof Date ? raw : new Date(raw)).getTime();
+      if (t >= FROM && t < earliest) earliest = t;  // NaN fails both
+    }
+    if (earliest !== Infinity) {
+      const atNow = tzOffsetAt_(now.getTime());
+      if (atNow === tzOffsetAt_(earliest)) off = atNow;
+    }
+  }
+  return function (dt) {
+    const t = dt.getTime();
+    if (isNaN(off) || !(t >= FROM)) return rowYmdt_(dt);
+    const u = new Date(t + off);
+    const two = function (n) { return n < 10 ? '0' + n : String(n); };
+    return [String(u.getUTCFullYear()), String(u.getUTCMonth() + 1), String(u.getUTCDate()),
+      two(u.getUTCHours()) + ':' + two(u.getUTCMinutes()) + ':' + two(u.getUTCSeconds())];
+  };
+}
+
+/** CFG.TZ's offset from UTC at instant `t`, in ms, read from formatDate's 'yyyy-M-d-HH:mm:ss'
+ *  (formatDate drops milliseconds, so they are dropped from `t` too). NaN when it does not parse. */
+function tzOffsetAt_(t) {
+  const p = Utilities.formatDate(new Date(t), CFG.TZ, 'yyyy-M-d-HH:mm:ss').split('-');
+  const hms = String(p[3] || '').split(':');
+  const local = Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]), Number(hms[0]), Number(hms[1]), Number(hms[2]));
+  return local - Math.floor(t / 1000) * 1000;
+}
+
 /** Flat array of ALL transactions for the client-side dashboard.
  *  Fat-frontend: NO aggregation here — the v5 page does all of it. */
 function getAllTxns() {
@@ -251,15 +379,18 @@ function getAllTxns() {
   return txnsFromRows_(rows, mineIdx, rowIdIdx);
 }
 
-/** getAllTxns' list from rows already read (row 2 onward, full width), in sheet order. */
-function txnsFromRows_(rows, mineIdx, rowIdIdx) {
+/** getAllTxns' list from rows already read (row 2 onward, full width), in sheet order.
+ *  `fmt(dt, i)` gives row i's rowYmdt_ parts (default: a ymdtFormatter_ over these rows). */
+function txnsFromRows_(rows, mineIdx, rowIdIdx, fmt) {
+  fmt = fmt || ymdtFormatter_(rows, new Date());
   const out = [];
   const seenKey = {};
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
     const raw = row[CFG.IDX_DATE];
     const dt = raw instanceof Date ? raw : new Date(raw);
     if (isNaN(dt.getTime())) continue;           // skip blank / unparseable rows
-    out.push(txnFromRow_(row, rowYmdt_(dt), nextOccurrence_(seenKey, row), mineIdx, rowIdIdx));
+    out.push(txnFromRow_(row, fmt(dt, i), nextOccurrence_(seenKey, row), mineIdx, rowIdIdx));
   }
   return out;
 }
@@ -273,12 +404,13 @@ function txnSnapshot_(sh, now) {
   return snapshotOfRows_(rows, getMineColIndex_(sh), getRowIdColIndex_(sh), now);
 }
 
-/** txnSnapshot_ from rows already read (row 2 onward, full width). */
-function snapshotOfRows_(rows, mineIdx, rowIdIdx, now) {
+/** txnSnapshot_ from rows already read (row 2 onward, full width). `fmt` as in txnsFromRows_. */
+function snapshotOfRows_(rows, mineIdx, rowIdIdx, now, fmt) {
+  fmt = fmt || ymdtFormatter_(rows, now);
   const since = recentSince_(now);
   return {
-    txns: txnsFromRows_(rows, mineIdx, rowIdIdx),
-    olderFp: olderFingerprint_(rows, rowDays_(rows, since), since, mineIdx, rowIdIdx)
+    txns: txnsFromRows_(rows, mineIdx, rowIdIdx, fmt),
+    olderFp: olderFingerprint_(rows, rowDays_(rows, since, fmt), since, mineIdx, rowIdIdx)
   };
 }
 
@@ -303,17 +435,31 @@ function recentSince_(now) {
  * `since` minus two days precedes CFG.TZ midnight of `since` in every timezone (offsets stay
  * within -12h..+14h); rows past that bound get the exact CFG.TZ day test.
  */
-function rowDays_(rows, since) {
+function rowDays_(rows, since, fmt) {
+  fmt = fmt || ymdtFormatter_(rows, new Date());
   const sinceKey = since.y * 10000 + since.m * 100 + since.d;
   const coarseMs = Date.UTC(since.y, since.m - 1, since.d) - 2 * 86400000;
-  return rows.map(function (row) {
+  return rows.map(function (row, i) {
     const raw = row[CFG.IDX_DATE];
     const dt = raw instanceof Date ? raw : new Date(raw);
     if (isNaN(dt.getTime())) return null;
     if (dt.getTime() < coarseMs) return false;
-    const ymdt = rowYmdt_(dt);
-    return Number(ymdt[0]) * 10000 + Number(ymdt[1]) * 100 + Number(ymdt[2]) >= sinceKey ? ymdt : false;
+    return ymdtOnSide_(fmt(dt, i), sinceKey);
   });
+}
+
+/** rowDays_'s exact test on parts already formatted: the parts when on or after `sinceKey`
+ *  (y*10000 + m*100 + d), false before it. */
+function ymdtOnSide_(ymdt, sinceKey) {
+  return Number(ymdt[0]) * 10000 + Number(ymdt[1]) * 100 + Number(ymdt[2]) >= sinceKey ? ymdt : false;
+}
+
+/** rowDays_ from every row's parts computed once (null for a row that is not displayed), for a
+ *  caller that needs several boundaries over the same rows. Same answers as rowDays_: its coarse
+ *  bound only skips rows the exact test would also call older. */
+function daysFromYmdts_(ymdts, since) {
+  const sinceKey = since.y * 10000 + since.m * 100 + since.d;
+  return ymdts.map(function (ymdt) { return ymdt === null ? null : ymdtOnSide_(ymdt, sinceKey); });
 }
 
 /**
@@ -412,7 +558,8 @@ function recentAck_(sh, rows, rowNum, clientFp, now) {
   if (sh.getLastColumn() !== width) return Object.assign({ ok: true }, txnSnapshot_(sh, now));
   const mineIdx = getMineColIndex_(sh);
   const since = recentSince_(now);
-  const days = rowDays_(rows, since);
+  const fmt = ymdtFormatter_(rows, now);
+  const days = rowDays_(rows, since, fmt);
   const preFp = olderFingerprint_(rows, days, since, mineIdx, rowIdIdx);
   const editedIdx = rowNum - 2;
   const before = rows[editedIdx];
@@ -420,7 +567,7 @@ function recentAck_(sh, rows, rowNum, clientFp, now) {
   // A window row is not part of the fingerprint, so only an older edited row changes it.
   const olderFp = days[editedIdx] === false ? olderFingerprint_(rows, days, since, mineIdx, rowIdIdx) : preFp;
   if (clientFp == null || String(clientFp) !== preFp || renumbersOlderSiblings_(rows, days, editedIdx, before)) {
-    return { ok: true, txns: txnsFromRows_(rows, mineIdx, rowIdIdx), olderFp: olderFp };
+    return { ok: true, txns: txnsFromRows_(rows, mineIdx, rowIdIdx, fmt), olderFp: olderFp };
   }
   const txns = [];
   const olderBefore = [];
@@ -442,7 +589,7 @@ function recentAck_(sh, rows, rowNum, clientFp, now) {
     const raw = row[CFG.IDX_DATE];
     const seen = {};
     for (let i = 0; i < editedIdx; i++) if (days[i] !== null) nextOccurrence_(seen, rows[i]);
-    changed = txnFromRow_(row, rowYmdt_(raw instanceof Date ? raw : new Date(raw)),
+    changed = txnFromRow_(row, fmt(raw instanceof Date ? raw : new Date(raw)),
       nextOccurrence_(seen, row), mineIdx, rowIdIdx);
   }
   return { ok: true, recent: { since: since, txns: txns, olderBefore: olderBefore }, changed: changed, olderFp: olderFp };
@@ -488,19 +635,29 @@ function renumbersOlderSiblings_(rows, days, editedIdx, before) {
  *  page holds ALL of them, so until the history is complete the page sends no fingerprint and
  *  every edit gets the whole list back (which completes the history too). When nothing is dated
  *  before `before`, the partial list IS the whole list: it comes back in the whole-list shape
- *  with `complete: true` and its `olderFp`. */
+ *  with `complete: true` and its `olderFp`.
+ *
+ *  The payload is returned as a JSON STRING, which the page parses: google.script.run is slow at
+ *  serializing large nested objects, and a string crosses it as one value. Nothing in it is a Date
+ *  (dates are y/m/d/hm numbers and strings), so the parsed object is the object itself.
+ *
+ *  One read of the sheet (readTxnsForLoad_), which also backfills missing `交易 ID`s; the
+ *  spreadsheet is opened once and META read from the same handle. */
 function getDashboardData(opts) {
   const lock = LockService.getScriptLock();
   lock.waitLock(15 * 1000);
   try {
-    const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
-    if (sh) ensureRowIdColIndex_(sh);
+    const ss = getSpreadsheet_();
+    const sh = ss.getSheetByName(CFG.DATA_SHEET);
+    const read = sh ? readTxnsForLoad_(sh) : null;
     const months = opts ? Number(opts.sinceMonths) : NaN;
     if (!(months >= 1) || Math.floor(months) !== months) {
-      const snap = txnSnapshot_(sh, new Date());
-      return { txns: snap.txns, olderFp: snap.olderFp, accounts: getAccountSources_() };
+      const snap = (read && read.rows.length)
+        ? snapshotOfRows_(read.rows, read.mineIdx, read.rowIdIdx, new Date())
+        : { txns: [], olderFp: null };
+      return JSON.stringify({ txns: snap.txns, olderFp: snap.olderFp, accounts: getAccountSources_(ss) });
     }
-    return Object.assign(recentSnapshot_(sh, months, new Date()), { accounts: getAccountSources_() });
+    return JSON.stringify(Object.assign(recentSnapshot_(read, months, new Date()), { accounts: getAccountSources_(ss) }));
   } finally {
     lock.releaseLock();
   }
@@ -515,15 +672,17 @@ function monthsBackStart_(now, months) {
   return { y: s.getUTCFullYear(), m: s.getUTCMonth() + 1 };
 }
 
-/** getDashboardData's partial list (see there), from one read. */
-function recentSnapshot_(sh, months, now) {
-  if (!sh || sh.getLastRow() <= 1) return { txns: [], olderFp: null, complete: true };
-  const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
-  const mineIdx = getMineColIndex_(sh);
-  const rowIdIdx = getRowIdColIndex_(sh);
+/** getDashboardData's partial list (see there), from its one read (readTxnsForLoad_; null when
+ *  there is no sheet). */
+function recentSnapshot_(read, months, now) {
+  if (!read || !read.rows.length) return { txns: [], olderFp: null, complete: true };
+  const rows = read.rows;
+  const mineIdx = read.mineIdx;
+  const rowIdIdx = read.rowIdIdx;
+  const fmt = ymdtFormatter_(rows, now);
   const from = monthsBackStart_(now, months);
-  const days = rowDays_(rows, { y: from.y, m: from.m, d: 1 });
-  if (days.indexOf(false) === -1) return Object.assign(snapshotOfRows_(rows, mineIdx, rowIdIdx, now), { complete: true });
+  const days = rowDays_(rows, { y: from.y, m: from.m, d: 1 }, fmt);
+  if (days.indexOf(false) === -1) return Object.assign(snapshotOfRows_(rows, mineIdx, rowIdIdx, now, fmt), { complete: true });
   return {
     txns: txnsOnSide_(rows, days, true, mineIdx, rowIdIdx),
     complete: false,
@@ -541,14 +700,17 @@ function recentSnapshot_(sh, months, now) {
  * an occurrence counts within includes the raw date cell (see recentAck_), so every row sharing a
  * base key falls on the same CFG.TZ day, hence in the same month: a month boundary never splits a
  * duplicate group, and numbering one side alone reproduces the full list's numbers.
+ *
+ * The recent side's parts are in `days`; the older side's come from `fmt(dt, i)` (as in
+ * txnsFromRows_), which the caller passes so each row is formatted once per call.
  */
-function txnsOnSide_(rows, days, recent, mineIdx, rowIdIdx) {
+function txnsOnSide_(rows, days, recent, mineIdx, rowIdIdx, fmt) {
   const out = [];
   const seenKey = {};
   for (let i = 0; i < rows.length; i++) {
     if (days[i] === null || (days[i] !== false) !== recent) continue;
     const raw = rows[i][CFG.IDX_DATE];
-    const ymdt = recent ? days[i] : rowYmdt_(raw instanceof Date ? raw : new Date(raw));
+    const ymdt = recent ? days[i] : (fmt || rowYmdt_)(raw instanceof Date ? raw : new Date(raw), i);
     out.push(txnFromRow_(rows[i], ymdt, nextOccurrence_(seenKey, rows[i]), mineIdx, rowIdIdx));
   }
   return out;
@@ -585,25 +747,36 @@ function loadedFingerprint_(rows, days, from, mineIdx, rowIdIdx) {
  * `olderFp` is the fingerprint of every row older than the edit window as the sheet now stands
  * (olderFingerprint_), i.e. of the rows the page holds once it has merged this response: its
  * recent rows by the match, the rest from this very read.
+ *
+ * Returned as a JSON string, like getDashboardData (see there). The same one read, through the same
+ * helper, so both calls see the same width and column order. Each row's date is formatted once and
+ * both boundaries (the month and the edit window) are decided from those parts.
  */
 function getTxnsBefore(y, m, loadedFp) {
   const lock = LockService.getScriptLock();
   lock.waitLock(15 * 1000);
   try {
     const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
-    if (sh) ensureRowIdColIndex_(sh);
-    if (!sh || sh.getLastRow() <= 1) return { ok: true, txns: [], olderFp: null };
+    const read = sh ? readTxnsForLoad_(sh) : null;
+    if (!read || !read.rows.length) return JSON.stringify({ ok: true, txns: [], olderFp: null });
     const from = { y: Number(y), m: Number(m) };
     if (!(from.y > 0) || !(from.m >= 1 && from.m <= 12)) throw new Error('月份不合法: ' + y + '-' + m);
     const now = new Date();
-    const rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
-    const mineIdx = getMineColIndex_(sh);
-    const rowIdIdx = getRowIdColIndex_(sh);
-    const days = rowDays_(rows, { y: from.y, m: from.m, d: 1 });
+    const rows = read.rows;
+    const mineIdx = read.mineIdx;
+    const rowIdIdx = read.rowIdIdx;
+    const fmt = ymdtFormatter_(rows, now);
+    const ymdts = rows.map(function (row, i) {
+      const raw = row[CFG.IDX_DATE];
+      const dt = raw instanceof Date ? raw : new Date(raw);
+      return isNaN(dt.getTime()) ? null : fmt(dt, i);
+    });
+    const once = function (dt, i) { return ymdts[i]; };
+    const days = daysFromYmdts_(ymdts, { y: from.y, m: from.m, d: 1 });
     const since = recentSince_(now);
-    const olderFp = olderFingerprint_(rows, rowDays_(rows, since), since, mineIdx, rowIdIdx);
+    const olderFp = olderFingerprint_(rows, daysFromYmdts_(ymdts, since), since, mineIdx, rowIdIdx);
     if (loadedFp == null || String(loadedFp) !== loadedFingerprint_(rows, days, from, mineIdx, rowIdIdx)) {
-      return { ok: true, txns: txnsFromRows_(rows, mineIdx, rowIdIdx), olderFp: olderFp };
+      return JSON.stringify({ ok: true, txns: txnsFromRows_(rows, mineIdx, rowIdIdx, once), olderFp: olderFp });
     }
     const loadedBefore = [];
     let loaded = 0;
@@ -611,19 +784,24 @@ function getTxnsBefore(y, m, loadedFp) {
       if (days[i] === null) continue;
       if (days[i] === false) loadedBefore.push(loaded); else loaded++;
     }
-    return { ok: true, older: txnsOnSide_(rows, days, false, mineIdx, rowIdIdx), loadedBefore: loadedBefore, olderFp: olderFp };
+    return JSON.stringify({ ok: true, older: txnsOnSide_(rows, days, false, mineIdx, rowIdIdx, once), loadedBefore: loadedBefore, olderFp: olderFp });
   } finally {
     lock.releaseLock();
   }
 }
 
-/** Read configured account/source names from META!G, preserving the owner's order. */
-function getAccountSources_() {
-  const sh = getSpreadsheet_().getSheetByName(CFG.META_SHEET);
-  if (!sh || sh.getLastColumn() < CFG.META_ACCOUNT_COL || sh.getLastRow() <= 1) return [];
-  const header = String(sh.getRange(1, CFG.META_ACCOUNT_COL).getValue() || '').trim();
+/** Read configured account/source names from META!G, preserving the owner's order.
+ *  `ss` is the spreadsheet the caller already opened (opened here when omitted); the header and
+ *  the names come from one read of the column. */
+function getAccountSources_(ss) {
+  const sh = (ss || getSpreadsheet_()).getSheetByName(CFG.META_SHEET);
+  if (!sh || sh.getLastColumn() < CFG.META_ACCOUNT_COL) return [];
+  const last = sh.getLastRow();
+  if (last <= 1) return [];
+  const column = sh.getRange(1, CFG.META_ACCOUNT_COL, last, 1).getValues();
+  const header = String(column[0][0] || '').trim();
   if (header !== CFG.META_ACCOUNT_HEADER) return [];
-  const values = sh.getRange(2, CFG.META_ACCOUNT_COL, sh.getLastRow() - 1, 1).getValues();
+  const values = column.slice(1);
   const seen = {};
   const out = [];
   values.forEach(function (row) {
@@ -1103,7 +1281,11 @@ function insertPositionForDate_(sh, dt) {
  * nothing on screen to explain it.
  */
 function getMineColIndex_(sh) {
-  const headers = headerRow_(sh);
+  return mineColIndexIn_(headerRow_(sh));
+}
+
+/** getMineColIndex_'s rule on a header row the caller already holds (see rowIdColIndexIn_). */
+function mineColIndexIn_(headers) {
   for (let i = 0; i < headers.length; i++) {
     if (String(headers[i]).trim() === CFG.HDR_MINE) return i;
   }

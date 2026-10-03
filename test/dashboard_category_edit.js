@@ -55,7 +55,7 @@ function serverFixture(type, mineValue) {
     }
   };
   const serverRow = row;
-  const sandbox = loadServerFns(['getRowIdColIndex_', 'ensureRowIdColIndex_', 'txnKey_', 'rowMine_', 'getAllTxns', 'txnsFromRows_', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_', 'hmFromHms_', 'isAmountCorrectionType_', 'updateTxn'], {
+  const sandbox = loadServerFns(['getRowIdColIndex_', 'ensureRowIdColIndex_', 'txnKey_', 'rowMine_', 'getAllTxns', 'txnsFromRows_', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_', 'ymdtFormatter_', 'tzOffsetAt_', 'rowIdColIndexIn_', 'hmFromHms_', 'isAmountCorrectionType_', 'updateTxn'], {
     CFG: CFG,
     getSpreadsheet_: () => ({ getSheetByName: () => sheet }),
     asTxnKey_: key => String(key),
@@ -65,7 +65,16 @@ function serverFixture(type, mineValue) {
     rowHM_: () => '12:00',
     rowCategory_: value => String(value[CFG.IDX_CATEGORY_MANUAL] || ''),
     LockService: { getScriptLock: () => ({ waitLock: function () {}, releaseLock: function () {} }) },
-    Utilities: { formatDate: (date, tz, part) => ({ yyyy: '2026', M: '9', d: '13', 'yyyy-M-d-HH:mm:ss': '2026-9-13-12:00:00' })[part] },
+    // Honours the date (Taipei is UTC+8 throughout the fixture's range). It used to return one
+    // fixed string whatever the date, which cannot stand in for formatDate once the server derives
+    // the CFG.TZ offset from two calls at different instants (#62).
+    Utilities: { formatDate: (date, tz, pattern) => {
+      const u = new Date(date.getTime() + 8 * 3600000);
+      const two = n => String(n).padStart(2, '0');
+      const tokens = { yyyy: String(u.getUTCFullYear()), M: String(u.getUTCMonth() + 1), d: String(u.getUTCDate()),
+        HH: two(u.getUTCHours()), mm: two(u.getUTCMinutes()), ss: two(u.getUTCSeconds()) };
+      return pattern.replace(/yyyy|HH|mm|ss|M|d/g, t => tokens[t]);
+    } },
     SpreadsheetApp: { flush: () => { flushes++; } }
   });
   return {
@@ -149,6 +158,8 @@ function run() {
   assert.strictEqual(mappedTransfer.charged, 120, 'transfer retains the raw charged amount');
   assert.strictEqual(mappedTransfer.mine, null, 'transfer mapping exposes no split state');
   assert.ok(!Object.prototype.hasOwnProperty.call(mappedTransfer, 'tag'), 'getAllTxns emits no tag field');
+  assert.deepStrictEqual([mappedTransfer.y, mappedTransfer.m, mappedTransfer.d, mappedTransfer.hm], [2026, 9, 13, '20:00'],
+    'the row is dated in CFG.TZ (12:00 UTC is 20:00 in Taipei)');
 
   const transferResult = transferServer.update({ amount: 150 }, true);
   assert.deepStrictEqual(transferServer.writes, [[2, 5, 150]], 'transfer correction writes only 金額_NTD');
