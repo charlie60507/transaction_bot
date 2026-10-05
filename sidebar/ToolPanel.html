@@ -283,16 +283,10 @@
   .source-new button { border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-primary); border-radius: 6px; padding: 7px 11px; cursor: pointer; }
   .source-new button.primary { border-color: var(--accent); color: var(--accent); }
   .source-new button[disabled] { opacity: .5; cursor: default; }
-  .settings-section { margin-top: var(--sp3); }
-  .settings-section h4 { font-size: 12px; color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: .07em; margin-bottom: var(--sp2); }
   .account-list { list-style: none; border: 1px solid var(--border); border-radius: var(--r-ctl); overflow: hidden; margin-bottom: var(--sp3); }
   .account-list li { padding: 8px 10px; background: var(--bg-raised); border-bottom: 1px solid var(--border); }
   .account-list li:last-child { border-bottom: none; }
   .account-list .account-empty { color: var(--text-muted); }
-  .category-list li { display: flex; align-items: center; gap: var(--sp2); }
-  .category-list .category-name { flex: 1; min-width: 0; }
-  .category-list button { border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-primary); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
-  .category-list button[disabled] { opacity: .35; cursor: default; }
   .minfo { grid-column: 1/-1; font-size: 12px; color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 8px 10px; }
   .minfo b { color: var(--text-primary); }
   .macts { display: flex; gap: var(--sp2); justify-content: flex-end; margin-top: var(--sp4); }
@@ -301,6 +295,68 @@
   .mbtn.danger { background: var(--spend); border-color: var(--spend); color: #fff; }
   .mbtn:hover { filter: brightness(1.08); }
   .dmeta { margin-top: 4px; font-size: 12px; color: var(--text-muted); }
+
+  /* Settings sheet. .overlay / .modal / .macts / .source-new are shared with the add and delete
+     dialogs, so every rule here is scoped to #settingsOverlay or the .settings-sheet class on its
+     dialog. Desktop: the centred 460px dialog. Phone (<= 640px): a bottom sheet (block below). */
+  #settingsOverlay .settings-sheet { display: flex; flex-direction: column; padding: 0; max-height: 88vh; overflow: hidden; animation: settings-fade .16s ease-out; }
+  @keyframes settings-fade { from { transform: translateY(8px); opacity: 0; } }
+  @keyframes settings-up { from { transform: translateY(40px); opacity: .4; } }
+  .settings-sheet .settings-grab { display: none; width: 36px; height: 4px; border-radius: 2px; background: var(--border); margin: 8px auto 0; flex-shrink: 0; }
+  .settings-sheet .settings-head { display: flex; align-items: center; gap: var(--sp2); padding: var(--sp3) var(--sp3) var(--sp2) var(--sp4); flex-shrink: 0; }
+  .settings-sheet .settings-head h3 { margin: 0; flex: 1; min-width: 0; }
+  .settings-sheet .settings-status { display: inline-flex; align-items: center; gap: 5px; min-height: 18px; font-size: 12px; color: var(--text-muted); transition: opacity .4s; }
+  .settings-sheet .settings-status.fade { opacity: 0; }
+  .settings-sheet .settings-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--income); }
+  .settings-sheet .settings-status.saving .settings-dot { background: var(--accent); animation: settings-pulse .8s infinite alternate; }
+  .settings-sheet .settings-status.err { color: var(--spend); }
+  .settings-sheet .settings-status.err .settings-dot { background: var(--spend); }
+  @keyframes settings-pulse { to { opacity: .3; } }
+  .settings-sheet .settings-x { width: 32px; height: 32px; border-radius: 50%; border: 0; background: var(--bg-raised); color: var(--text-muted); font-size: 18px; line-height: 1; cursor: pointer; display: grid; place-items: center; flex-shrink: 0; }
+  .settings-sheet .settings-x:hover { color: var(--text-primary); }
+  .settings-sheet .settings-tabs { position: relative; display: grid; grid-template-columns: 1fr 1fr; margin: 0 var(--sp4) var(--sp3); padding: 3px; background: var(--bg-raised); border-radius: var(--r-ctl); flex-shrink: 0; }
+  .settings-sheet .settings-tab-pill { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px); background: var(--bg-surface); border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.45); transition: transform .22s cubic-bezier(.3,.7,.3,1); }
+  .settings-sheet .settings-tabs[data-active="categories"] .settings-tab-pill { transform: translateX(100%); }
+  .settings-sheet .settings-tabs button { position: relative; z-index: 1; border: 0; background: transparent; font: inherit; font-size: 13px; font-weight: 600; color: var(--text-muted); padding: 7px 0; border-radius: 6px; cursor: pointer; }
+  .settings-sheet .settings-tabs button[aria-selected="true"] { color: var(--text-primary); }
+  .settings-sheet .settings-tab-n { margin-left: 4px; font-weight: 500; color: var(--text-muted); }
+  .settings-sheet .settings-body { overflow-y: auto; overscroll-behavior: contain; padding: 0 var(--sp4) var(--sp4); }
+  .settings-sheet .settings-hint { font-size: 12px; color: var(--text-muted); margin-bottom: var(--sp2); }
+  .settings-sheet .settings-group { border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--bg-raised); }
+  .settings-sheet .settings-list { list-style: none; }
+  .settings-sheet .settings-row { position: relative; display: flex; align-items: center; gap: var(--sp2); min-height: 46px; padding: 0 var(--sp3) 0 var(--sp1); background: var(--bg-raised); border-bottom: 1px solid var(--border); }
+  .settings-sheet .settings-row:first-child { border-radius: var(--r-ctl) var(--r-ctl) 0 0; }
+  .settings-sheet .settings-name { flex: 1; min-width: 0; padding-left: var(--sp2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .settings-sheet .settings-acct-list .settings-name { padding-left: var(--sp3); }
+  .settings-sheet .settings-empty { color: var(--text-muted); padding-left: var(--sp4); }
+  .settings-sheet .settings-handle { width: 36px; height: 40px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: grab; touch-action: none; }
+  .settings-sheet .settings-handle svg { width: 14px; height: 14px; fill: currentColor; }
+  .settings-sheet .settings-handle:hover { color: var(--text-primary); }
+  .settings-sheet .settings-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .settings-sheet .settings-handle[disabled] { opacity: .35; cursor: default; }
+  .settings-sheet .settings-cat-list.dragging { user-select: none; -webkit-user-select: none; }
+  .settings-sheet .settings-cat-list.dragging .settings-row { transition: transform .18s cubic-bezier(.3,.7,.3,1); }
+  .settings-sheet .settings-cat-list.dragging .settings-row.dragging { z-index: 3; transition: none; border-radius: var(--r-ctl); box-shadow: 0 10px 28px rgba(0,0,0,.45); outline: 1px solid var(--accent); outline-offset: -1px; }
+  .settings-sheet .settings-row.dragging .settings-handle { color: var(--accent); cursor: grabbing; }
+  .settings-sheet .settings-add-toggle { display: flex; align-items: center; gap: var(--sp2); width: 100%; min-height: 46px; padding: 0 var(--sp3); border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 14px; text-align: left; cursor: pointer; border-radius: 0 0 var(--r-ctl) var(--r-ctl); }
+  .settings-sheet .settings-add-toggle[hidden], .settings-sheet .settings-add-form[hidden] { display: none; }
+  .settings-sheet .settings-add-form { display: flex; align-items: center; gap: var(--sp2); padding: 6px var(--sp2) 6px var(--sp3); }
+  .settings-sheet .settings-add-form input { flex: 1; min-width: 0; background: var(--bg-surface); border-color: var(--accent); padding: 7px 9px; }
+  .settings-sheet .settings-add-form input.bad { border-color: var(--spend); }
+  .settings-sheet .settings-add-form button { border: 0; border-radius: 6px; padding: 7px 12px; background: var(--accent); color: #0e1220; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .settings-sheet .settings-add-form button[disabled] { opacity: .5; cursor: default; }
+  .settings-sheet .settings-add-form .settings-add-cancel { background: transparent; color: var(--text-muted); padding: 7px 6px; }
+  .settings-sheet .settings-foot { font-size: 12px; color: var(--text-muted); margin: var(--sp2) 2px 0; }
+  .settings-sheet .settings-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  @media (max-width: 640px) {
+    #settingsOverlay { align-items: flex-end; padding: 0; overflow: hidden; }
+    #settingsOverlay .settings-sheet { margin: 0; max-width: none; max-height: 86vh; border-bottom: 0; border-radius: 18px 18px 0 0; box-shadow: 0 -10px 40px rgba(0,0,0,.45); animation: settings-up .22s ease-out; }
+    .settings-sheet .settings-grab { display: block; }
+    .settings-sheet .settings-body { padding-bottom: calc(var(--sp4) + env(safe-area-inset-bottom)); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .settings-sheet, .settings-sheet * { animation: none !important; transition: none !important; }
+  }
 
   .empty { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
   /* 待記帳 inbox: one flat cross-day queue. Day sections reuse .erow from the per-day editor. */
@@ -362,20 +418,38 @@
   </div>
 </div>
 <div class="overlay" id="settingsOverlay">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-    <h3 id="settings-title">設定</h3>
-    <div class="msub">管理獨立於單筆交易的長期設定。</div>
-    <section class="settings-section" aria-labelledby="accounts-title">
-      <h4 id="accounts-title">帳戶</h4>
-      <ul class="account-list" id="settings-account-list"></ul>
-      <div class="source-new"><input id="settings-account-name" maxlength="50" placeholder="新增帳戶，例如：中信" aria-label="新帳戶名稱" spellcheck="false"><button type="button" class="primary" id="settings-account-create">加入</button></div>
-    </section>
-    <section class="settings-section" aria-labelledby="categories-title">
-      <h4 id="categories-title">類別</h4>
-      <ul class="account-list category-list" id="settings-category-list"></ul>
-      <div class="source-new"><input id="settings-category-name" maxlength="20" placeholder="新增類別" aria-label="新類別名稱" spellcheck="false"><button type="button" class="primary" id="settings-category-create">加入</button></div>
-    </section>
-    <div class="macts"><button type="button" class="mbtn" id="settings-close">關閉</button></div>
+  <div class="modal settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="settings-grab" aria-hidden="true"></div>
+    <div class="settings-head">
+      <h3 id="settings-title">設定</h3>
+      <span class="settings-status" id="settings-status" aria-live="polite"></span>
+      <button type="button" class="settings-x" id="settings-x" aria-label="關閉設定">×</button>
+    </div>
+    <div class="settings-tabs" role="tablist" id="settings-tabs" data-active="accounts" aria-label="設定分類">
+      <span class="settings-tab-pill" aria-hidden="true"></span>
+      <button type="button" role="tab" id="settings-tab-accounts" data-settings-tab="accounts" aria-selected="true" aria-controls="settings-panel-accounts" tabindex="0">帳戶<span class="settings-tab-n num" id="settings-account-count"></span></button>
+      <button type="button" role="tab" id="settings-tab-categories" data-settings-tab="categories" aria-selected="false" aria-controls="settings-panel-categories" tabindex="-1">類別<span class="settings-tab-n num" id="settings-category-count"></span></button>
+    </div>
+    <div class="settings-body" id="settings-body">
+      <div role="tabpanel" id="settings-panel-accounts" aria-labelledby="settings-tab-accounts">
+        <p class="settings-hint">記帳時可選的付款帳戶。</p>
+        <div class="settings-group">
+          <ul class="settings-list settings-acct-list" id="settings-account-list"></ul>
+          <button type="button" class="settings-add-toggle" id="settings-account-add"><span aria-hidden="true">＋</span>新增帳戶</button>
+          <div class="settings-add-form" id="settings-account-form" hidden><input id="settings-account-name" maxlength="50" placeholder="帳戶名稱，例如：中信" aria-label="新帳戶名稱" spellcheck="false" autocomplete="off"><button type="button" id="settings-account-create">加入</button><button type="button" class="settings-add-cancel" id="settings-account-cancel">取消</button></div>
+        </div>
+      </div>
+      <div role="tabpanel" id="settings-panel-categories" aria-labelledby="settings-tab-categories" hidden>
+        <p class="settings-hint">按住 ⋮⋮ 拖曳排序，所有類別選單都會照這個順序。</p>
+        <div class="settings-group">
+          <ul class="settings-list settings-cat-list" id="settings-category-list"></ul>
+          <button type="button" class="settings-add-toggle" id="settings-category-add"><span aria-hidden="true">＋</span>新增類別</button>
+          <div class="settings-add-form" id="settings-category-form" hidden><input id="settings-category-name" maxlength="20" placeholder="類別名稱" aria-label="新類別名稱" spellcheck="false" autocomplete="off"><button type="button" id="settings-category-create">加入</button><button type="button" class="settings-add-cancel" id="settings-category-cancel">取消</button></div>
+        </div>
+        <p class="settings-foot">「未分類」固定在選單最上面，不在這裡排序。</p>
+        <div class="settings-sr" id="settings-category-live" aria-live="assertive"></div>
+      </div>
+    </div>
   </div>
 </div>
 <div class="overlay" id="delOverlay">
@@ -402,6 +476,13 @@
   // setCategoryOrder). The pickers read it through distinctCats().
   var CATEGORY_LIST = [];
   var CATEGORY_SAVE_PENDING = false;
+  // Settings › 類別. CATEGORY_SHOWN is the order on screen while it runs ahead of the server (a drag
+  // being saved, or keyboard moves inside their debounce); null means CATEGORY_LIST. The pickers
+  // never read it, so they only ever show a server-confirmed order.
+  var CATEGORY_SHOWN = null;
+  var CATEGORY_KEY_TIMER = null;    // the armed 600ms keyboard-reorder debounce
+  var CATEGORY_DRAG = null;         // the active pointer drag
+  var SETTINGS_STATUS_TIMER = null;
 
   var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'',
                 inboxScope:'all', inboxDone:false };
@@ -1604,88 +1685,279 @@
     document.getElementById('a-amt').classList.remove('bad'); di.classList.remove('bad');
     ov.classList.add('on');
   }
+  // ---------------------------------------------------------------- Settings sheet
+  /** Pure: a copy of `list` with the item at `from` moved to `to` (clamped). The input is not changed. */
+  function reorderList(list, from, to){
+    var next=(list||[]).slice();
+    if(!(from>=0&&from<next.length)) return next;
+    to=Math.max(0,Math.min(next.length-1,to));
+    var item=next.splice(from,1)[0]; next.splice(to,0,item);
+    return next;
+  }
+  /** Pure: the index a row dragged from `from` by `dy` px lands on, rows `rowHeight` apart, clamped to
+   *  [0, count-1]. */
+  function dropIndex(from, dy, rowHeight, count){
+    if(!(count>0)) return 0;
+    var to=from+(rowHeight>0?Math.round(dy/rowHeight):0);
+    return Math.max(0,Math.min(count-1,to));
+  }
+  function settingsCategories(){ return CATEGORY_SHOWN||CATEGORY_LIST||[]; }
+  function sameList(a,b){
+    if(a.length!==b.length) return false;
+    for(var i=0;i<a.length;i++) if(a[i]!==b[i]) return false;
+    return true;
+  }
+  /** Selects the 帳戶 ('accounts') or 類別 ('categories') tab. The DOM is the only tab state, so
+   *  nothing survives a close. */
+  function setSettingsTab(name){
+    var tabs=document.getElementById('settings-tabs'); if(tabs) tabs.setAttribute('data-active',name);
+    ['accounts','categories'].forEach(function(t){
+      var on=t===name, tab=document.getElementById('settings-tab-'+t), panel=document.getElementById('settings-panel-'+t);
+      if(tab){ tab.setAttribute('aria-selected',on?'true':'false'); tab.setAttribute('tabindex',on?'0':'-1'); }
+      if(panel) panel.hidden=!on;
+    });
+    var body=document.getElementById('settings-body'); if(body) body.scrollTop=0;
+  }
+  function settingsTabKeydown(e){
+    if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight') return;
+    var tabs=document.getElementById('settings-tabs');
+    var next=(tabs&&tabs.getAttribute('data-active')==='categories')?'accounts':'categories';
+    e.preventDefault(); setSettingsTab(next);
+    var tab=document.getElementById('settings-tab-'+next); if(tab) tab.focus();
+  }
+  /** '' clears it; 'saving' / 'ok' / 'err' show 儲存中… / 已儲存 / 未儲存. 已儲存 fades after 1.8s. */
+  function setSettingsStatus(kind){
+    var el=document.getElementById('settings-status'); if(!el) return;
+    clearTimeout(SETTINGS_STATUS_TIMER); SETTINGS_STATUS_TIMER=null;
+    var text={ saving:'儲存中…', ok:'已儲存', err:'未儲存' }[kind]||'';
+    el.className='settings-status'+(text?' '+kind:'');
+    el.innerHTML=text?'<span class="settings-dot" aria-hidden="true"></span>'+text:'';
+    if(kind==='ok') SETTINGS_STATUS_TIMER=setTimeout(function(){ el.className='settings-status ok fade'; },1800);
+  }
+  /** Expands ('account' / 'category') add row into its input, or collapses it and clears the input. */
+  function setSettingsAdd(kind, open){
+    var toggle=document.getElementById('settings-'+kind+'-add'), form=document.getElementById('settings-'+kind+'-form'),
+        input=document.getElementById('settings-'+kind+'-name');
+    if(!toggle||!form||!input) return;
+    var hadFocus=!open&&form.contains&&document.activeElement&&form.contains(document.activeElement);
+    toggle.hidden=!!open; form.hidden=!open;
+    if(open){ input.focus(); return; }
+    input.value=''; input.classList.remove('bad');
+    if(hadFocus) toggle.focus();
+  }
+  /** The expanded add row in the visible panel, or null. */
+  function openSettingsAdd(){
+    var tabs=document.getElementById('settings-tabs');
+    var kind=(tabs&&tabs.getAttribute('data-active')==='categories')?'category':'account';
+    var form=document.getElementById('settings-'+kind+'-form');
+    return (form&&!form.hidden)?kind:null;
+  }
   function renderSettingsAccounts(){
     var list=document.getElementById('settings-account-list'); if(!list) return;
     var banks=distinctBanks();
     list.innerHTML=banks.length
-      ? banks.map(function(name){ return '<li>'+esc(name)+'</li>'; }).join('')
-      : '<li class="account-empty">尚無帳戶</li>';
+      ? banks.map(function(name){ return '<li class="settings-row"><span class="settings-name">'+esc(name)+'</span></li>'; }).join('')
+      : '<li class="settings-row settings-empty">尚無帳戶</li>';
+    var n=document.getElementById('settings-account-count'); if(n) n.textContent=banks.length;
   }
-  /** The Settings 類別 list. `list` is an optimistic order while a save is in flight; omitted, the
-   *  last server-confirmed CATEGORY_LIST is drawn. Every arrow is disabled while a save is pending. */
-  function renderSettingsCategories(list){
+  /** The Settings 類別 list in its shown order (settingsCategories). Every handle is disabled while a
+   *  save is in flight. The count is the sortable rows only: 未分類 is display-only and never here. */
+  function renderSettingsCategories(){
     var el=document.getElementById('settings-category-list'); if(!el) return;
-    var cats=list||CATEGORY_LIST||[];
+    var cats=settingsCategories(), off=CATEGORY_SAVE_PENDING?' disabled':'';
+    var grip='<svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="4.5" cy="3" r="1.3"/><circle cx="9.5" cy="3" r="1.3"/><circle cx="4.5" cy="7" r="1.3"/><circle cx="9.5" cy="7" r="1.3"/><circle cx="4.5" cy="11" r="1.3"/><circle cx="9.5" cy="11" r="1.3"/></svg>';
     el.innerHTML=cats.length
       ? cats.map(function(name,i){
-          var up=(i===0||CATEGORY_SAVE_PENDING)?' disabled':'', down=(i===cats.length-1||CATEGORY_SAVE_PENDING)?' disabled':'';
-          return '<li><span class="category-name">'+esc(name)+'</span>'
-            +'<button type="button" data-cat-move="-1" data-cat-idx="'+i+'" aria-label="上移 '+esc(name)+'"'+up+'>↑</button>'
-            +'<button type="button" data-cat-move="1" data-cat-idx="'+i+'" aria-label="下移 '+esc(name)+'"'+down+'>↓</button></li>';
+          return '<li class="settings-row"><button type="button" class="settings-handle" data-cat-idx="'+i+'" aria-label="拖曳排序 '+esc(name)+'，或按上下鍵移動"'+off+'>'+grip+'</button>'
+            +'<span class="settings-name">'+esc(name)+'</span></li>';
         }).join('')
-      : '<li class="account-empty">尚無類別</li>';
+      : '<li class="settings-row settings-empty">尚無類別</li>';
+    var n=document.getElementById('settings-category-count'); if(n) n.textContent=cats.length;
   }
-  function moveCategory(idx, delta){
-    if(CATEGORY_SAVE_PENDING) return;
-    var j=idx+delta, next=(CATEGORY_LIST||[]).slice();
-    if(idx<0||j<0||idx>=next.length||j>=next.length) return;
-    var tmp=next[idx]; next[idx]=next[j]; next[j]=tmp;
-    CATEGORY_SAVE_PENDING=true; renderSettingsCategories(next);
+  function categoryHandle(i){
+    var el=document.getElementById('settings-category-list');
+    return (el&&el.querySelector)?el.querySelector('[data-cat-idx="'+i+'"]'):null;
+  }
+  /** The category whose handle has focus, so focus can come back to it after a re-render. */
+  function focusedCategory(){
+    var a=document.activeElement;
+    if(!a||!a.getAttribute) return null;
+    var i=a.getAttribute('data-cat-idx');
+    return i==null?null:(settingsCategories()[Number(i)]||null);
+  }
+  function focusCategory(name){
+    if(name==null) return;
+    var h=categoryHandle(settingsCategories().indexOf(name)); if(h&&!h.disabled) h.focus();
+  }
+  function announceCategory(name, idx){
+    var live=document.getElementById('settings-category-live'); if(live) live.textContent=name+' 移到第 '+(idx+1)+' 位';
+  }
+  function revealCategory(name){
+    var h=categoryHandle(settingsCategories().indexOf(name)), row=h&&h.closest?h.closest('li'):null;
+    if(row&&row.scrollIntoView) row.scrollIntoView({ block:'nearest' });
+  }
+  /** One setCategoryOrder call for `next`, shown at once. CATEGORY_LIST only takes the server's answer:
+   *  on success the pickers re-render from it, on failure Settings snaps back to it. */
+  function saveCategoryOrder(next){
+    var focused=focusedCategory();
+    CATEGORY_SHOWN=next; CATEGORY_SAVE_PENDING=true; setSettingsStatus('saving'); renderSettingsCategories();
     google.script.run
       .withSuccessHandler(function(cats){
-        CATEGORY_LIST=cats||[]; CATEGORY_SAVE_PENDING=false; renderSettingsCategories(); render();
+        CATEGORY_LIST=cats||[]; CATEGORY_SHOWN=null; CATEGORY_SAVE_PENDING=false;
+        renderSettingsCategories(); render(); setSettingsStatus('ok'); focusCategory(focused);
       })
       .withFailureHandler(function(err){
-        CATEGORY_SAVE_PENDING=false; renderSettingsCategories();
-        toast((err&&err.message)?err.message:String(err),true);
+        CATEGORY_SHOWN=null; CATEGORY_SAVE_PENDING=false; renderSettingsCategories(); setSettingsStatus('err');
+        toast((err&&err.message)?err.message:String(err),true); focusCategory(focused);
       })
       .setCategoryOrder(next);
   }
+  /** ↑/↓ on a focused handle: move one place, keep focus on it, save 600ms after the last press. */
+  function categoryHandleKeydown(e){
+    if(e.key!=='ArrowUp'&&e.key!=='ArrowDown') return;
+    var h=e.target&&e.target.closest?e.target.closest('[data-cat-idx]'):null;
+    if(!h||h.disabled||CATEGORY_SAVE_PENDING||CATEGORY_DRAG) return;
+    e.preventDefault();
+    var cats=settingsCategories(), i=Number(h.getAttribute('data-cat-idx')), j=i+(e.key==='ArrowUp'?-1:1);
+    if(j<0||j>=cats.length) return;
+    CATEGORY_SHOWN=reorderList(cats,i,j); renderSettingsCategories(); focusCategory(cats[i]); announceCategory(cats[i],j);
+    clearTimeout(CATEGORY_KEY_TIMER); CATEGORY_KEY_TIMER=setTimeout(flushCategoryKeySave,600);
+  }
+  /** Sends the keyboard order now if its debounce is armed (the timer firing, or Settings closing).
+   *  While another save is in flight it waits for that one; a net no-op burst sends nothing. */
+  function flushCategoryKeySave(){
+    if(!CATEGORY_KEY_TIMER) return;
+    clearTimeout(CATEGORY_KEY_TIMER); CATEGORY_KEY_TIMER=null;
+    if(CATEGORY_SAVE_PENDING){ CATEGORY_KEY_TIMER=setTimeout(flushCategoryKeySave,600); return; }
+    var next=settingsCategories();
+    if(sameList(next,CATEGORY_LIST||[])){ CATEGORY_SHOWN=null; renderSettingsCategories(); return; }
+    saveCategoryOrder(next.slice());
+  }
+  /** A drag never starts while a save is in flight or a keyboard order is still waiting to be sent,
+   *  so one gesture is always one save. */
+  function canStartCategoryDrag(){ return !CATEGORY_SAVE_PENDING&&!CATEGORY_KEY_TIMER&&!CATEGORY_DRAG; }
+  function categoryPointerDown(e){
+    var h=e.target&&e.target.closest?e.target.closest('[data-cat-idx]'):null;
+    if(!h||h.disabled||!canStartCategoryDrag()||(e.button!=null&&e.button>0)) return;
+    e.preventDefault();
+    var list=document.getElementById('settings-category-list'), body=document.getElementById('settings-body');
+    var row=h.closest('li'), rows=[].slice.call(list.children), from=Number(h.getAttribute('data-cat-idx'));
+    var step=rows.length>1?rows[1].offsetTop-rows[0].offsetTop:0;
+    if(!(step>0)) step=row.getBoundingClientRect().height;
+    CATEGORY_DRAG={ handle:h, row:row, rows:rows, from:from, to:from, h:step, y0:e.clientY, y:e.clientY,
+                    s0:body?body.scrollTop:0, id:e.pointerId };
+    if(h.setPointerCapture) h.setPointerCapture(e.pointerId);
+    list.classList.add('dragging'); row.classList.add('dragging');
+    requestAnimationFrame(categoryAutoScroll);
+  }
+  function categoryPointerMove(e){
+    if(!CATEGORY_DRAG||e.pointerId!==CATEGORY_DRAG.id) return;
+    CATEGORY_DRAG.y=e.clientY; placeCategoryDrag();
+  }
+  /** The dragged row follows the pointer (plus any auto-scroll), clamped to the list; the rows it has
+   *  passed shift one place to show where it will land. */
+  function placeCategoryDrag(){
+    var d=CATEGORY_DRAG; if(!d) return;
+    var body=document.getElementById('settings-body'), n=d.rows.length;
+    var dy=(d.y-d.y0)+((body?body.scrollTop:0)-d.s0);
+    dy=Math.max(-d.from*d.h,Math.min((n-1-d.from)*d.h,dy));
+    d.row.style.transform='translateY('+dy+'px)';
+    d.to=dropIndex(d.from,dy,d.h,n);
+    d.rows.forEach(function(r,i){
+      if(r===d.row) return;
+      var t=0;
+      if(d.from<d.to&&i>d.from&&i<=d.to) t=-d.h;
+      else if(d.to<d.from&&i>=d.to&&i<d.from) t=d.h;
+      r.style.transform=t?'translateY('+t+'px)':'';
+    });
+  }
+  /** Within 48px of the scroll body's top or bottom edge, scroll it, faster nearer the edge. */
+  function categoryAutoScroll(){
+    var d=CATEGORY_DRAG; if(!d) return;
+    var body=document.getElementById('settings-body');
+    if(body){
+      var r=body.getBoundingClientRect(), edge=48, v=0;
+      if(d.y<r.top+edge) v=-Math.ceil((r.top+edge-d.y)/6);
+      else if(d.y>r.bottom-edge) v=Math.ceil((d.y-(r.bottom-edge))/6);
+      if(v){ var before=body.scrollTop; body.scrollTop+=v; if(body.scrollTop!==before) placeCategoryDrag(); }
+    }
+    requestAnimationFrame(categoryAutoScroll);
+  }
+  /** Ends the drag. A move draws the new order and saves it once; a drop at the origin or a cancel
+   *  (pointercancel, Esc, Settings closing) redraws and saves nothing. */
+  function endCategoryDrag(cancel){
+    var d=CATEGORY_DRAG; if(!d) return;
+    CATEGORY_DRAG=null;
+    (d.rows||[]).forEach(function(r){ if(r&&r.style) r.style.transform=''; });
+    if(d.row&&d.row.classList) d.row.classList.remove('dragging');
+    var list=document.getElementById('settings-category-list'); if(list&&list.classList) list.classList.remove('dragging');
+    if(d.handle&&d.handle.releasePointerCapture){ try{ d.handle.releasePointerCapture(d.id); }catch(_){ } }
+    var cats=settingsCategories();
+    if(cancel||d.to===d.from){ renderSettingsCategories(); return; }
+    announceCategory(cats[d.from],d.to);
+    saveCategoryOrder(reorderList(cats,d.from,d.to));
+  }
   function createCategory(){
     var input=document.getElementById('settings-category-name'), button=document.getElementById('settings-category-create');
-    if(CATEGORY_SAVE_PENDING) return;
+    if(CATEGORY_SAVE_PENDING||CATEGORY_DRAG) return;
     var name=input.value.trim();
     if(!name){ input.classList.add('bad'); input.focus(); return; }
-    input.classList.remove('bad'); CATEGORY_SAVE_PENDING=true; button.disabled=true; renderSettingsCategories();
+    input.classList.remove('bad'); CATEGORY_SAVE_PENDING=true; button.disabled=true; setSettingsStatus('saving'); renderSettingsCategories();
     google.script.run
       .withSuccessHandler(function(cats){
         CATEGORY_LIST=cats||[];
         var chosen=CATEGORY_LIST.filter(function(c){ return c.toLocaleLowerCase()===name.toLocaleLowerCase(); })[0]||name;
-        CATEGORY_SAVE_PENDING=false; button.disabled=false; input.value='';
-        renderSettingsCategories(); render(); toast('已新增類別：'+chosen);
+        // A keyboard order still inside its debounce keeps its place; the new category joins its end.
+        if(CATEGORY_SHOWN) CATEGORY_SHOWN=CATEGORY_SHOWN.concat(CATEGORY_LIST.filter(function(c){ return CATEGORY_SHOWN.indexOf(c)<0; }));
+        CATEGORY_SAVE_PENDING=false; button.disabled=false; setSettingsAdd('category',false);
+        renderSettingsCategories(); render(); setSettingsStatus('ok'); revealCategory(chosen);
       })
       .withFailureHandler(function(err){
-        CATEGORY_SAVE_PENDING=false; button.disabled=false; renderSettingsCategories();
+        CATEGORY_SAVE_PENDING=false; button.disabled=false; renderSettingsCategories(); setSettingsStatus('err');
         toast('新增類別失敗：'+((err&&err.message)?err.message:String(err)),true);
       })
       .addCategory(name);
   }
+  /** Every open starts on 帳戶 with both add rows collapsed and empty. */
   function openSettingsModal(){
-    var ov=document.getElementById('settingsOverlay'), input=document.getElementById('settings-account-name');
-    if(!ov||!input) return;
-    input.value=''; input.classList.remove('bad'); renderSettingsAccounts();
-    var catInput=document.getElementById('settings-category-name');
-    if(catInput){ catInput.value=''; catInput.classList.remove('bad'); }
-    renderSettingsCategories(); ov.classList.add('on'); input.focus();
+    var ov=document.getElementById('settingsOverlay'); if(!ov) return;
+    setSettingsTab('accounts'); setSettingsAdd('account',false); setSettingsAdd('category',false);
+    if(!CATEGORY_SAVE_PENDING&&!ACCOUNT_CREATE_PENDING) setSettingsStatus('');
+    renderSettingsAccounts(); renderSettingsCategories(); ov.classList.add('on');
+    var tab=document.getElementById('settings-tab-accounts'); if(tab&&tab.focus) tab.focus();
   }
+  /** Cancels a drag, sends a keyboard order still inside its debounce, and collapses the add rows. A
+   *  save already in flight completes on its own. */
   function closeSettingsModal(){
+    if(CATEGORY_DRAG) endCategoryDrag(true);
+    flushCategoryKeySave();
+    setSettingsAdd('account',false); setSettingsAdd('category',false);
     var ov=document.getElementById('settingsOverlay'); if(ov) ov.classList.remove('on');
+  }
+  /** Esc while Settings is open, highest first: cancel a drag, collapse the visible add row, close. */
+  function settingsEscape(e){
+    if(e.key!=='Escape') return;
+    var ov=document.getElementById('settingsOverlay'); if(!ov||!ov.classList.contains('on')) return;
+    e.preventDefault();
+    if(CATEGORY_DRAG){ endCategoryDrag(true); return; }
+    var open=openSettingsAdd(); if(open){ setSettingsAdd(open,false); return; }
+    closeSettingsModal();
   }
   function createAccountSource(){
     var input=document.getElementById('settings-account-name'), button=document.getElementById('settings-account-create');
     if(ACCOUNT_CREATE_PENDING) return;
     var name=input.value.trim();
     if(!name){ input.classList.add('bad'); input.focus(); return; }
-    input.classList.remove('bad'); ACCOUNT_CREATE_PENDING=true; button.disabled=true;
+    input.classList.remove('bad'); ACCOUNT_CREATE_PENDING=true; button.disabled=true; setSettingsStatus('saving');
     google.script.run
       .withSuccessHandler(function(accounts){
         ACCOUNT_SOURCES=accounts||[];
         var chosen=ACCOUNT_SOURCES.filter(function(account){ return account.toLocaleLowerCase()===name.toLocaleLowerCase(); })[0]||name;
         PREFERRED_SOURCE=chosen;
-        ACCOUNT_CREATE_PENDING=false; button.disabled=false; input.value=''; renderSettingsAccounts(); toast('已新增帳戶：'+chosen);
+        ACCOUNT_CREATE_PENDING=false; button.disabled=false; setSettingsAdd('account',false); renderSettingsAccounts(); setSettingsStatus('ok');
       })
       .withFailureHandler(function(err){
-        ACCOUNT_CREATE_PENDING=false; button.disabled=false;
+        ACCOUNT_CREATE_PENDING=false; button.disabled=false; setSettingsStatus('err');
         toast('新增帳戶失敗：'+((err&&err.message)?err.message:String(err)),true);
       })
       .addAccountSource(name);
@@ -2228,26 +2500,31 @@
   }
   document.getElementById('a-cancel').onclick=closeAddModal;
   document.getElementById('a-save').onclick=submitAdd;
-  document.getElementById('settings-close').onclick=closeSettingsModal;
+  document.getElementById('settings-x').onclick=closeSettingsModal;
+  document.getElementById('settings-tabs').onclick=function(e){
+    var b=e.target&&e.target.closest?e.target.closest('[data-settings-tab]'):null;
+    if(b) setSettingsTab(b.getAttribute('data-settings-tab'));
+  };
+  document.getElementById('settings-tabs').onkeydown=settingsTabKeydown;
+  document.getElementById('settings-account-add').onclick=function(){ setSettingsAdd('account',true); };
+  document.getElementById('settings-account-cancel').onclick=function(){ setSettingsAdd('account',false); };
   document.getElementById('settings-account-create').onclick=createAccountSource;
   document.getElementById('settings-account-name').onkeydown=function(e){
     if(e.key==='Enter'){ e.preventDefault(); createAccountSource(); }
-    else if(e.key==='Escape'){ e.preventDefault(); closeSettingsModal(); }
   };
+  document.getElementById('settings-category-add').onclick=function(){ setSettingsAdd('category',true); };
+  document.getElementById('settings-category-cancel').onclick=function(){ setSettingsAdd('category',false); };
   document.getElementById('settings-category-create').onclick=createCategory;
   document.getElementById('settings-category-name').onkeydown=function(e){
     if(e.key==='Enter'){ e.preventDefault(); createCategory(); }
-    else if(e.key==='Escape'){ e.preventDefault(); closeSettingsModal(); }
   };
-  document.getElementById('settings-category-list').onclick=function(e){
-    var b=e.target&&e.target.closest?e.target.closest('button[data-cat-move]'):null;
-    if(!b||b.disabled) return;
-    moveCategory(Number(b.getAttribute('data-cat-idx')), Number(b.getAttribute('data-cat-move')));
-  };
+  document.getElementById('settings-category-list').onpointerdown=categoryPointerDown;
+  document.getElementById('settings-category-list').onkeydown=categoryHandleKeydown;
+  document.addEventListener('pointermove',categoryPointerMove);
+  document.addEventListener('pointerup',function(e){ if(CATEGORY_DRAG&&e.pointerId===CATEGORY_DRAG.id) endCategoryDrag(false); });
+  document.addEventListener('pointercancel',function(e){ if(CATEGORY_DRAG&&e.pointerId===CATEGORY_DRAG.id) endCategoryDrag(true); });
   document.getElementById('settingsOverlay').onclick=function(e){ if(e.target===this) closeSettingsModal(); };
-  document.addEventListener('keydown',function(e){
-    if(e.key==='Escape'&&document.getElementById('settingsOverlay').classList.contains('on')){ e.preventDefault(); closeSettingsModal(); }
-  });
+  document.addEventListener('keydown',settingsEscape);
   document.getElementById('addOverlay').onclick=function(e){ if(e.target===this) closeAddModal(); };
   document.getElementById('d-cancel').onclick=closeDelModal;
   document.getElementById('d-ok').onclick=confirmDelete;
