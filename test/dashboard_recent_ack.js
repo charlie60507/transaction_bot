@@ -93,6 +93,7 @@ function loadServer(sheet, opts) {
     console, Date: FixedDate, CFG, Utilities: utilities,
     getSpreadsheet_: () => ({ getSheetByName: name => sheets[name] || null }),
     getAccountSources_: () => [],
+    getCategories_: () => [],
     SpreadsheetApp: {
       flush: () => {},
       newDataValidation: () => ({ requireCheckbox() { return this; }, build: () => ({}) })
