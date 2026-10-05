@@ -87,18 +87,26 @@ function ledgerParse(text, todayYmd, accounts) {
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
 
   const prompt = ledgerPrompt_(text, todayYmd, accounts || []);
+  // The key travels in the x-goog-api-key header, never the URL, and a transport failure
+  // (timeout, DNS) is rethrown generically: UrlFetchApp's own message can echo the request,
+  // and linebot/ logs err.message. Neither the request nor the response body is ever logged.
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + LEDGER_GEMINI_MODEL_ +
-    ':generateContent?key=' + apiKey;
-  const res = UrlFetchApp.fetch(url, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0, responseMimeType: 'application/json' }
-    }),
-    muteHttpExceptions: true
-  });
-  // The key is in the URL, so neither the URL nor the response body is ever logged.
+    ':generateContent';
+  let res;
+  try {
+    res = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-goog-api-key': apiKey },
+      payload: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+      }),
+      muteHttpExceptions: true
+    });
+  } catch (e) {
+    throw new Error('Gemini request failed');
+  }
   if (res.getResponseCode() !== 200) throw new Error('Gemini HTTP ' + res.getResponseCode());
   let body;
   try { body = JSON.parse(res.getContentText()); } catch (e) { throw new Error('Gemini body is not JSON'); }

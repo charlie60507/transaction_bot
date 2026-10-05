@@ -272,6 +272,8 @@ function run() {
       logs,
       fetch: (url, req) => {
         assert.ok(url.indexOf('models/gemini-2.5-flash:generateContent') !== -1);
+        assert.ok(url.indexOf('FIXTURE_GEMINI_KEY') === -1, 'the API key is not in the URL');
+        assert.strictEqual(req.headers['x-goog-api-key'], 'FIXTURE_GEMINI_KEY', 'the API key is sent as a header');
         const prompt = JSON.parse(req.payload).contents[0].parts[0].text;
         assert.ok(prompt.indexOf('2026-10-05') !== -1, 'today is given for relative dates');
         assert.ok(prompt.indexOf('中信、CASH') !== -1, 'account hints are passed');
@@ -293,6 +295,18 @@ function run() {
       const s = load(book(), { fetch: f, logs });
       assert.throws(() => s.ledgerParse('午餐 180', '2026-10-05'), /Gemini|Timeout/, 'parse failure ' + i + ' throws');
     });
+    // A transport failure whose message echoes the request (as UrlFetchApp's does) must not
+    // surface the key: the rethrown error is generic, and that is what linebot/ logs.
+    const leaky = load(book(), { logs, fetch: (url, req) => {
+      throw new Error('Address unavailable: ' + url + ' key=' + req.headers['x-goog-api-key']);
+    } });
+    let thrown = null;
+    try { leaky.ledgerParse('午餐 180', '2026-10-05'); } catch (e) { thrown = e; }
+    assert.ok(thrown, 'a thrown fetch error still fails closed');
+    assert.strictEqual(thrown.message, 'Gemini request failed', 'the rethrown error is generic');
+    assert.ok(String(thrown.message + (thrown.stack || '')).indexOf('FIXTURE_GEMINI_KEY') === -1,
+      'a thrown fetch error does not surface the key');
+    logs.push('linebot: parse failed: ' + thrown.message);
     assert.throws(() => load(book(), { noKey: true }).ledgerParse('午餐 180', '2026-10-05'), /GEMINI_API_KEY/);
     assert.throws(() => ok.ledgerParse('午餐 180', '10/5'), /YYYY-MM-DD/);
     assert.ok(logs.every(l => l.indexOf('FIXTURE_GEMINI_KEY') === -1), 'the API key never reaches a log');
