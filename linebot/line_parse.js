@@ -134,9 +134,14 @@ function lpErrorText() {
   return '記帳失敗：目前無法解析訊息，沒有寫入任何資料。請稍後再傳一次。';
 }
 
-/** Prompt for one unmatched entry. */
+/**
+ * Prompt for one unmatched entry. When the model's account text does not occur in the message
+ * (accountMismatch: it "corrected" a typo such as 重信 to 中信), that text is never echoed, so
+ * the prompt cannot suggest an account the owner did not type.
+ */
 function lpPendingText(entry, truncated) {
-  const head = '找不到帳戶「' + entry.accountText + '」：' + (entry.merchant || '（無說明）') + ' $' + entry.amount +
+  const what = entry.accountMismatch ? '找不到訊息中的帳戶' : '找不到帳戶「' + entry.accountText + '」';
+  const head = what + '：' + (entry.merchant || '（無說明）') + ' $' + entry.amount +
     '。請選擇帳戶，或按「取消」。';
   return truncated ? head + '\n（只列出最接近的 ' + LP_MAX_CHOICES + ' 個；其他帳戶請照清單上的名稱重新傳送。）' : head;
 }

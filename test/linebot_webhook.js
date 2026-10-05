@@ -219,7 +219,12 @@ function run() {
     const h = load(fakeLedger(() => [entry({ accountText: '中信' })]));
     h.post([h.text('重信 午餐 拉麵 180')]);
     assert.strictEqual(h.st.adds.length, 0);
-    assert.ok(h.last().messages[0].quickReply);
+    const prompt = h.last().messages[0];
+    assert.ok(prompt.quickReply);
+    assert.ok(prompt.text.indexOf('「中信」') === -1, "the model's corrected account is not echoed");
+    assert.ok(/找不到訊息中的帳戶/.test(prompt.text), 'the prompt says the typed account was not found');
+    assert.deepStrictEqual(prompt.quickReply.items.map(i => i.action.label), ['中信', 'LINE Pay', '現金', '富邦', '國泰', '取消'],
+      'buttons and 取消 are unchanged');
   }
   // more than 12 accounts → the 12 nearest plus 取消, and the reply says so
   {
