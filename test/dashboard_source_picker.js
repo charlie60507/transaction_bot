@@ -16,6 +16,9 @@ function run() {
   assert.ok(/id="settings-account-list"/.test(settingsOverlay), 'Settings contains the account list');
   assert.ok(/id="settings-account-create"/.test(settingsOverlay), 'Settings contains account creation');
   assert.ok(/if\(e\.key==='Enter'\)\{ e\.preventDefault\(\); createAccountSource\(\); \}/.test(html), 'Enter submits through createAccountSource');
+  assert.ok(/id="settings-account-add"[^>]*>(?:<[^>]+>)*＋(?:<\/[^>]+>)*新增帳戶</.test(settingsOverlay), 'the account add row reads ＋ 新增帳戶 at rest');
+  assert.ok(/id="settings-account-form" hidden/.test(settingsOverlay), 'the account input starts collapsed');
+  assert.ok(/id="settings-account-name" maxlength="50"/.test(settingsOverlay), 'account names keep the 50-character limit');
   assert.strictEqual(/settings-account|新增帳戶|a-source-add/.test(addOverlay), false, 'transaction entry contains no account management controls');
   assert.strictEqual(html.indexOf('list="banklist"'), -1, 'no datalist binding on 來源');
   assert.strictEqual(html.indexOf('id="banklist"'), -1, 'banklist datalist is gone');
@@ -69,27 +72,41 @@ function run() {
     withFailureHandler(fn) { request.failure = fn; return runner; },
     addAccountSource(name) { request.name = name; requests.push(request); request = {}; }
   };
+  const statuses = [], adds = [], toasts = [];
+  let accountRenders = 0;
   const accountFns = loadFns(['createAccountSource'], {
     ACCOUNT_CREATE_PENDING: false,
     ACCOUNT_SOURCES: [],
     PREFERRED_SOURCE: null,
     document: { getElementById: id => id === 'settings-account-name' ? accountInput : accountButton },
     google: { script: { run: runner } },
-    renderSettingsAccounts() {},
-    toast() {}
+    renderSettingsAccounts() { accountRenders++; },
+    setSettingsStatus: kind => statuses.push(kind),
+    setSettingsAdd: (kind, open) => adds.push(kind + ':' + open),
+    toast: (msg, bad) => toasts.push([msg, !!bad])
   });
 
   accountFns.createAccountSource();
   accountFns.createAccountSource();
   assert.strictEqual(requests.length, 1, 'repeated Enter-triggered calls submit only once while pending');
   assert.strictEqual(requests[0].name, '中信', 'account submission trims surrounding whitespace');
+  assert.strictEqual(accountButton.disabled, true, 'the 加入 button is disabled while pending');
   requests[0].success(['中信']);
   assert.strictEqual(accountFns.ACCOUNT_CREATE_PENDING, false, 'successful submission clears the pending guard');
+  assert.strictEqual(accountFns.PREFERRED_SOURCE, '中信', 'the added account becomes the preferred source');
+  assert.deepStrictEqual(adds, ['account:false'], 'a successful add collapses the add row');
+  assert.strictEqual(accountRenders, 1, 'a successful add re-renders the account list');
+  assert.deepStrictEqual(statuses, ['saving', 'ok'], 'success shows 儲存中… then 已儲存');
+  assert.deepStrictEqual(toasts, [], 'a successful add does not toast');
 
   accountInput.value = '富邦';
   accountFns.createAccountSource();
   requests[1].failure(new Error('server error'));
   assert.strictEqual(accountFns.ACCOUNT_CREATE_PENDING, false, 'failed submission clears the pending guard');
+  assert.deepStrictEqual(adds, ['account:false'], 'a failed add keeps the row expanded');
+  assert.strictEqual(accountInput.value, '富邦', 'a failed add keeps the input');
+  assert.deepStrictEqual(statuses.slice(2), ['saving', 'err'], 'failure shows 未儲存');
+  assert.deepStrictEqual(toasts, [['新增帳戶失敗：server error', true]], 'failure still toasts the server message');
   accountInput.value = '臺新';
   accountFns.createAccountSource();
   assert.strictEqual(requests.length, 3, 'submission can retry after a failure');

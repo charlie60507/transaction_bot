@@ -11,8 +11,9 @@
  *   4. Shared-row safety: A:B and G hold values on D's rows; after an add and a reorder every non-D cell
  *      and the row count are unchanged.
  *   5. Client ordering: distinctCats / realCats give 未分類 first, then META!D's order, then the
- *      transaction categories missing from it in code-point order. A failed reorder re-renders from the
- *      last server-confirmed list.
+ *      transaction categories missing from it in code-point order. The Settings list draws a drag handle
+ *      per row, disabled while a save is in flight; a failed reorder re-renders from the last
+ *      server-confirmed list.
  */
 const assert = require('assert');
 const fs = require('fs');
@@ -249,35 +250,57 @@ function testClient() {
   fns.TXNS = [{ cat: '飲食' }, { cat: '交通' }];
   assert.deepStrictEqual(list(fns.distinctCats()), ['未分類', '交通', '飲食'], '(5) with no META!D list, the old derived order remains');
 
-  // A reorder the server rejects: toast the message, re-render from the last confirmed list.
-  const el = { innerHTML: '' };
-  const toasts = [];
-  let failure = null, sent = null, renders = 0;
-  const ui = loadFns(['renderSettingsCategories', 'moveCategory'], {
+  // The Settings list: a drag handle per row, every handle disabled while a save is in flight.
+  const el = { innerHTML: '', className: '' };
+  const toasts = [], statuses = [];
+  let failure = null, success = null, sent = null, renders = 0;
+  const ui = loadFns(['settingsCategories', 'renderSettingsCategories', 'saveCategoryOrder', 'focusedCategory', 'focusCategory', 'categoryHandle'], {
     CATEGORY_LIST: ['飲食', '交通', '娛樂'],
+    CATEGORY_SHOWN: null,
     CATEGORY_SAVE_PENDING: false,
     esc: s => String(s),
-    document: { getElementById: id => id === 'settings-category-list' ? el : null },
+    document: { activeElement: null, getElementById: id => id === 'settings-category-list' ? el : null },
+    setSettingsStatus: kind => statuses.push(kind),
     toast: (msg, bad) => toasts.push([msg, !!bad]),
     render: () => { renders++; },
     google: { script: { run: {
-      withSuccessHandler() { return this; },
+      withSuccessHandler(f) { success = f; return this; },
       withFailureHandler(f) { failure = f; return this; },
       setCategoryOrder(l) { sent = Array.from(l); }
     } } }
   });
-  ui.moveCategory(1, -1);
-  assert.deepStrictEqual(sent, ['交通', '飲食', '娛樂'], '(5) the full swapped list is sent');
-  assert.ok(el.innerHTML.indexOf('交通') < el.innerHTML.indexOf('飲食'), '(5) the swap is drawn at once');
-  assert.ok(!/aria-label="上移 [^"]*"(?! disabled)>/.test(el.innerHTML), '(5) every arrow is disabled while the save is in flight');
+  const handles = () => el.innerHTML.match(/<button [^>]*class="settings-handle"[^>]*>/g) || [];
+
+  ui.renderSettingsCategories();
+  assert.strictEqual(handles().length, 3, '(5) one handle per category');
+  ['飲食', '交通', '娛樂'].forEach((name, i) => {
+    assert.ok(new RegExp('<button type="button" class="settings-handle" data-cat-idx="' + i + '" aria-label="拖曳排序 ' + name + '，或按上下鍵移動">').test(el.innerHTML),
+      '(5) ' + name + ' has a <button> handle labelled for drag and ↑/↓');
+  });
+  assert.ok(handles().every(h => !/ disabled/.test(h)), '(5) handles are enabled at rest');
+  assert.ok(!/上移|下移|data-cat-move/.test(el.innerHTML), '(5) no ↑/↓ buttons remain');
+
+  ui.saveCategoryOrder(['交通', '飲食', '娛樂']);
+  assert.deepStrictEqual(sent, ['交通', '飲食', '娛樂'], '(5) the full reordered list is sent');
+  assert.ok(el.innerHTML.indexOf('交通') < el.innerHTML.indexOf('飲食'), '(5) the new order is drawn at once');
+  assert.ok(handles().length === 3 && handles().every(h => / disabled>/.test(h)), '(5) every handle is disabled while the save is in flight');
+  assert.deepStrictEqual(Array.from(ui.CATEGORY_LIST), ['飲食', '交通', '娛樂'], '(5) CATEGORY_LIST stays server-confirmed while in flight');
   failure({ message: '類別清單已變更，請重新整理後再排序' });
   assert.deepStrictEqual(toasts, [['類別清單已變更，請重新整理後再排序', true]], '(5) the server message is toasted');
+  assert.deepStrictEqual(statuses, ['saving', 'err'], '(5) the status goes 儲存中… then 未儲存');
   assert.ok(el.innerHTML.indexOf('飲食') < el.innerHTML.indexOf('交通'), '(5) re-rendered from the last confirmed list');
   assert.strictEqual(ui.CATEGORY_SAVE_PENDING, false, '(5) the pending guard is cleared');
-  assert.ok(/aria-label="上移 飲食" disabled/.test(el.innerHTML) && /aria-label="下移 娛樂" disabled/.test(el.innerHTML),
-    '(5) first ↑ and last ↓ are disabled');
-  assert.ok(/aria-label="下移 飲食">/.test(el.innerHTML), '(5) other arrows are enabled again');
+  assert.strictEqual(ui.CATEGORY_SHOWN, null, '(5) the optimistic order is dropped');
+  assert.ok(handles().every(h => !/ disabled/.test(h)), '(5) handles are enabled again after the failure settles');
   assert.strictEqual(renders, 0, '(5) the pickers are not re-rendered on failure');
+
+  ui.saveCategoryOrder(['娛樂', '飲食', '交通']);
+  assert.ok(handles().every(h => / disabled>/.test(h)), '(5) disabled again for the next save');
+  success(['娛樂', '飲食', '交通']);
+  assert.deepStrictEqual(Array.from(ui.CATEGORY_LIST), ['娛樂', '飲食', '交通'], '(5) success adopts the server list');
+  assert.strictEqual(renders, 1, '(5) success re-renders the pickers');
+  assert.ok(handles().every(h => !/ disabled/.test(h)), '(5) handles are enabled again after the save settles');
+  assert.strictEqual(statuses[statuses.length - 1], 'ok', '(5) the status ends on 已儲存');
 }
 
 const CASES = { testRead, testAdd, testReorder, testSharedRows, testClient };
