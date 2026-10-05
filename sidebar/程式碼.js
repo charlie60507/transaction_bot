@@ -10,6 +10,10 @@ const CFG = {
   META_SHEET: 'META',
   META_ACCOUNT_COL: 7,      // G: 帳戶清單 (F stays a visual spacer)
   META_ACCOUNT_HEADER: '帳戶清單',
+  // D: 種類清單 — the owner's category order. Shares its rows with A:B (keyword rules) and G
+  // (accounts), so writers touch only column-D cells and find the end of D by scanning D.
+  META_CATEGORY_COL: 4,
+  META_CATEGORY_HEADER: '種類清單',
   TZ: 'Asia/Taipei',
 
   // Transactions column indices (0-based)
@@ -655,9 +659,10 @@ function getDashboardData(opts) {
       const snap = (read && read.rows.length)
         ? snapshotOfRows_(read.rows, read.mineIdx, read.rowIdIdx, new Date())
         : { txns: [], olderFp: null };
-      return JSON.stringify({ txns: snap.txns, olderFp: snap.olderFp, accounts: getAccountSources_(ss) });
+      // `categories` stays the LAST key: the load-parity test strips it and compares the rest.
+      return JSON.stringify({ txns: snap.txns, olderFp: snap.olderFp, accounts: getAccountSources_(ss), categories: getCategories_(ss) });
     }
-    return JSON.stringify(Object.assign(recentSnapshot_(read, months, new Date()), { accounts: getAccountSources_(ss) }));
+    return JSON.stringify(Object.assign(recentSnapshot_(read, months, new Date()), { accounts: getAccountSources_(ss), categories: getCategories_(ss) }));
   } finally {
     lock.releaseLock();
   }
@@ -844,6 +849,121 @@ function addAccountSource(name) {
     sh.getRange(lastAccountRow + 1, col).setValue(name);
     SpreadsheetApp.flush();
     return getAccountSources_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Read the configured category names from META!D in the owner's row order: trimmed, blanks
+ *  skipped, duplicates removed case-insensitively. `ss` is the spreadsheet the caller already
+ *  opened (opened here when omitted). [] when META or the 種類清單 header is missing. */
+function getCategories_(ss) {
+  const sh = (ss || getSpreadsheet_()).getSheetByName(CFG.META_SHEET);
+  if (!sh || sh.getLastColumn() < CFG.META_CATEGORY_COL) return [];
+  const last = sh.getLastRow();
+  if (last <= 1) return [];
+  const column = sh.getRange(1, CFG.META_CATEGORY_COL, last, 1).getValues();
+  const header = String(column[0][0] || '').trim();
+  if (header !== CFG.META_CATEGORY_HEADER) return [];
+  const seen = {};
+  const out = [];
+  column.slice(1).forEach(function (row) {
+    const name = String(row[0] || '').trim();
+    const key = name.toLocaleLowerCase();
+    if (name && !seen[key]) { seen[key] = true; out.push(name); }
+  });
+  return out;
+}
+
+/** Row number of the last non-blank META!D cell (1 when only the header, or nothing, is there).
+ *  sh.getLastRow() is the end of A:B, not of D, so D is scanned. */
+function lastCategoryRow_(sh) {
+  const last = sh.getLastRow();
+  if (last <= 1) return 1;
+  const values = sh.getRange(2, CFG.META_CATEGORY_COL, last - 1, 1).getValues();
+  for (let i = values.length - 1; i >= 0; i--) {
+    if (String(values[i][0] || '').trim()) return i + 2;
+  }
+  return 1;
+}
+
+/** Append one category to META!D after the last non-blank D cell. A case-insensitive duplicate
+ *  writes nothing. Returns the full configured list so the client adopts the server's spelling.
+ *  Note: the bot reads META!D, so a category added here is a valid bot target immediately. */
+function addCategory(name) {
+  name = String(name || '').trim();
+  if (!name) throw new Error('請輸入類別名稱');
+  if (name.length > 20) throw new Error('類別名稱不可超過 20 字');
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15 * 1000);
+  try {
+    const sh = getSpreadsheet_().getSheetByName(CFG.META_SHEET);
+    if (!sh) throw new Error('找不到 META 工作表');
+
+    const col = CFG.META_CATEGORY_COL;
+    const existingHeader = String(sh.getRange(1, col).getValue() || '').trim();
+    if (existingHeader && existingHeader !== CFG.META_CATEGORY_HEADER) {
+      throw new Error('META!D 已有其他設定，無法建立種類清單');
+    }
+    if (!existingHeader) sh.getRange(1, col).setValue(CFG.META_CATEGORY_HEADER);
+
+    const last = Math.max(sh.getLastRow(), 1);
+    const values = last > 1 ? sh.getRange(2, col, last - 1, 1).getValues() : [];
+    const wanted = name.toLocaleLowerCase();
+    let lastRow = 1;
+    for (let i = 0; i < values.length; i++) {
+      const current = String(values[i][0] || '').trim();
+      if (current) lastRow = i + 2;
+      if (current.toLocaleLowerCase() === wanted) return getCategories_();
+    }
+    sh.getRange(lastRow + 1, col).setValue(name);
+    SpreadsheetApp.flush();
+    return getCategories_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Rewrite META!D in a new order. `list` must be exactly a permutation of the current
+ *  getCategories_() list (compared case-insensitively after trimming); anything else throws and
+ *  writes nothing. Only D cells in rows 2..lastNonBlankDRow are written: the list, then blanks. */
+function setCategoryOrder(list) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15 * 1000);
+  try {
+    const sh = getSpreadsheet_().getSheetByName(CFG.META_SHEET);
+    if (!sh) throw new Error('找不到 META 工作表');
+    const col = CFG.META_CATEGORY_COL;
+    const header = String(sh.getRange(1, col).getValue() || '').trim();
+    if (header !== CFG.META_CATEGORY_HEADER) throw new Error('META!D 找不到種類清單');
+
+    const stale = '類別清單已變更，請重新整理後再排序';
+    if (!Array.isArray(list)) throw new Error(stale);
+    const next = list.map(function (v) { return String(v == null ? '' : v).trim(); });
+    const current = getCategories_();
+    if (next.length !== current.length) throw new Error(stale);
+    // Map to the stored spelling, so a reorder can never rename a category.
+    const spelling = {};
+    current.forEach(function (n) { spelling[n.toLocaleLowerCase()] = n; });
+    const seen = {};
+    const ordered = [];
+    for (let i = 0; i < next.length; i++) {
+      const key = next[i].toLocaleLowerCase();
+      if (!next[i] || seen[key] || !spelling[key]) throw new Error(stale);
+      seen[key] = true;
+      ordered.push(spelling[key]);
+    }
+
+    const lastRow = lastCategoryRow_(sh);
+    const height = Math.max(lastRow - 1, ordered.length);
+    if (height > 0) {
+      const out = [];
+      for (let i = 0; i < height; i++) out.push([i < ordered.length ? ordered[i] : '']);
+      sh.getRange(2, col, height, 1).setValues(out);
+    }
+    SpreadsheetApp.flush();
+    return getCategories_();
   } finally {
     lock.releaseLock();
   }

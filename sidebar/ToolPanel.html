@@ -289,6 +289,10 @@
   .account-list li { padding: 8px 10px; background: var(--bg-raised); border-bottom: 1px solid var(--border); }
   .account-list li:last-child { border-bottom: none; }
   .account-list .account-empty { color: var(--text-muted); }
+  .category-list li { display: flex; align-items: center; gap: var(--sp2); }
+  .category-list .category-name { flex: 1; min-width: 0; }
+  .category-list button { border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-primary); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+  .category-list button[disabled] { opacity: .35; cursor: default; }
   .minfo { grid-column: 1/-1; font-size: 12px; color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-ctl); padding: 8px 10px; }
   .minfo b { color: var(--text-primary); }
   .macts { display: flex; gap: var(--sp2); justify-content: flex-end; margin-top: var(--sp4); }
@@ -366,6 +370,11 @@
       <ul class="account-list" id="settings-account-list"></ul>
       <div class="source-new"><input id="settings-account-name" maxlength="50" placeholder="新增帳戶，例如：中信" aria-label="新帳戶名稱" spellcheck="false"><button type="button" class="primary" id="settings-account-create">加入</button></div>
     </section>
+    <section class="settings-section" aria-labelledby="categories-title">
+      <h4 id="categories-title">類別</h4>
+      <ul class="account-list category-list" id="settings-category-list"></ul>
+      <div class="source-new"><input id="settings-category-name" maxlength="20" placeholder="新增類別" aria-label="新類別名稱" spellcheck="false"><button type="button" class="primary" id="settings-category-create">加入</button></div>
+    </section>
     <div class="macts"><button type="button" class="mbtn" id="settings-close">關閉</button></div>
   </div>
 </div>
@@ -389,6 +398,10 @@
   var ACCOUNT_SOURCES = [];
   var PREFERRED_SOURCE = null;
   var ACCOUNT_CREATE_PENDING = false;
+  // META!D in the owner's order, as last confirmed by the server (getDashboardData / addCategory /
+  // setCategoryOrder). The pickers read it through distinctCats().
+  var CATEGORY_LIST = [];
+  var CATEGORY_SAVE_PENDING = false;
 
   var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'',
                 inboxScope:'all', inboxDone:false };
@@ -775,8 +788,16 @@
   // ---------- editable day list (per-day 待記帳 queue) ----------
   function txnById(id){ for(var i=0;i<TXNS.length;i++) if(TXNS[i].id===id) return TXNS[i]; return null; }
   // Only the owner's own categories, never the bank vocabulary from 類別(G) — the server sends
-  // 種類(手動) alone now (see rowCategory_). 未分類 is always offered so a category can be cleared.
-  function distinctCats(){ var s={'未分類':1}; TXNS.forEach(function(t){ if(t.cat) s[t.cat]=1; }); return Object.keys(s).sort(); }
+  // 種類(手動) alone now (see rowCategory_). 未分類 is always offered first so a category can be
+  // cleared; then META!D's order (CATEGORY_LIST); then any category seen on a loaded transaction
+  // but absent from META!D, in code-point order.
+  function distinctCats(){
+    var out=['未分類'], seen={'未分類':1};
+    (CATEGORY_LIST||[]).forEach(function(c){ if(c&&!seen[c]){ seen[c]=1; out.push(c); } });
+    var tail={};
+    TXNS.forEach(function(t){ if(t.cat&&!seen[t.cat]) tail[t.cat]=1; });
+    return out.concat(Object.keys(tail).sort());
+  }
   function realCats(){ return distinctCats().filter(function(c){ return c!=='未分類'; }); }
   /**
    * Distinct 銀行 names from the loaded transactions. No account is hardcoded.
@@ -1590,10 +1611,62 @@
       ? banks.map(function(name){ return '<li>'+esc(name)+'</li>'; }).join('')
       : '<li class="account-empty">尚無帳戶</li>';
   }
+  /** The Settings 類別 list. `list` is an optimistic order while a save is in flight; omitted, the
+   *  last server-confirmed CATEGORY_LIST is drawn. Every arrow is disabled while a save is pending. */
+  function renderSettingsCategories(list){
+    var el=document.getElementById('settings-category-list'); if(!el) return;
+    var cats=list||CATEGORY_LIST||[];
+    el.innerHTML=cats.length
+      ? cats.map(function(name,i){
+          var up=(i===0||CATEGORY_SAVE_PENDING)?' disabled':'', down=(i===cats.length-1||CATEGORY_SAVE_PENDING)?' disabled':'';
+          return '<li><span class="category-name">'+esc(name)+'</span>'
+            +'<button type="button" data-cat-move="-1" data-cat-idx="'+i+'" aria-label="上移 '+esc(name)+'"'+up+'>↑</button>'
+            +'<button type="button" data-cat-move="1" data-cat-idx="'+i+'" aria-label="下移 '+esc(name)+'"'+down+'>↓</button></li>';
+        }).join('')
+      : '<li class="account-empty">尚無類別</li>';
+  }
+  function moveCategory(idx, delta){
+    if(CATEGORY_SAVE_PENDING) return;
+    var j=idx+delta, next=(CATEGORY_LIST||[]).slice();
+    if(idx<0||j<0||idx>=next.length||j>=next.length) return;
+    var tmp=next[idx]; next[idx]=next[j]; next[j]=tmp;
+    CATEGORY_SAVE_PENDING=true; renderSettingsCategories(next);
+    google.script.run
+      .withSuccessHandler(function(cats){
+        CATEGORY_LIST=cats||[]; CATEGORY_SAVE_PENDING=false; renderSettingsCategories(); render();
+      })
+      .withFailureHandler(function(err){
+        CATEGORY_SAVE_PENDING=false; renderSettingsCategories();
+        toast((err&&err.message)?err.message:String(err),true);
+      })
+      .setCategoryOrder(next);
+  }
+  function createCategory(){
+    var input=document.getElementById('settings-category-name'), button=document.getElementById('settings-category-create');
+    if(CATEGORY_SAVE_PENDING) return;
+    var name=input.value.trim();
+    if(!name){ input.classList.add('bad'); input.focus(); return; }
+    input.classList.remove('bad'); CATEGORY_SAVE_PENDING=true; button.disabled=true; renderSettingsCategories();
+    google.script.run
+      .withSuccessHandler(function(cats){
+        CATEGORY_LIST=cats||[];
+        var chosen=CATEGORY_LIST.filter(function(c){ return c.toLocaleLowerCase()===name.toLocaleLowerCase(); })[0]||name;
+        CATEGORY_SAVE_PENDING=false; button.disabled=false; input.value='';
+        renderSettingsCategories(); render(); toast('已新增類別：'+chosen);
+      })
+      .withFailureHandler(function(err){
+        CATEGORY_SAVE_PENDING=false; button.disabled=false; renderSettingsCategories();
+        toast('新增類別失敗：'+((err&&err.message)?err.message:String(err)),true);
+      })
+      .addCategory(name);
+  }
   function openSettingsModal(){
     var ov=document.getElementById('settingsOverlay'), input=document.getElementById('settings-account-name');
     if(!ov||!input) return;
-    input.value=''; input.classList.remove('bad'); renderSettingsAccounts(); ov.classList.add('on'); input.focus();
+    input.value=''; input.classList.remove('bad'); renderSettingsAccounts();
+    var catInput=document.getElementById('settings-category-name');
+    if(catInput){ catInput.value=''; catInput.classList.remove('bad'); }
+    renderSettingsCategories(); ov.classList.add('on'); input.focus();
   }
   function closeSettingsModal(){
     var ov=document.getElementById('settingsOverlay'); if(ov) ov.classList.remove('on');
@@ -2140,6 +2213,7 @@
       .withSuccessHandler(function(raw){
         var data=JSON.parse(raw);
         ACCOUNT_SOURCES=(data&&data.accounts)||[];
+        CATEGORY_LIST=(data&&data.categories)||[];
         var partial=!!(data&&data.complete===false&&data.before);
         HISTORY={ complete:!partial, before:partial?data.before:null, loadedFp:partial?data.loadedFp:null, loading:false, failed:null };
         adoptTxns(data&&data.txns, data&&data.olderFp); render();
@@ -2159,6 +2233,16 @@
   document.getElementById('settings-account-name').onkeydown=function(e){
     if(e.key==='Enter'){ e.preventDefault(); createAccountSource(); }
     else if(e.key==='Escape'){ e.preventDefault(); closeSettingsModal(); }
+  };
+  document.getElementById('settings-category-create').onclick=createCategory;
+  document.getElementById('settings-category-name').onkeydown=function(e){
+    if(e.key==='Enter'){ e.preventDefault(); createCategory(); }
+    else if(e.key==='Escape'){ e.preventDefault(); closeSettingsModal(); }
+  };
+  document.getElementById('settings-category-list').onclick=function(e){
+    var b=e.target&&e.target.closest?e.target.closest('button[data-cat-move]'):null;
+    if(!b||b.disabled) return;
+    moveCategory(Number(b.getAttribute('data-cat-idx')), Number(b.getAttribute('data-cat-move')));
   };
   document.getElementById('settingsOverlay').onclick=function(e){ if(e.target===this) closeSettingsModal(); };
   document.addEventListener('keydown',function(e){

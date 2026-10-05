@@ -153,11 +153,29 @@ const EXPECTED = {
   }
 };
 
+/** #65 appended `categories` (META!D) to getDashboardData's payload as its LAST key. Strip only
+ *  that key, so the rest of the text is still compared byte for byte with the 5b3edcc captures;
+ *  the captures themselves stay untouched. Returns the text and whether a key was stripped. */
+function stripCategories(s) {
+  const obj = JSON.parse(s);
+  if (!Object.prototype.hasOwnProperty.call(obj, 'categories')) return { text: s, stripped: false };
+  const keys = Object.keys(obj);
+  assert.strictEqual(keys[keys.length - 1], 'categories', '`categories` is the last key of the load payload');
+  assert.ok(Array.isArray(obj.categories), '`categories` is an array');
+  delete obj.categories;
+  return { text: JSON.stringify(obj), stripped: true };
+}
+
 function testParityWithBeforeChange() {
+  let stripped = 0;
   const got = captureAll(recentAck.loadServer, recentAck.EditableSheet, s => {
     assert.strictEqual(typeof s, 'string', 'the load calls return JSON strings');
-    return s;
+    const r = stripCategories(s);
+    if (r.stripped) stripped++;
+    return r.text;
   });
+  // getDashboardData() and getDashboardData({ sinceMonths: 13 }) per fixture carry `categories`.
+  assert.strictEqual(stripped, 2 * Object.keys(EXPECTED).length, 'both getDashboardData responses carry `categories`');
   assert.deepStrictEqual(Object.keys(got), Object.keys(EXPECTED), 'every captured fixture is checked');
   Object.keys(EXPECTED).forEach(name => {
     const e = EXPECTED[name];
