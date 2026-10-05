@@ -151,9 +151,14 @@ includes `sidebar/` as the `Ledger` library with `developmentMode: true`, so the
 webhook always runs the `sidebar/` code most recently pushed: the write, undo,
 account-list, category and Gemini-parse logic, the dashboard's script lock and
 its `GEMINI_API_KEY` all live there. This coupling is intended (one `addTxn`,
-one lock). Treat a change to `sidebar/line_ledger.js`, `addTxnRow_`,
-`deleteRowById_` or `classifyWithGemini_` as a change to the LINE bot too, and
-keep every `Ledger.<fn>()` target public (no trailing `_`); the gate checks it.
+one lock). Treat a change to `sidebar/line_ledger.js`, `addTxn(fields, held)`,
+`deleteTxn(messageId, held)` (both in `sidebar/程式碼.js`) or
+`classifyWithGemini_` as a change to the LINE bot too, and keep every
+`Ledger.<fn>()` target public (no trailing `_`). The `Ledger.<fn>()` resolution
+check runs only in `node check_sidebar.js linebot` and in no-argument mode; the
+`sidebar/` deploy runs `node check_sidebar.js sidebar`, which does NOT run it.
+So run `node check_sidebar.js` with no argument before pushing any change to
+`sidebar/line_ledger.js`, `addTxn` or `deleteTxn`.
 
 **The linebot's secrets live in its own Script Properties**, never in the repo:
 `CHANNEL_ACCESS_TOKEN`, `OWNER_USER_ID` and `WEBHOOK_SECRET` (the `?k=` value on
