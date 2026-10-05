@@ -125,16 +125,52 @@ and then `clasp push -f` + `clasp deploy -i <pinned deployment id>`. Shipping is
 therefore ONE `git push` — do not also deploy by hand, or the deployment gets a
 duplicate version for the same commit.
 
-**This repo holds exactly one Apps Script project, in `sidebar/`.**
-`sidebar/.clasp.json` is the only clasp config in the tree, so `clasp` is only
-ever run from `sidebar/` and there is nowhere else to push. The root used to
-carry its own `.clasp.json` (the retired standalone project) plus a frozen copy
-of `cards_transaction_bot.js` kept as a rollback snapshot — and one `clasp push`
-from the root would have shipped that snapshot to the old project. The snapshot
-had also decayed past being one: it predated `parseFubonTransfer_` entirely, so
-restoring it would have silently undone two 富邦-transfer fixes. **Rollback for
-the bot is git history** — `git revert` the bad commit and let the normal
-push-to-deploy path run — never a second copy of the file in the tree.
+**This repo holds two Apps Script projects, one per folder.**
+- `sidebar/` is the dashboard, the hourly Gmail import and the `Ledger` library
+  (`sidebar/line_ledger.js`). It deploys on `sidebar/**` through
+  `deploy-dashboard.yml`.
+- `linebot/` is the LINE webhook for Charlie-Bot-Channel. It deploys on
+  `linebot/**` through `.github/workflows/deploy-linebot.yml`, whose deploy job
+  skips itself while `linebot/.clasp.json` or the workflow's `DEPLOYMENT_ID`
+  still holds a `REPLACE_WITH_*` placeholder.
+
+Each folder has its own `.clasp.json`, and **`clasp` runs from the folder of the
+project being changed** — never from the root, which has no clasp config. The two
+path filters are disjoint, so deploying one project never redeploys the other.
+The root used to carry its own `.clasp.json` (the retired standalone project)
+plus a frozen copy of `cards_transaction_bot.js` kept as a rollback snapshot —
+and one `clasp push` from the root would have shipped that snapshot to the old
+project. The snapshot had also decayed past being one: it predated
+`parseFubonTransfer_` entirely, so restoring it would have silently undone two
+富邦-transfer fixes. **Rollback for the bot is git history** — `git revert` the
+bad commit and let the normal push-to-deploy path run — never a second copy of
+the file in the tree.
+
+**A `sidebar/` push changes LINE behaviour with no linebot redeploy.** `linebot/`
+includes `sidebar/` as the `Ledger` library with `developmentMode: true`, so the
+webhook always runs the `sidebar/` code most recently pushed: the write, undo,
+account-list, category and Gemini-parse logic, the dashboard's script lock and
+its `GEMINI_API_KEY` all live there. This coupling is intended (one `addTxn`,
+one lock). Treat a change to `sidebar/line_ledger.js`, `addTxn(fields, held)`,
+`deleteTxn(messageId, held)` (both in `sidebar/程式碼.js`) or
+`classifyWithGemini_` as a change to the LINE bot too, and keep every
+`Ledger.<fn>()` target public (no trailing `_`). The `Ledger.<fn>()` resolution
+check runs in `node check_sidebar.js linebot` and in no-argument mode, and the
+`sidebar/` deploy gate runs both `node check_sidebar.js sidebar` and
+`node check_sidebar.js linebot`, so a sidebar-only deploy that would break the
+LINE bot (an unresolved `Ledger.<fn>()` target or a failing `linebot_*`
+fixture) is blocked. Still run `node check_sidebar.js` with no argument before
+pushing, to catch it before CI does.
+
+**The linebot's secrets live in its own Script Properties**, never in the repo:
+`CHANNEL_ACCESS_TOKEN`, `OWNER_USER_ID` and `WEBHOOK_SECRET` (the `?k=` value on
+the webhook URL). Its runtime state (`evt:*`, `pend:*`, `done:*`) lives there too.
+Never print any of them in a log or a workflow.
+
+**Rollback for the LINE bot is the webhook URL.** The old `Linebot-response`
+Apps Script project (outside this repo) is kept as is: pointing the
+Charlie-Bot-Channel webhook back at its deployment in LINE Developers undoes the
+cut-over. Code rollback for `linebot/` is still git history, as above.
 
 **The `Deleted` sheet is load-bearing, not an archive.** Dashboard delete
 copies the whole `Transactions` row there and then removes it; the bot
@@ -149,8 +185,10 @@ typo'd `google.script.run` target or a stale `CFG.IDX_*` constant would surface
 only in the live dashboard. The script checks that every `.js`/`.json`/inline
 `<script>` parses, that every `google.script.run.<fn>()` resolves to a real
 server function, and that every `CFG.<KEY>` reference exists. Run it locally
-before committing (`node check_sidebar.js`, or `CHECK_VERBOSE=1` to list every
-check); a non-zero exit blocks the deploy in CI.
+before committing (`node check_sidebar.js` checks both folders and runs their
+`test/` fixtures; `node check_sidebar.js sidebar` or `linebot` checks one, which is
+what each workflow runs; `CHECK_VERBOSE=1` lists every check); a non-zero exit
+blocks the deploy in CI.
 
 Still true, and load-bearing:
 
@@ -165,6 +203,7 @@ Still true, and load-bearing:
 - **Manual deploy is the fallback** (CI down, or deploying without a commit):
 
       cd sidebar && clasp push -f && clasp deploy -i <live-deployment-id> -d "..."
+      cd linebot && clasp push -f && clasp deploy -i <linebot-deployment-id> -d "..."
 
 - Changing the deploy trigger, the gate, or the pinned deployment id is a
   policy change — ask first.

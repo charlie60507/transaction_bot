@@ -17,10 +17,15 @@ English README describing how to run, configure, and deploy this Apps Script pro
 - Google account with access to the target Spreadsheet and Gmail
 - Apps Script API enabled (https://script.google.com/home/usersettings)
 
-### Where the Apps Script project lives
-Everything pushed to Apps Script lives in `sidebar/`, and `sidebar/.clasp.json` is the
-only clasp config in the repo — so every `clasp` command below is run from `sidebar/`,
-never from the repo root. `.env` (ignored) is the place for local copies of config values.
+### Where the Apps Script projects live
+There are two Apps Script projects, one folder each. Run every `clasp` command from the
+folder of the project you are changing, never from the repo root.
+
+- `sidebar/` — the dashboard, the Gmail import, and the `Ledger` library facade
+  (`sidebar/line_ledger.js`) that the LINE bot calls.
+- `linebot/` — the LINE webhook (see "LINE bot" below).
+
+`.env` (ignored) is the place for local copies of config values.
 
 ### Configure Script Properties (recommended)
 Use the built-in helper once per project to avoid hardcoding secrets:
@@ -60,3 +65,42 @@ In the Apps Script UI, add a time-based trigger (e.g., hourly) for `appendLast7D
 - Keep `.env` out of version control (already ignored).
 - Logs are in English; data values remain as-is (Chinese headers) to match the sheet schema.
 
+### LINE bot (`linebot/`)
+Records a transaction from one free-text LINE message sent to the owner's bot. Every sheet
+read and write goes through the dashboard project, included as the library `Ledger` with
+`developmentMode: true`: LINE rows are written by `addTxn`'s own row code under the dashboard's
+script lock, and a `sidebar/` push changes LINE behaviour with no `linebot` redeploy. Deploying
+either project never redeploys the other. `node check_sidebar.js` verifies that every
+`Ledger.<fn>(` call in `linebot/` resolves to a public function in `sidebar/`.
+
+One-time setup (the owner, after merge):
+
+1. **Create the project.** In an empty scratch directory, `clasp create --type standalone --title linebot`,
+   then copy the new `scriptId` into `linebot/.clasp.json`, replacing
+   `REPLACE_WITH_LINEBOT_SCRIPT_ID`. The scriptId is not a secret.
+2. **Library.** `linebot/appsscript.json` already points at the dashboard project
+   (`libraryId` = the scriptId in `sidebar/.clasp.json`) as `Ledger`, version `1`, with
+   `developmentMode: true`, so the version number only has to exist; HEAD is what runs.
+   Both projects use `Asia/Taipei`.
+3. **Push** from `linebot/`: `cd linebot && clasp push -f`.
+4. **Script Properties** of the `linebot` project (Project Settings → Script Properties).
+   Names only; the values never go into this repo, a fixture, or a log:
+   - `CHANNEL_ACCESS_TOKEN` — the channel access token (reply API only; push is never called);
+   - `OWNER_USER_ID` — the owner's LINE userId for this channel; every other sender is ignored;
+   - `WEBHOOK_SECRET` — a long random string that must arrive as `?k=<secret>` on the webhook URL.
+   The Gemini key is NOT duplicated: the parse runs inside the library and reads the
+   dashboard's `GEMINI_API_KEY`.
+5. **Authorize once** in the Apps Script editor (run any function, accept the spreadsheet and
+   external-request scopes).
+6. **First deploy** as a web app (Execute as: me; Who has access: anyone) and record the
+   deployment id; later deploys must reuse it with `clasp deploy -i <id>`.
+7. **Cut over:** in LINE Developers, set the channel's webhook URL to
+   `<exec URL>?k=<WEBHOOK_SECRET>`. The console's "Verify" button may complain about the Apps
+   Script 302 redirect; delivery still works.
+
+**Rollback** is pointing the webhook back at the old `Linebot-response` deployment, which is
+left untouched.
+
+Runtime state lives in the `linebot` project's own Script Properties: `evt:<webhookEventId>`
+(redelivery guard, 7 days), `pend:<token>` (an account choice waiting for a tap, 24 hours) and
+`done:<token>` (a used or cancelled choice, 24 hours). All three are pruned on every call.

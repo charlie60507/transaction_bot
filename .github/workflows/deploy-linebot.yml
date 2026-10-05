@@ -1,18 +1,21 @@
-name: Deploy dashboard
+name: Deploy linebot
 
-# Push-to-deploy for the bound Apps Script dashboard, so shipping is one
-# `git push` instead of a git push plus a manual clasp push + deploy.
+# Push-to-deploy for the LINE webhook Apps Script project in linebot/, the
+# sibling of deploy-dashboard.yml. The two path filters are disjoint, so a
+# sidebar/-only push never redeploys the bot and a linebot/-only push never
+# redeploys the dashboard. (linebot/ runs sidebar/ as the `Ledger` library in
+# developmentMode, so a sidebar/ push changes LINE behaviour WITHOUT this
+# workflow running — see CLAUDE.md.)
 #
-# The safety gate is check_sidebar.js (see CLAUDE.md): Apps Script has no build
-# step, so a typo'd server function or a stale CFG column constant would only
-# surface in the live dashboard. A failing check means no push and no deploy.
+# The safety gate is `check_sidebar.js linebot`: it parses linebot/, runs the
+# test/linebot_*.js fixtures and checks that every Ledger.<fn>() call resolves
+# to a public sidebar/ function. A failing check means no push and no deploy.
 on:
   push:
     branches: [main]
     paths:
-      - 'sidebar/**'
-      - 'check_sidebar.js'
-      - '.github/workflows/deploy-dashboard.yml'
+      - 'linebot/**'
+      - '.github/workflows/deploy-linebot.yml'
   workflow_dispatch:
     inputs:
       description:
@@ -21,11 +24,47 @@ on:
 
 # Never run two deploys against one Apps Script project at once.
 concurrency:
-  group: deploy-dashboard
+  group: deploy-linebot
   cancel-in-progress: false
 
+env:
+  # Not a secret: the URL secret and the owner-userId gate in linebot.js are the
+  # protection (the web app is ANYONE_ANONYMOUS, as LINE webhooks require).
+  # Pinned because an unpinned `clasp deploy` creates a NEW deployment and the
+  # webhook URL actually in use never changes.
+  # PLACEHOLDER until the first manual deploy: replace it with the real id.
+  DEPLOYMENT_ID: REPLACE_WITH_LINEBOT_DEPLOYMENT_ID
+
 jobs:
+  # Until the one-time setup is done (linebot/.clasp.json scriptId and the
+  # pinned DEPLOYMENT_ID above), there is nothing to deploy to. The deploy job
+  # is then SKIPPED rather than failed, so merging before setup is not a red run.
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.setup.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check one-time setup
+        id: setup
+        run: |
+          set -euo pipefail
+          ready=true
+          case "${DEPLOYMENT_ID}" in
+            *REPLACE_WITH_*)
+              echo "::notice::DEPLOYMENT_ID in deploy-linebot.yml is still the placeholder; skipping deploy."
+              ready=false ;;
+          esac
+          if grep -q 'REPLACE_WITH_LINEBOT_SCRIPT_ID' linebot/.clasp.json; then
+            echo "::notice::linebot/.clasp.json scriptId is still the placeholder; skipping deploy."
+            ready=false
+          fi
+          echo "ready=${ready}" >> "${GITHUB_OUTPUT}"
+
   deploy:
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -36,13 +75,7 @@ jobs:
 
       # The gate. Runs before any credential is written to disk, so a broken
       # commit fails without ever touching Google.
-      - name: Verify sidebar (offline)
-        run: node check_sidebar.js sidebar
-
-      # linebot/ uses sidebar/ as the Ledger library in developmentMode, so this
-      # deploy changes LINE behaviour immediately: also run the Ledger.<fn>()
-      # resolution check and the linebot_* fixtures.
-      - name: Verify linebot against this sidebar (offline)
+      - name: Verify linebot (offline)
         run: node check_sidebar.js linebot
 
       # clasp 3.x stores auth as { tokens: { default: {...} } } — a different
@@ -69,13 +102,8 @@ jobs:
                    console.log("credentials OK (clasp 3.x shape)");'
 
       - name: Push and deploy
-        working-directory: sidebar
+        working-directory: linebot
         env:
-          # Not a secret: the web app is access=MYSELF, so only the owning
-          # Google account can open this URL. Pinned because the project has
-          # several deployments and an unpinned `clasp deploy` would create a
-          # NEW one, leaving the URL actually in use untouched.
-          DEPLOYMENT_ID: AKfycbyvVvKPI45Y5zooV9VbzYSN_54EWqQTqjsE6bJPTgBpfvcdJZ13YIynh3rBKdRM3bKaag
           INPUT_DESC: ${{ inputs.description }}
           COMMIT_SUBJECT: ${{ github.event.head_commit.message }}
         run: |

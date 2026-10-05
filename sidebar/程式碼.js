@@ -1087,8 +1087,15 @@ function updateTxn(messageId, patch, wantTxns, olderFp) {
  * fields: { date:'YYYY-MM-DD', time:'HH:mm'|'', amount, type, source, merchant, cat }
  * `time` is optional — cash is often recorded without caring what time it was. Returns the
  * mapped txn (same shape as getAllTxns) for optimistic UI.
+ *
+ * `held` is server-only: `{ sh }` from a caller that ALREADY holds the script lock and has the
+ * Transactions sheet open (the LINE facade's ledgerAdd writes N rows under one lock). The
+ * dashboard never passes it, and it cannot: a Sheet object does not survive google.script.run,
+ * so anything the client sends fails the getRange test below. This is the one row-writing
+ * implementation for both callers; it stays inside addTxn because the offline fixtures load
+ * addTxn by name, and a separate helper would be missing from every one of them.
  */
-function addTxn(fields) {
+function addTxn(fields, held) {
   fields = fields || {};
   if (!fields.date) throw new Error('缺少日期');
   const time = String(fields.time || '').trim();
@@ -1097,11 +1104,12 @@ function addTxn(fields) {
   if (!amount || amount <= 0) throw new Error('金額需大於 0');
   const type = String(fields.type || '支出');
   if (['支出', '收入', '轉帳'].indexOf(type) === -1) throw new Error('收支別不合法');
+  if (held != null && !(held.sh && typeof held.sh.getRange === 'function')) throw new Error('held 參數不合法');
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(15 * 1000);
+  const lock = held ? null : LockService.getScriptLock();
+  if (lock) lock.waitLock(15 * 1000);
   try {
-  const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
+  const sh = held ? held.sh : getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
   if (!sh) throw new Error('找不到 Transactions 工作表');
   const rowIdIdx = ensureRowIdColIndex_(sh);
   const ncol = sh.getLastColumn();
@@ -1153,7 +1161,7 @@ function addTxn(fields) {
   sh.getRange(rowNum, 1, 1, ncol).setValues([row]);
   return result;
   } finally {
-    lock.releaseLock();
+    if (lock) lock.releaseLock();
   }
 }
 
@@ -1188,18 +1196,27 @@ function getOrCreateDeleted_(ss, src) {
  *  Returns `{ ok, txns, olderFp }` (see txnSnapshot_) so the page does not need a nested
  *  getAllTxns, and its next incremental edit ack can keep the older rows it now holds. Nesting
  *  google.script.run after a successful write was the false 找不到 toast: the
- *  row was already gone, then a second lookup (retry or refresh) failed. */
-function deleteTxn(messageId) {
+ *  row was already gone, then a second lookup (retry or refresh) failed.
+ *
+ *  `held` is server-only, as in addTxn: `{ ss, sh }` from a caller that already holds the script
+ *  lock (the LINE facade's ledgerUndo). With it, the same path returns a status instead of a
+ *  snapshot — 'deleted', 'already-deleted' (already in Deleted) or 'missing' — so LINE can say
+ *  這筆已不存在 rather than surface an exception. The dashboard's behaviour is unchanged. */
+function deleteTxn(messageId, held) {
   messageId = asTxnKey_(messageId);
-  const lock = LockService.getScriptLock();
-  lock.waitLock(15 * 1000);
+  if (held != null && !(held.ss && held.sh && typeof held.sh.getRange === 'function')) throw new Error('held 參數不合法');
+  const lock = held ? null : LockService.getScriptLock();
+  if (lock) lock.waitLock(15 * 1000);
   try {
-    const ss = getSpreadsheet_();
-    const sh = ss.getSheetByName(CFG.DATA_SHEET);
+    const ss = held ? held.ss : getSpreadsheet_();
+    const sh = held ? held.sh : ss.getSheetByName(CFG.DATA_SHEET);
     if (!sh) throw new Error('找不到 Transactions 工作表');
     ensureRowIdColIndex_(sh);
     const last = sh.getLastRow();
-    if (last <= 1) throw new Error('沒有交易資料');
+    if (last <= 1) {
+      if (held) return 'missing';
+      throw new Error('沒有交易資料');
+    }
     const rowNum = findRowByKey_(sh, messageId);
     if (rowNum === -1) {
       // Already moved (double-tap / retry after a successful write). Do not
@@ -1207,9 +1224,11 @@ function deleteTxn(messageId) {
       const del = ss.getSheetByName(CFG.DELETED_SHEET);
       const migrated = getRowIdColIndex_(sh) !== -1;
       if (del && (sheetHasRowId_(del, messageId) || (!migrated && sheetHasBaseKey_(del, messageId)))) {
+        if (held) return 'already-deleted';
         SpreadsheetApp.flush();
         return Object.assign({ ok: true }, txnSnapshot_(sh, new Date()));
       }
+      if (held) return 'missing';
       throw new Error('找不到該筆交易 (key=' + messageId + ')');
     }
     const cols = sh.getLastColumn();
@@ -1219,9 +1238,10 @@ function deleteTxn(messageId) {
     destSheet.getRange(dest, 1, 1, cols).setValues([row]);
     sh.deleteRow(rowNum);
     SpreadsheetApp.flush();
+    if (held) return 'deleted';
     return Object.assign({ ok: true }, txnSnapshot_(sh, new Date()));
   } finally {
-    lock.releaseLock();
+    if (lock) lock.releaseLock();
   }
 }
 
