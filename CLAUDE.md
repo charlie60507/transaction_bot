@@ -36,6 +36,29 @@ and no effect on other repos. Confirm with `gh api user --jq .login` when in dou
 Use the repository's GitHub Issue Harness for issue-to-PR work. Its configuration
 lives in `.harness/github-harness.yaml`; do not add a second ticket-routing profile.
 
+## UI changes — preview first
+
+Any change to what the dashboard looks like or how it is operated (layout, navigation, controls,
+interaction patterns, copy on screen) gets an **interactive artifact preview before any code,
+issue or PR**. The owner approves the preview; only then is the issue written or the code changed.
+A pure logic or data change with no visible effect is exempt.
+
+- **The preview is a working mock, not a picture.** Use the dashboard's real tokens (`:root` in
+  `sidebar/ToolPanel.html`), real data from the sheet where it matters, and make the key
+  interactions actually work (tabs switch, drag reorders). Show both phone and desktop widths:
+  the dashboard is used on a phone.
+- **Design to current UX conventions, not to "the feature works".** Before drawing, ask how a
+  well-made mobile app handles the same job, and prefer that: segmented tabs over stacked
+  sections, drag handles over arrow buttons, bottom sheets on phone, inline add rows, quiet
+  inline save state over a toast per action. A control that is merely functional is a draft.
+- **The approved preview is the spec.** Link it from the issue, and write any interaction detail
+  it settles (gestures, default tab, save timing, error recovery) into the issue body so the
+  implementer does not have to reverse-engineer the mock.
+
+Why: the category-order feature (#65) shipped exactly as specified, as ↑/↓ buttons in one
+stacked Settings modal. It worked and still had to be redesigned (tabs, drag-to-reorder),
+because nobody had looked at the interaction before it was built.
+
 ## Deploy
 
 The dashboard deploys itself: pushing to `main` with changes under `sidebar/**`
