@@ -265,6 +265,38 @@ function run() {
     assert.deepStrictEqual(plain(b.getSheetByName('META').rows), metaBefore, 'nothing is written to META');
   }
 
+  // ---- import classifier: fail open, key never in the URL or a log -------
+  // classifyWithGemini_ is shared by the hourly Gmail import and ledgerCategorize. It must keep
+  // failing OPEN (no classifications, no throw into the import) while never leaking the key.
+  {
+    const logs = [];
+    const ok = load(book(), {
+      logs,
+      fetch: (url, req) => {
+        assert.ok(url.indexOf('models/gemini-2.5-flash:generateContent') !== -1);
+        assert.ok(url.indexOf('FIXTURE_GEMINI_KEY') === -1, 'classifier: the API key is not in the URL');
+        assert.ok(url.indexOf('key=') === -1, 'classifier: no key query parameter');
+        assert.strictEqual(req.headers['x-goog-api-key'], 'FIXTURE_GEMINI_KEY', 'classifier: the key is sent as a header');
+        return { getResponseCode: () => 200, getContentText: () => JSON.stringify({
+          candidates: [{ content: { parts: [{ text: '{"全聯": "超市"}' }] } }] }) };
+      }
+    });
+    assert.deepStrictEqual(plain(ok.classifyWithGemini_(['全聯'], ['超市', '交通'])), { '全聯': '超市' });
+
+    const leakyFetches = [
+      (url, req) => { throw new Error('Address unavailable: ' + url + '?key=' + req.headers['x-goog-api-key']); },
+      (url, req) => ({ getResponseCode: () => 400, getContentText: () => 'bad key ' + req.headers['x-goog-api-key'] })
+    ];
+    leakyFetches.forEach((f, i) => {
+      const s = load(book(), { logs, fetch: f });
+      let out;
+      assert.doesNotThrow(() => { out = s.classifyWithGemini_(['全聯'], ['超市']); }, 'classifier failure ' + i + ' does not throw');
+      assert.deepStrictEqual(plain(out), {}, 'classifier failure ' + i + ' returns no classifications');
+    });
+    assert.ok(logs.length >= 2, 'classifier failures are logged');
+    assert.ok(logs.every(l => l.indexOf('FIXTURE_GEMINI_KEY') === -1), 'classifier: the API key never reaches a log');
+  }
+
   // ---- parse: fail closed, key never logged ------------------------------
   {
     const logs = [];

@@ -891,22 +891,32 @@ function classifyWithGemini_(merchants, validCategories) {
 商店列表：
 ${merchantList}`;
 
+  // Fail OPEN: the hourly import must never throw here, so every failure logs and returns no
+  // classifications. The key travels in the x-goog-api-key header, never the URL, and nothing
+  // logged may carry it: a transport failure (timeout, DNS) is rethrown generically because
+  // UrlFetchApp's own message can echo the request, and the outer catch logs a fixed message.
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
     const payload = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.1 }
     };
 
-    const res = UrlFetchApp.fetch(url, {
-      method: 'post',
-      contentType: 'application/json',
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
-    });
+    let res;
+    try {
+      res = UrlFetchApp.fetch(url, {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { 'x-goog-api-key': apiKey },
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+      });
+    } catch (e) {
+      throw new Error('Gemini request failed');
+    }
 
     if (res.getResponseCode() !== 200) {
-      console.log(`Gemini API error: ${res.getResponseCode()} ${res.getContentText().substring(0, 200)}`);
+      console.log('Gemini API error: HTTP ' + res.getResponseCode());
       return result;
     }
 
@@ -932,7 +942,7 @@ ${merchantList}`;
 
     console.log(`Gemini classified ${Object.keys(result).length}/${merchants.length} merchants`);
   } catch (e) {
-    console.log('Gemini classification error: ' + e.message);
+    console.log('Gemini classification error' + (e && e.message === 'Gemini request failed' ? ': request failed' : ''));
   }
 
   return result;
