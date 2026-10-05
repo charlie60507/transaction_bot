@@ -73,34 +73,40 @@ script lock, and a `sidebar/` push changes LINE behaviour with no `linebot` rede
 either project never redeploys the other. `node check_sidebar.js` verifies that every
 `Ledger.<fn>(` call in `linebot/` resolves to a public function in `sidebar/`.
 
-One-time setup (the owner, after merge):
+Deploy target: the existing `Linebot-response` Apps Script project, reused rather than a new
+one (no `clasp create`). Its scriptId is in `linebot/.clasp.json` and the webhook's pinned
+deployment id is the `DEPLOYMENT_ID` in `.github/workflows/deploy-linebot.yml`; neither is a
+secret. Every push to `linebot/**` on `main` runs `node check_sidebar.js linebot`, then
+`clasp push -f` over the project and `clasp deploy -i <DEPLOYMENT_ID>`, so the webhook URL never
+changes.
 
-1. **Create the project.** In an empty scratch directory, `clasp create --type standalone --title linebot`,
-   then copy the new `scriptId` into `linebot/.clasp.json`, replacing
-   `REPLACE_WITH_LINEBOT_SCRIPT_ID`. The scriptId is not a secret.
-2. **Library.** `linebot/appsscript.json` already points at the dashboard project
+Setup state:
+
+1. **Backup.** The project's previous code was backed up outside the repo to
+   `~/Documents/transaction-bot-backups/linebot-response-2026-10-05/` before the first deploy.
+2. **Library.** `linebot/appsscript.json` points at the dashboard project
    (`libraryId` = the scriptId in `sidebar/.clasp.json`) as `Ledger`, version `1`, with
    `developmentMode: true`, so the version number only has to exist; HEAD is what runs.
    Both projects use `Asia/Taipei`.
-3. **Push** from `linebot/`: `cd linebot && clasp push -f`.
-4. **Script Properties** of the `linebot` project (Project Settings → Script Properties).
-   Names only; the values never go into this repo, a fixture, or a log:
+3. **Script Properties** of the `Linebot-response` project are already set (Project Settings →
+   Script Properties). Names only; the values never go into this repo, a fixture, or a log:
    - `CHANNEL_ACCESS_TOKEN` — the channel access token (reply API only; push is never called);
    - `OWNER_USER_ID` — the owner's LINE userId for this channel; every other sender is ignored;
    - `WEBHOOK_SECRET` — a long random string that must arrive as `?k=<secret>` on the webhook URL.
    The Gemini key is NOT duplicated: the parse runs inside the library and reads the
    dashboard's `GEMINI_API_KEY`.
-5. **Authorize once** in the Apps Script editor (run any function, accept the spreadsheet and
-   external-request scopes).
-6. **First deploy** as a web app (Execute as: me; Who has access: anyone) and record the
-   deployment id; later deploys must reuse it with `clasp deploy -i <id>`.
-7. **Cut over:** in LINE Developers, set the channel's webhook URL to
-   `<exec URL>?k=<WEBHOOK_SECRET>`. The console's "Verify" button may complain about the Apps
-   Script 302 redirect; delivery still works.
+4. **Authorize** in the Apps Script editor if the new code asks for scopes the project did not
+   have (run any function, accept the spreadsheet and external-request scopes).
+5. **Webhook:** in LINE Developers, the channel's webhook URL is
+   `<exec URL of DEPLOYMENT_ID>?k=<WEBHOOK_SECRET>`. The console's "Verify" button may complain
+   about the Apps Script 302 redirect; delivery still works.
 
-**Rollback** is pointing the webhook back at the old `Linebot-response` deployment, which is
-left untouched.
+**Rollback** is restoring the backup into the same project and deployment, not pointing the
+webhook at a different project: from
+`~/Documents/transaction-bot-backups/linebot-response-2026-10-05/`, run `clasp push -f`, then
+`clasp deploy -i <DEPLOYMENT_ID> -d "rollback"` with the deployment id the workflow pins. The
+webhook URL stays as is.
 
-Runtime state lives in the `linebot` project's own Script Properties: `evt:<webhookEventId>`
+Runtime state lives in the `Linebot-response` project's own Script Properties: `evt:<webhookEventId>`
 (redelivery guard, 7 days), `pend:<token>` (an account choice waiting for a tap, 24 hours) and
 `done:<token>` (a used or cancelled choice, 24 hours). All three are pruned on every call.

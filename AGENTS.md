@@ -129,10 +129,13 @@ duplicate version for the same commit.
 - `sidebar/` is the dashboard, the hourly Gmail import and the `Ledger` library
   (`sidebar/line_ledger.js`). It deploys on `sidebar/**` through
   `deploy-dashboard.yml`.
-- `linebot/` is the LINE webhook for Charlie-Bot-Channel. It deploys on
-  `linebot/**` through `.github/workflows/deploy-linebot.yml`, whose deploy job
-  skips itself while `linebot/.clasp.json` or the workflow's `DEPLOYMENT_ID`
-  still holds a `REPLACE_WITH_*` placeholder.
+- `linebot/` is the LINE webhook for Charlie-Bot-Channel. Its deploy target is
+  the existing `Linebot-response` Apps Script project (its scriptId is in
+  `linebot/.clasp.json`; the webhook's pinned deployment id is the
+  `DEPLOYMENT_ID` in `.github/workflows/deploy-linebot.yml`). It deploys on
+  `linebot/**` through that workflow, which `clasp push`es over the project and
+  redeploys the same deployment id, so the webhook URL never changes. The
+  deploy job skips itself if either id is ever a `REPLACE_WITH_*` placeholder.
 
 Each folder has its own `.clasp.json`, and **`clasp` runs from the folder of the
 project being changed** — never from the root, which has no clasp config. The two
@@ -164,13 +167,17 @@ pushing, to catch it before CI does.
 
 **The linebot's secrets live in its own Script Properties**, never in the repo:
 `CHANNEL_ACCESS_TOKEN`, `OWNER_USER_ID` and `WEBHOOK_SECRET` (the `?k=` value on
-the webhook URL). Its runtime state (`evt:*`, `pend:*`, `done:*`) lives there too.
+the webhook URL), already set on the `Linebot-response` project. Its runtime state (`evt:*`, `pend:*`, `done:*`) lives there too.
 Never print any of them in a log or a workflow.
 
-**Rollback for the LINE bot is the webhook URL.** The old `Linebot-response`
-Apps Script project (outside this repo) is kept as is: pointing the
-Charlie-Bot-Channel webhook back at its deployment in LINE Developers undoes the
-cut-over. Code rollback for `linebot/` is still git history, as above.
+**Rollback for the LINE bot's cut-over is the backup, not the webhook URL.**
+`linebot/` deploys over the `Linebot-response` project's own code, and the code it
+replaced was backed up outside the repo to
+`~/Documents/transaction-bot-backups/linebot-response-2026-10-05/`. To restore it,
+`clasp push -f` from that backup folder, then
+`clasp deploy -i <DEPLOYMENT_ID> -d "..."` to the same deployment id the
+workflow pins; the webhook URL stays as is. Code rollback within `linebot/` is
+still git history, as above.
 
 **The `Deleted` sheet is load-bearing, not an archive.** Dashboard delete
 copies the whole `Transactions` row there and then removes it; the bot

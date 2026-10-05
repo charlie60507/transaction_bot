@@ -32,8 +32,7 @@ env:
   # protection (the web app is ANYONE_ANONYMOUS, as LINE webhooks require).
   # Pinned because an unpinned `clasp deploy` creates a NEW deployment and the
   # webhook URL actually in use never changes.
-  # PLACEHOLDER until the first manual deploy: replace it with the real id.
-  DEPLOYMENT_ID: REPLACE_WITH_LINEBOT_DEPLOYMENT_ID
+  DEPLOYMENT_ID: AKfycbzU5wdSWP3w7cFmrw1tB9v1Bl_zg6g7irpIJCvnX7qx8j6kMRJ9vCUNnei-lsMfs_md
 
 jobs:
   # Until the one-time setup is done (linebot/.clasp.json scriptId and the
