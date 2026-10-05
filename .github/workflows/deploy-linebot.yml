@@ -1,0 +1,118 @@
+name: Deploy linebot
+
+# Push-to-deploy for the LINE webhook Apps Script project in linebot/, the
+# sibling of deploy-dashboard.yml. The two path filters are disjoint, so a
+# sidebar/-only push never redeploys the bot and a linebot/-only push never
+# redeploys the dashboard. (linebot/ runs sidebar/ as the `Ledger` library in
+# developmentMode, so a sidebar/ push changes LINE behaviour WITHOUT this
+# workflow running — see CLAUDE.md.)
+#
+# The safety gate is `check_sidebar.js linebot`: it parses linebot/, runs the
+# test/linebot_*.js fixtures and checks that every Ledger.<fn>() call resolves
+# to a public sidebar/ function. A failing check means no push and no deploy.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'linebot/**'
+      - '.github/workflows/deploy-linebot.yml'
+  workflow_dispatch:
+    inputs:
+      description:
+        description: Deployment description (defaults to the commit subject)
+        required: false
+
+# Never run two deploys against one Apps Script project at once.
+concurrency:
+  group: deploy-linebot
+  cancel-in-progress: false
+
+env:
+  # Not a secret: the URL secret and the owner-userId gate in linebot.js are the
+  # protection (the web app is ANYONE_ANONYMOUS, as LINE webhooks require).
+  # Pinned because an unpinned `clasp deploy` creates a NEW deployment and the
+  # webhook URL actually in use never changes.
+  # PLACEHOLDER until the first manual deploy: replace it with the real id.
+  DEPLOYMENT_ID: REPLACE_WITH_LINEBOT_DEPLOYMENT_ID
+
+jobs:
+  # Until the one-time setup is done (linebot/.clasp.json scriptId and the
+  # pinned DEPLOYMENT_ID above), there is nothing to deploy to. The deploy job
+  # is then SKIPPED rather than failed, so merging before setup is not a red run.
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.setup.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check one-time setup
+        id: setup
+        run: |
+          set -euo pipefail
+          ready=true
+          case "${DEPLOYMENT_ID}" in
+            *REPLACE_WITH_*)
+              echo "::notice::DEPLOYMENT_ID in deploy-linebot.yml is still the placeholder; skipping deploy."
+              ready=false ;;
+          esac
+          if grep -q 'REPLACE_WITH_LINEBOT_SCRIPT_ID' linebot/.clasp.json; then
+            echo "::notice::linebot/.clasp.json scriptId is still the placeholder; skipping deploy."
+            ready=false
+          fi
+          echo "ready=${ready}" >> "${GITHUB_OUTPUT}"
+
+  deploy:
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      # The gate. Runs before any credential is written to disk, so a broken
+      # commit fails without ever touching Google.
+      - name: Verify linebot (offline)
+        run: node check_sidebar.js linebot
+
+      # clasp 3.x stores auth as { tokens: { default: {...} } } — a different
+      # shape from clasp 2.x. The version is pinned so the secret written below
+      # is always in the format the installed clasp expects.
+      - name: Install clasp
+        run: npm install -g @google/clasp@3.0.6-alpha
+
+      - name: Restore clasp credentials
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLASPRC_JSON}" ]; then
+            echo "::error::CLASPRC_JSON secret is empty — set it with:  gh secret set CLASPRC_JSON < ~/.clasprc.json"
+            exit 1
+          fi
+          # Written via env, never echoed: this is a Google OAuth refresh token
+          # and the repo is public, so it must never reach the build log.
+          printf '%s' "${CLASPRC_JSON}" > "${HOME}/.clasprc.json"
+          chmod 600 "${HOME}/.clasprc.json"
+          node -e 'const t=require(process.env.HOME+"/.clasprc.json").tokens?.default;
+                   if(!t||!t.refresh_token) throw new Error("clasprc.json has no tokens.default.refresh_token — is it clasp 3.x format?");
+                   console.log("credentials OK (clasp 3.x shape)");'
+
+      - name: Push and deploy
+        working-directory: linebot
+        env:
+          INPUT_DESC: ${{ inputs.description }}
+          COMMIT_SUBJECT: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          DESC="${INPUT_DESC:-}"
+          if [ -z "${DESC}" ]; then DESC="$(printf '%s' "${COMMIT_SUBJECT}" | head -n 1)"; fi
+          if [ -z "${DESC}" ]; then DESC="manual dispatch"; fi
+          echo "deploying: ${DESC}"
+          clasp push -f
+          clasp deploy -i "${DEPLOYMENT_ID}" -d "${DESC}"
+          echo "--- deployments after ---"
+          clasp list-deployments | grep "${DEPLOYMENT_ID}"
