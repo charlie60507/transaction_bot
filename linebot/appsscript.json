@@ -1,0 +1,23 @@
+{
+  "timeZone": "Asia/Taipei",
+  "dependencies": {
+    "libraries": [
+      {
+        "userSymbol": "Ledger",
+        "libraryId": "1P4l2DY_XwHjRBSeja7MOkSFCrvZXufo2AzKrfd8ex9Srg3uHKg1VK5R7",
+        "version": "1",
+        "developmentMode": true
+      }
+    ]
+  },
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/script.external_request"
+  ],
+  "webapp": {
+    "access": "ANYONE_ANONYMOUS",
+    "executeAs": "USER_DEPLOYING"
+  }
+}
