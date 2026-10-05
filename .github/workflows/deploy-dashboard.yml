@@ -39,6 +39,12 @@ jobs:
       - name: Verify sidebar (offline)
         run: node check_sidebar.js sidebar
 
+      # linebot/ uses sidebar/ as the Ledger library in developmentMode, so this
+      # deploy changes LINE behaviour immediately: also run the Ledger.<fn>()
+      # resolution check and the linebot_* fixtures.
+      - name: Verify linebot against this sidebar (offline)
+        run: node check_sidebar.js linebot
+
       # clasp 3.x stores auth as { tokens: { default: {...} } } — a different
       # shape from clasp 2.x. The version is pinned so the secret written below
       # is always in the format the installed clasp expects.

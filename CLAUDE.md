@@ -74,10 +74,12 @@ one lock). Treat a change to `sidebar/line_ledger.js`, `addTxn(fields, held)`,
 `deleteTxn(messageId, held)` (both in `sidebar/程式碼.js`) or
 `classifyWithGemini_` as a change to the LINE bot too, and keep every
 `Ledger.<fn>()` target public (no trailing `_`). The `Ledger.<fn>()` resolution
-check runs only in `node check_sidebar.js linebot` and in no-argument mode; the
-`sidebar/` deploy runs `node check_sidebar.js sidebar`, which does NOT run it.
-So run `node check_sidebar.js` with no argument before pushing any change to
-`sidebar/line_ledger.js`, `addTxn` or `deleteTxn`.
+check runs in `node check_sidebar.js linebot` and in no-argument mode, and the
+`sidebar/` deploy gate runs both `node check_sidebar.js sidebar` and
+`node check_sidebar.js linebot`, so a sidebar-only deploy that would break the
+LINE bot (an unresolved `Ledger.<fn>()` target or a failing `linebot_*`
+fixture) is blocked. Still run `node check_sidebar.js` with no argument before
+pushing, to catch it before CI does.
 
 **The linebot's secrets live in its own Script Properties**, never in the repo:
 `CHANNEL_ACCESS_TOKEN`, `OWNER_USER_ID` and `WEBHOOK_SECRET` (the `?k=` value on
