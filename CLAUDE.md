@@ -211,3 +211,29 @@ Data-change discipline:
 - Back up the affected tabs outside the repo first; the repo is public. Backups live in
   `~/Documents/transaction-bot-backups/`.
 - Afterwards, re-export and diff cell by cell against the pre-change export.
+
+## Bulk data migrations — how the owner reviews them
+
+Any bulk transformation of the sheet (an import, a remap, a cleanup) is reviewed by the
+owner on the ACTUAL rows, never on summary numbers, a sample, or "the rules are in the script".
+
+1. **Show the complete rule set first:** every column's derivation, every exclusion and the full
+   category table. Mark each judgment call with ⚠.
+2. **Review in small slices** (one month or one batch). Show the real values that will be written,
+   grouped as:
+   - **A** — confident; listed for a glance.
+   - **B** — doubtful; give the concern per row.
+   - **C** — several valid handlings; give the options and a recommendation.
+3. **Fold each answer into ONE canonical rules file** plus a durable state file outside the session.
+4. **Freeze each approved slice** (snapshot + hash). Anything already written to the live sheet is
+   final: never re-derive or re-check it unless the owner grants an explicit exception.
+5. **Offer to batch** once a few slices pass cleanly, but keep surfacing every medium- or
+   low-confidence item for a human decision.
+6. **Before the one final write,** run an independent reconciliation that accounts for every
+   source record. Then apply the "Data-change discipline" above.
+
+Why: in the Moze → Sheet import, a summary-only plan drew "if you don't list it I can't review
+it", a strategy table drew "I meant actual line items each month, grouped A/B/C", and re-checking
+already-written months drew "frozen ones don't need re-running". The format that worked reviewed
+6,099 records month by month, then in batches, with an independent reconciliation, and ended in
+one verified write of 4,069 rows.
