@@ -560,11 +560,15 @@ function run() {
   failedTextThenDelete.confirmDelete();
   const failedFirstAck = serverCopy(failedTextBase); failedFirstAck[0].merchant = '第一版';
   failedTextThenDelete.calls[0].success({ ok: true, txns: failedFirstAck });
+  // The owner opened another row's delete modal after confirming this one.
+  const otherOpenKey = failedTextThenDelete.textRowKey(failedTextBase[1].id);
+  failedTextThenDelete.openDelModal(otherOpenKey);
   failedTextThenDelete.calls[1].failure(new Error('write failed'));
   assert.strictEqual(failedTextThenDelete.deletes.length, 0,
     'a failed final text revision cancels delete instead of archiving stale text');
   assert.strictEqual(failedTextThenDelete.ROW_DELETE_INTENTS[failedTextKey], undefined);
-  assert.strictEqual(failedTextThenDelete.delBusy, false, 'the row remains available for a deliberate retry');
+  assert.strictEqual(failedTextThenDelete.pendingDelRowKey, otherOpenKey,
+    'cancelling the queued delete leaves the modal the owner opened since alone');
   assert.ok(failedTextThenDelete.textTxn(failedTextKey), 'the row is retained after the protected write fails');
 
   // Every asynchronous callback that can rebuild the transaction panel goes through repaint(),
@@ -656,8 +660,8 @@ function run() {
   addTextDeleteFailure.calls[0].failure(new Error('write failed'));
   assert.strictEqual(addTextDeleteFailure.deletes.length, 0,
     'a pending manual row is not deleted when its final text fails to persist');
-  assert.strictEqual(addTextDeleteFailure.ROW_DELETE_INTENTS[failingManualKey], undefined);
-  assert.strictEqual(addTextDeleteFailure.delBusy, false);
+  assert.strictEqual(addTextDeleteFailure.ROW_DELETE_INTENTS[failingManualKey], undefined,
+    'the row leaves its deleting state, so it is editable again');
   assert.ok(addTextDeleteFailure.textTxn(failingManualKey),
     'the acknowledged manual row remains visible so the owner can retry');
 
@@ -746,16 +750,16 @@ function run() {
   addDeleteFailure.pendingDelId = failedPending.id;
   addDeleteFailure.pendingDelRowKey = failedPendingKey;
   addDeleteFailure.confirmDelete();
-  assert.strictEqual(addDeleteFailure.delBusy, true, 'confirmed delete stays pending while add is unresolved');
+  assert.ok(addDeleteFailure.ROW_DELETE_INTENTS[failedPendingKey],
+    'confirmed delete stays pending (the row shows deleting) while add is unresolved');
   assert.strictEqual(addDeleteFailure.deletes.length, 0, 'temporary ids are never sent to deleteTxn');
-  assert.strictEqual(addDeleteFailureDom.getElementById('d-ok').disabled, true);
+  assert.strictEqual(addDeleteFailure.pendingDelId, null, 'the modal is closed at confirmation, not on the response');
+  assert.strictEqual(addDeleteFailure.pendingDelRowKey, null);
   addDeleteFailure.adds[0].failure(new Error('add failed'));
-  assert.strictEqual(addDeleteFailure.delBusy, false, 'add failure releases the global delete guard');
   assert.strictEqual(addDeleteFailure.ROW_DELETE_INTENTS[failedPendingKey], undefined,
     'add failure removes the stranded delete intent');
-  assert.strictEqual(addDeleteFailureDom.getElementById('d-ok').disabled, false,
-    'add failure re-enables the delete confirmation button');
-  assert.strictEqual(addDeleteFailure.pendingDelId, null);
+  assert.strictEqual(addDeleteFailure.deletes.length, 0, 'and still sends nothing for the temporary id');
+  assert.strictEqual(addDeleteFailure.pendingDelId, null, 'nothing re-arms the closed modal');
   assert.strictEqual(addDeleteFailure.pendingDelRowKey, null);
 
   // Enter/Escape belong to the IME while composition is active. keyCode 229 is the fallback
@@ -1259,7 +1263,8 @@ function run() {
   assert.strictEqual(del.deletes.length, 1, 'the delete is written');
   del.applyEdit(base[0].id, 'posted', true);
   del.deletes[0].success({ ok: true, txns: serverCopy(base) });   // the sheet before the tick
-  assert.strictEqual(del.TXNS.length, 2, 'a superseded delete response does not rebuild the list');
+  assert.strictEqual(del.TXNS.length, 1, 'a superseded delete response is not adopted, but the deleted row is removed locally');
+  assert.strictEqual(del.txnById(base[1].id), null, 'so it never reappears in a normal state before the refetch');
   assert.strictEqual(del.txnById(base[0].id).posted, true, 'and does not resurrect the pre-tick value');
   const afterTick = serverCopy([base[0]]);
   afterTick[0].posted = true;

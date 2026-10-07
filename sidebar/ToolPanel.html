@@ -203,6 +203,13 @@
   .erow:last-child { border-bottom: none; }
   .erow.done { opacity: .5; }
   .hdetail .erow.done { opacity: 1; }
+  /* A row whose delete is in flight stays on screen until deleteTxn settles: dimmed further than
+     a recorded row, struck through, inert, with 刪除中… where its 🗑 was. The context-qualified
+     selectors match .hdetail/.category-txn .erow.done, so a recorded row being deleted dims too. */
+  .erow.deleting, .hdetail .erow.deleting, .category-txn .erow.deleting, .txn-toggle.deleting { opacity: .4; }
+  .erow.deleting .merin, .erow.deleting .amt, .txn-toggle.deleting .m { text-decoration: line-through; }
+  .erow.deleting input, .erow.deleting select, .erow.deleting button { cursor: default; }
+  .txdeleting { font-size: 12px; color: var(--spend); white-space: nowrap; flex-shrink: 0; }
   .er1 { display: flex; align-items: baseline; gap: var(--sp2); }
   .er1 .mer { font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .er1 .merin { flex: 1; min-width: 0; font: inherit; font-weight: 600; color: inherit; background: none; border: 1px solid transparent; border-radius: 5px; padding: 2px 5px; margin: -2px 0 -2px -5px; }
@@ -840,7 +847,8 @@
     var isOpen=openCategoryTxn===t.id;
     // Reuse the compact transaction summary; mount the shared editor only on selection.
     var summary=txnRow(t,false).replace(/^<div/, '<span').replace(/<\/div>$/, '</span>');
-    return '<div class="category-txn"><button type="button" class="txn-toggle" data-category-txn="'+esc(t.id)+'" aria-expanded="'+isOpen+'">'+summary+'</button>'
+    var deleting=(typeof isRowDeleting==='function')&&isRowDeleting(t);
+    return '<div class="category-txn"><button type="button" class="txn-toggle'+(deleting?' deleting':'')+'" data-category-txn="'+esc(t.id)+'" aria-expanded="'+isOpen+'">'+summary+'</button>'
       +(isOpen?editRow(t):'')+'</div>';
   }
 
@@ -1613,9 +1621,19 @@
     var rowKey=(typeof ensureTextRowKey==='function')?ensureTextRowKey(t):String(t.id);
     return '<button class="txdel" data-del="'+esc(t.id)+'" data-trow="'+esc(rowKey)+'" title="刪除">🗑</button>';
   }
-  var pendingDelId=null, pendingDelRowKey=null, delBusy=false;
+  /**
+   * A row is "deleting" from confirmation until deleteTxn settles, including while the delete
+   * waits behind a write on the same row. The state is derived from the intent map at render
+   * time, keyed by the client row key, so it survives every repaint and list adoption without
+   * a second copy of the truth. Safe in the isolated render fixtures, which define neither.
+   */
+  function isRowDeleting(t){
+    if(!t||typeof ROW_DELETE_INTENTS==='undefined'||typeof ensureTextRowKey!=='function') return false;
+    return !!ROW_DELETE_INTENTS[ensureTextRowKey(t)];
+  }
+  var pendingDelId=null, pendingDelRowKey=null;
   function openDelModal(id){
-    var t=textTxn(id); if(!t) return;
+    var t=textTxn(id); if(!t||ROW_DELETE_INTENTS[ensureTextRowKey(t)]) return;
     pendingDelId=id; pendingDelRowKey=ensureTextRowKey(t);
     document.getElementById('d-mer').textContent=t.merchant||'(無說明)';
     document.getElementById('d-amt').textContent=(t.type==='收入'?'+':'')+'$'+fmt(t.amount);
@@ -1628,37 +1646,50 @@
     var ov=document.getElementById('delOverlay'); if(ov) ov.classList.remove('on');
   }
   function deleteTxnRow(id){ openDelModal(id); }
+  /**
+   * Confirming answers at once: the modal closes and the row repaints in its deleting state
+   * before anything is sent, so a delete queued behind a write looks exactly like one sent now.
+   * There is no page-global busy flag: the per-row intent already blocks a double send, and a
+   * second row's delete confirmed meanwhile must not be dropped.
+   */
   function confirmDelete(){
-    var rowKey=pendingDelRowKey; if(!rowKey || delBusy) return;
-    pendingDelId=null; pendingDelRowKey=null;
-    delBusy=true;
-    var ok=document.getElementById('d-ok'); if(ok) ok.disabled=true;
-    ROW_DELETE_INTENTS[rowKey]={sent:false,button:ok};
+    var rowKey=pendingDelRowKey; if(!rowKey) return;
+    closeDelModal();
+    if(ROW_DELETE_INTENTS[rowKey]) return;
+    ROW_DELETE_INTENTS[rowKey]={sent:false};
+    repaint();
     trySendDelete(rowKey);
   }
+  /** A write ahead of a queued delete failed: the row returns to normal. The delete modal is not
+   *  touched; by now it may belong to another row the owner opened since. */
   function cancelDeleteIntent(rowKey){
     rowKey=textRowKey(rowKey);
-    var intent=ROW_DELETE_INTENTS[rowKey]; delete ROW_DELETE_INTENTS[rowKey];
-    delBusy=false; if(intent&&intent.button) intent.button.disabled=false; closeDelModal();
+    if(!ROW_DELETE_INTENTS[rowKey]) return;
+    delete ROW_DELETE_INTENTS[rowKey];
+    repaint();
   }
   function trySendDelete(rowKey){
     rowKey=textRowKey(rowKey);
     var intent=ROW_DELETE_INTENTS[rowKey]; if(!intent||intent.sent) return;
     var t=textTxn(rowKey);
-    if(!t||t._pendingAdd||ROW_ACTIVE_WRITES[rowKey]||ROW_COMMIT_INTENTS[rowKey]) return;
+    // The row left the list before its delete was sent: nothing to delete, nothing on screen.
+    if(!t){ delete ROW_DELETE_INTENTS[rowKey]; return; }
+    if(t._pendingAdd||ROW_ACTIVE_WRITES[rowKey]||ROW_COMMIT_INTENTS[rowKey]) return;
     intent.sent=true; var serverId=resolveTextRowId(rowKey);
     var delSeq=nextMutation();
     google.script.run
       .withSuccessHandler(function(res){
-        delBusy=false;
         delete ROW_DELETE_INTENTS[rowKey]; TEXT_REMOVED_ROW_KEYS[rowKey]=true;
         settle(delSeq, res && res.txns, res && res.olderFp);
-        closeDelModal(); repaint(); toast('已刪除');
+        // settle drops a response a later mutation superseded and books a refetch; until that
+        // lands the row would still be in TXNS with no intent, i.e. back to normal on screen.
+        TXNS=TXNS.filter(function(x){ return x._textKey!==rowKey; });
+        repaint(); toast('已刪除');
       })
       .withFailureHandler(function(err){
-        delBusy=false; delete ROW_DELETE_INTENTS[rowKey]; if(intent.button) intent.button.disabled=false;
+        delete ROW_DELETE_INTENTS[rowKey];
         settle(delSeq, null);
-        var current=textTxn(rowKey); pendingDelId=current?current.id:null; pendingDelRowKey=current?rowKey:null;
+        repaint();
         toast('刪除失敗:'+((err&&err.message)||err), true);
       })
       .deleteTxn({ id: serverId });
@@ -2037,15 +2068,15 @@
    * reverse happens too and then my consumption exceeds my own charge. Over-the-charge gets
    * a note, not a rejection.
    */
-  function splitBox(t){
+  function splitBox(t, inert){
     var chg=chargedOf(t);
-    var rowKey=ensureTextRowKey(t);
+    var rowKey=ensureTextRowKey(t), dis=inert?' disabled':'';
     return '<div class="split">'
       +'<span class="slb">這筆有多少是我自己的？</span>'
-      +'<input class="sin num" type="number" inputmode="decimal" min="0" step="1" value="'+(isSplitTxn(t)?t.mine:'')+'" placeholder="'+fmt(chg)+'" data-sin="'+esc(t.id)+'" data-trow="'+esc(rowKey)+'" aria-label="這筆有多少是我自己的">'
+      +'<input class="sin num" type="number" inputmode="decimal" min="0" step="1" value="'+(isSplitTxn(t)?t.mine:'')+'" placeholder="'+fmt(chg)+'" data-sin="'+esc(t.id)+'" data-trow="'+esc(rowKey)+'" aria-label="這筆有多少是我自己的"'+dis+'>'
       +'<span class="shint num">刷卡 '+fmt(chg)+'</span>'
-      +'<button type="button" class="sbtn ok" data-sok="'+esc(t.id)+'" data-trow="'+esc(rowKey)+'">確定</button>'
-      +'<button type="button" class="sbtn" data-scancel="1">取消</button>'
+      +'<button type="button" class="sbtn ok" data-sok="'+esc(t.id)+'" data-trow="'+esc(rowKey)+'"'+dis+'>確定</button>'
+      +'<button type="button" class="sbtn" data-scancel="1"'+dis+'>取消</button>'
       +'<span class="snote" data-snote="'+esc(t.id)+'" hidden></span>'
       +'</div>';
   }
@@ -2121,10 +2152,15 @@
       return d?d.value:(t[field]||'');
     }
     var tc=typeColor(t.type);
+    // While its delete is in flight the row stays visible but inert: every control renders
+    // disabled, the split affordance is plain text and 刪除中… stands where the 🗑 was.
+    var deleting=(typeof isRowDeleting==='function')&&isRowDeleting(t), dis=deleting?' disabled':'';
     var compactAmount=(t.type==='轉帳')
       ? '<span class="amt num" style="color:'+tc+'">$'+fmt(t.amount)+'</span>'
-      : '<button type="button" class="amt amtbtn num" data-amt="'+esc(textRow)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button>';
-    return '<div class="erow'+(t.posted?' done':'')+'" data-erow="'+esc(t.id)+'">'
+      : deleting
+        ? '<span class="amt num" style="color:'+tc+'">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</span>'
+        : '<button type="button" class="amt amtbtn num" data-amt="'+esc(textRow)+'" style="color:'+tc+'" title="點金額拆分代墊">'+(t.type==='收入'?'+':'')+'$'+fmt(t.amount)+splitMark(t)+'</button>';
+    return '<div class="erow'+(t.posted?' done':'')+(deleting?' deleting':'')+'" data-erow="'+esc(t.id)+'"'+(deleting?' aria-busy="true"':'')+'>'
       // The expense amount IS the split control. ~5 of ~100 rows a month are split, so a permanent
       // input would ask a question whose answer is "no" 95% of the time; an unsplit row must
       // stay exactly as it was. Transfers keep the visible amount but not this expense-only
@@ -2133,13 +2169,14 @@
       // a day that holds more than one. Rendered only when the row actually has a time, so the
       // pre-June rows look exactly as they do today. Shown to the minute: 富邦 gives seconds and
       // 國泰 does not, so seconds would advertise a precision most timed rows do not have.
-      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" value="'+esc(currentText('merchant'))+'" placeholder="(無說明)" spellcheck="false">'+mailLink(t)+compactAmount+'</div>'
-      +(t.type==='支出' && openSplit===textRow ? splitBox(t) : '')
+      +'<div class="er1"><span class="badge">'+esc(t.bank)+' •'+esc(t.last4)+'</span>'+(t.hm?'<span class="ehm num">· '+esc(t.hm)+'</span>':'')+'<input class="merin" data-emer="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" value="'+esc(currentText('merchant'))+'" placeholder="(無說明)" spellcheck="false"'+dis+'>'+mailLink(t)+compactAmount+'</div>'
+      +(t.type==='支出' && openSplit===textRow ? splitBox(t, deleting) : '')
       +'<div class="er2">'
-        +(canCorrectAmount(t)?'<div class="fld"><span class="lb">金額</span><input class="amtcor num" type="number" inputmode="decimal" min="0.01" step="0.01" data-ef="amount" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" value="'+esc(t.amount)+'" aria-label="金額"></div>':'')
-        +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'">'+selOpts(distinctCats(),t.cat)+'</select></div>'
-        +'<div class="fld"><span class="lb">收支</span><select data-ef="type" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" style="color:'+tc+'">'+selOpts(['支出','收入','轉帳'],t.type)+'</select></div>'
-        +'<button class="erec" data-erec="'+esc(t.id)+'" data-trow="'+esc(textRow)+'">'+(t.posted?'↩ 取消記帳':'✓ 記帳')+'</button>'+delBtn(t)
+        +(canCorrectAmount(t)?'<div class="fld"><span class="lb">金額</span><input class="amtcor num" type="number" inputmode="decimal" min="0.01" step="0.01" data-ef="amount" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" value="'+esc(t.amount)+'" aria-label="金額"'+dis+'></div>':'')
+        +'<div class="fld"><span class="lb">類別</span><select data-ef="cat" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'"'+dis+'>'+selOpts(distinctCats(),t.cat)+'</select></div>'
+        +'<div class="fld"><span class="lb">收支</span><select data-ef="type" data-id="'+esc(t.id)+'" data-trow="'+esc(textRow)+'" style="color:'+tc+'"'+dis+'>'+selOpts(['支出','收入','轉帳'],t.type)+'</select></div>'
+        +'<button class="erec" data-erec="'+esc(t.id)+'" data-trow="'+esc(textRow)+'"'+dis+'>'+(t.posted?'↩ 取消記帳':'✓ 記帳')+'</button>'
+        +(deleting?'<span class="txdeleting" role="status">刪除中…</span>':delBtn(t))
       +'</div></div>';
   }
   /**
@@ -2195,7 +2232,10 @@
   // Mark a whole day recorded. Writes are sequential, not parallel: Apps Script serializes
   // sheet writes anyway, and one at a time means a mid-way failure reverts exactly one row.
   function bulkPost(ids){
-    var todo = ids.map(function(id){ var t=txnById(id); return t&&!t.posted?ensureTextRowKey(t):null; }).filter(Boolean);
+    // A row being deleted is left out before the optimistic tick, not only at send time: ticking
+    // it would flash 已記帳 on a row that is about to disappear.
+    var todo = ids.map(function(id){ var t=txnById(id); if(!t||t.posted) return null;
+      var rowKey=ensureTextRowKey(t); return ROW_DELETE_INTENTS[rowKey]?null:rowKey; }).filter(Boolean);
     if(!todo.length) return;
     todo.forEach(function(rowKey){ var t=textTxn(rowKey); t.posted=true; });
     render();
