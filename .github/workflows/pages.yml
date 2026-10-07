@@ -1,0 +1,38 @@
+name: Publish site
+
+# Publishes ONLY the site/ folder (the home page and the privacy policy that the
+# OAuth consent screen links to) to GitHub Pages. The rest of the repo, including
+# docs/ and README, is never part of the Pages artifact.
+# Independent of the deploy-dashboard / deploy-linebot workflows: no shared
+# paths, no shared concurrency group.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy</title>
+<style>
+:root { --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --link: #0969da; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --link: #4493f8; }
+}
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 42rem; margin: 0 auto; padding: 2rem 16px 3rem; }
+h1 { font-size: 1.6rem; line-height: 1.3; }
+h2 { font-size: 1.15rem; margin-top: 1.8rem; }
+a { color: var(--link); }
+.muted { color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>Card Dashboard privacy policy</h1>
+<p class="muted">Last updated: 2026-10-07</p>
+
+<h2>Who uses this app</h2>
+<p>Card Dashboard is a personal tool with a single user. Its owner built it, operates it and is the
+only person who uses it. It is not offered to the public, and nobody else's account is connected to it.</p>
+
+<h2>Google data it reads</h2>
+<p>With the owner's authorization, the app reads the card-notification emails that the owner's banks
+send to the owner's Gmail account. It extracts the date, amount, merchant and card number suffix of each
+transaction. It does not read any other email content for any other purpose.</p>
+
+<h2>Google data it writes</h2>
+<p>The app writes the extracted transactions to a Google Sheet that the owner owns, and reads that Sheet
+back to show the owner's dashboard. It writes to no other Google file or service.</p>
+
+<h2>LINE messages</h2>
+<p>The app runs a LINE bot that accepts messages from the owner only. Messages from any other LINE user
+are ignored and not stored. The owner's messages are used to add or undo entries in the owner's Sheet.</p>
+
+<h2>Gemini API</h2>
+<p>To parse a free-text entry and to suggest a category for a transaction, the app sends the relevant
+text (for example a merchant name or a short message from the owner) to Google's Gemini API.</p>
+
+<h2>Sharing</h2>
+<p>No data is sold, and no data is shared with third parties. Data leaves the owner's Google account only
+in the requests that the features above require: to the Gemini API for parsing and classification, and
+to LINE to reply to the owner's own messages.</p>
+
+<h2>Storage and deletion</h2>
+<p>All records stay in the owner's own Google Sheet and Google account. The owner can delete them at any
+time, and can revoke the app's access from the Google account's security settings.</p>
+
+<h2>Contact</h2>
+<p><a href="mailto:charlie60507@gmail.com">charlie60507@gmail.com</a></p>
+
+<p><a href="../">Home</a></p>
+</main>
+</body>
+</html>

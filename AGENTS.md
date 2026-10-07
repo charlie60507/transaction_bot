@@ -214,3 +214,41 @@ Still true, and load-bearing:
 
 - Changing the deploy trigger, the gate, or the pinned deployment id is a
   policy change — ask first.
+
+## OAuth consent screen / re-authorization
+
+Both Apps Script projects (the `sidebar/` dashboard and `Linebot-response`) run on the
+standard GCP project `cards-dashboard` (number `97308132517`), so they share its OAuth
+consent screen ("Card Dashboard", External).
+
+**Why authorizations expired.** While that consent screen is in **Testing**, Google issues
+7-day refresh tokens to apps that request more than basic profile scopes, and both projects
+request Sheets, Gmail and external_request. On 2026-10-05 every execution in both projects
+started failing with "Authorization is required" / "no permission to call
+SpreadsheetApp.openById": the hourly Gmail import, the dashboard and the LINE bot were down
+for about a day and nothing alerted.
+
+**The fix is to publish the app (In production).** A personal-use app with fewer than 100
+users is exempt from verification; it only shows an "unverified app" warning once. The
+Branding page needs a home page and a privacy policy, which are published from `site/` by
+`.github/workflows/pages.yml` (GitHub Pages, Actions source; only `site/` is published):
+- home: `https://charlie60507.github.io/transaction_bot/`
+- privacy: `https://charlie60507.github.io/transaction_bot/privacy/`
+- authorized domain: `charlie60507.github.io`
+
+**How to re-authorize** (after publishing, or whenever the alert below fires): open each
+Apps Script editor (the dashboard project from `sidebar/.clasp.json`, and `Linebot-response`
+from `linebot/.clasp.json`), run any function, then on the warning choose Advanced →
+continue and accept the scopes. Then confirm the next hourly import logs `Done.` and a LINE
+test message is recorded.
+
+**Alert.** Cloud Monitoring in `cards-dashboard` emails the owner when an
+`app_script_function` log entry matches an authorization failure ("Authorization is
+required", "権限がありません", "沒有呼叫", "do not have permission"; in `jsonPayload.message`
+or `textPayload`, any severity, since "Authorization is required" logs at NOTICE):
+- alert policy "Apps Script authorization failure":
+  `projects/cards-dashboard/alertPolicies/13372403042432458853`
+  (log-match condition, at most one notification per 6 hours, auto-close after 1 day);
+- notification channel "Owner email (charlie60507@gmail.com)":
+  `projects/cards-dashboard/notificationChannels/8209743243183673993`.
+Manage both with `--account=charlie60507@gmail.com --project=cards-dashboard`.
