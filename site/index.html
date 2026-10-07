@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Card Dashboard</title>
+<style>
+:root { --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --link: #0969da; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --link: #4493f8; }
+}
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 42rem; margin: 0 auto; padding: 2rem 16px 3rem; }
+h1 { font-size: 1.6rem; line-height: 1.3; }
+h2 { font-size: 1.15rem; margin-top: 1.8rem; }
+a { color: var(--link); }
+.muted { color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>Card Dashboard</h1>
+<p>Card Dashboard is a personal tool that one person, its owner, built and runs for their own use.
+It keeps track of the owner's credit-card spending.</p>
+<ul>
+  <li>It reads the card-notification emails that the owner's banks send to the owner's Gmail account.</li>
+  <li>It records each transaction in a Google Sheet that the owner owns, and suggests a category for it.</li>
+  <li>It shows the records on a web dashboard and accepts entries that the owner sends through a private LINE bot.</li>
+</ul>
+<p>It runs as Google Apps Script projects under the owner's own Google account. It is not offered to
+anyone else, and other people cannot sign up for it.</p>
+<p><a href="privacy/">Privacy policy</a></p>
+<p class="muted">Contact: <a href="mailto:charlie60507@gmail.com">charlie60507@gmail.com</a></p>
+</main>
+</body>
+</html>

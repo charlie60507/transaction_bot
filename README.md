@@ -65,6 +65,17 @@ In the Apps Script UI, add a time-based trigger (e.g., hourly) for `appendLast7D
 - Keep `.env` out of version control (already ignored).
 - Logs are in English; data values remain as-is (Chinese headers) to match the sheet schema.
 
+### Re-authorizing the Apps Script projects
+Both projects share the OAuth consent screen of the GCP project `cards-dashboard`. While that
+screen is in Testing, Google expires the authorization after 7 days and every run fails with
+"Authorization is required"; publishing the app (In production) stops that. Its home page and
+privacy policy are published from `site/` to https://charlie60507.github.io/transaction_bot/.
+A Cloud Monitoring alert emails the owner when an authorization failure is logged.
+
+To re-authorize, open each Apps Script editor (the dashboard project from `sidebar/.clasp.json`
+and `Linebot-response` from `linebot/.clasp.json`), run any function, then choose
+Advanced → continue on the warning and accept the scopes.
+
 ### LINE bot (`linebot/`)
 Records a transaction from one free-text LINE message sent to the owner's bot. Every sheet
 read and write goes through the dashboard project, included as the library `Ledger` with
