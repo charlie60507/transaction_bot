@@ -157,6 +157,24 @@ Still true, and load-bearing:
 - Changing the deploy trigger, the gate, or the pinned deployment id is a
   policy change — ask first.
 
+### Reading server logs
+
+The dashboard script is linked to the standard GCP project `cards-dashboard`,
+so its `console.*` output lands in Cloud Logging, and
+`sidebar/.clasp.json` carries `"projectId": "cards-dashboard"` for it:
+
+    cd sidebar && clasp logs --simplified          # newest entries
+    gcloud logging read 'resource.type="app_script_function"' \
+      --project cards-dashboard --account=charlie60507@gmail.com --freshness 1d
+
+Both work with the existing credentials (the clasp token carries `logging.read`).
+Only `console.*` output is there: Apps Script does not log per-execution
+duration to Cloud Logging. Durations come from `processes.list` in the Apps Script
+API, which needs the `script.processes` scope that the clasp token does NOT have.
+To time a server function, log it yourself with a greppable tag
+(`console.log('[timing] deleteTxn find=' + ms)`), deploy, reproduce, read the
+tag, then remove it.
+
 ## OAuth consent screen / re-authorization
 
 Both Apps Script projects (the `sidebar/` dashboard and `Linebot-response`) run on the
