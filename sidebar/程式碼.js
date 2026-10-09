@@ -14,6 +14,16 @@ const CFG = {
   // (accounts), so writers touch only column-D cells and find the end of D by scanning D.
   META_CATEGORY_COL: 4,
   META_CATEGORY_HEADER: '種類清單',
+  // H / I: the project categories and each one's start month (YYYY-MM), one per row. A category
+  // listed in H is a project (專案); every other category is daily (日常). Missing headers mean
+  // no projects. J: the daily baseline choice — J2 'median' or 'budget', J3 the monthly budget.
+  // Like D and G these columns share their rows with A:B, so writers touch only their own cells.
+  META_PROJECT_COL: 8,
+  META_PROJECT_HEADER: '專案類別',
+  META_PROJECT_START_COL: 9,
+  META_PROJECT_START_HEADER: '專案起始月',
+  META_BASELINE_COL: 10,
+  META_BASELINE_HEADER: '日常比較對象',
   TZ: 'Asia/Taipei',
 
   // Transactions column indices (0-based)
@@ -655,14 +665,22 @@ function getDashboardData(opts) {
     const sh = ss.getSheetByName(CFG.DATA_SHEET);
     const read = sh ? readTxnsForLoad_(sh) : null;
     const months = opts ? Number(opts.sinceMonths) : NaN;
+    // The project categories and the baseline choice (META H:J) ride in the same payload, read
+    // from the same handle, before `categories`. Offline fixtures that lift this function without
+    // the reader get the no-settings answer, as a sheet without the headers does.
+    const settings = (typeof readMetaSettings_ === 'function')
+      ? readMetaSettings_(ss)
+      : { projects: [], baseline: { mode: 'median', amount: null } };
     if (!(months >= 1) || Math.floor(months) !== months) {
       const snap = (read && read.rows.length)
         ? snapshotOfRows_(read.rows, read.mineIdx, read.rowIdIdx, new Date())
         : { txns: [], olderFp: null };
       // `categories` stays the LAST key: the load-parity test strips it and compares the rest.
-      return JSON.stringify({ txns: snap.txns, olderFp: snap.olderFp, accounts: getAccountSources_(ss), categories: getCategories_(ss) });
+      return JSON.stringify({ txns: snap.txns, olderFp: snap.olderFp, accounts: getAccountSources_(ss),
+        projects: settings.projects, baseline: settings.baseline, categories: getCategories_(ss) });
     }
-    return JSON.stringify(Object.assign(recentSnapshot_(read, months, new Date()), { accounts: getAccountSources_(ss), categories: getCategories_(ss) }));
+    return JSON.stringify(Object.assign(recentSnapshot_(read, months, new Date()), { accounts: getAccountSources_(ss),
+      projects: settings.projects, baseline: settings.baseline, categories: getCategories_(ss) }));
   } finally {
     lock.releaseLock();
   }
@@ -964,6 +982,162 @@ function setCategoryOrder(list) {
     }
     SpreadsheetApp.flush();
     return getCategories_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// =======================================================================
+//   Daily vs project categories (META H:J)
+// =======================================================================
+
+/** A start month as 'YYYY-MM', or '' when the cell holds anything else. Sheets may have turned a
+ *  typed 2026-01 into a date, so a Date cell is read back as its CFG.TZ month. */
+function projectMonthText_(v) {
+  if (Object.prototype.toString.call(v) === '[object Date]') {
+    if (isNaN(v.getTime()) || typeof Utilities === 'undefined') return '';
+    v = Utilities.formatDate(v, CFG.TZ, 'yyyy-MM');
+  }
+  const s = String(v == null ? '' : v).trim();
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(s) ? s : '';
+}
+
+/** The settings readMetaSettings_ returns for a sheet without them: no projects, median baseline. */
+function defaultMetaSettings_() {
+  return { projects: [], baseline: { mode: 'median', amount: null } };
+}
+
+/** The project categories and the daily baseline choice, from ONE read of META H:J.
+ *  `projects`: [{ name, start: 'YYYY-MM' }] in row order; [] when META, the sheet width or either
+ *  of the H / I headers is missing. Blank names, rows with an invalid month and case-insensitive
+ *  duplicates are skipped. `baseline`: { mode: 'median' | 'budget', amount }; median unless J1 is
+ *  the header, J2 says budget and J3 holds a positive whole amount. `amount` is the stored budget
+ *  (or null) whatever the mode, so switching back to a budget restores it. */
+function readMetaSettings_(ss) {
+  const out = defaultMetaSettings_();
+  const sh = (ss || getSpreadsheet_()).getSheetByName(CFG.META_SHEET);
+  if (!sh) return out;
+  const width = Math.min(sh.getLastColumn(), CFG.META_BASELINE_COL) - CFG.META_PROJECT_COL + 1;
+  const last = sh.getLastRow();
+  if (width < 1 || last < 1) return out;
+  const block = sh.getRange(1, CFG.META_PROJECT_COL, last, width).getValues();
+  const cell = (r, c) => (block[r] && c < width && block[r][c] != null) ? block[r][c] : '';
+
+  if (String(cell(0, 0)).trim() === CFG.META_PROJECT_HEADER &&
+      String(cell(0, 1)).trim() === CFG.META_PROJECT_START_HEADER) {
+    const seen = {};
+    for (let r = 1; r < block.length; r++) {
+      const name = String(cell(r, 0)).trim();
+      const start = projectMonthText_(cell(r, 1));
+      const key = name.toLocaleLowerCase();
+      if (!name || !start || seen[key]) continue;
+      seen[key] = true;
+      out.projects.push({ name: name, start: start });
+    }
+  }
+
+  const b = CFG.META_BASELINE_COL - CFG.META_PROJECT_COL;
+  if (String(cell(0, b)).trim() === CFG.META_BASELINE_HEADER) {
+    const amount = Number(cell(2, b));
+    const valid = amount > 0 && Math.floor(amount) === amount;
+    out.baseline.amount = valid ? amount : null;
+    if (String(cell(1, b)).trim() === 'budget' && valid) out.baseline.mode = 'budget';
+  }
+  return out;
+}
+
+function getProjects_(ss) { return readMetaSettings_(ss).projects; }
+function getBaselineSetting_(ss) { return readMetaSettings_(ss).baseline; }
+
+/** Grow META to at least `col` columns, so a write to H / I / J never lands past its width. */
+function ensureMetaWidth_(sh, col) {
+  const max = sh.getMaxColumns();
+  if (max < col) sh.insertColumnsAfter(max, col - max);
+}
+
+/** Header `header` in row 1 of column `col`: written when the cell is blank; a cell holding
+ *  anything else throws, so a writer never takes over a column the owner uses for something else. */
+function claimMetaHeader_(sh, col, header, letter) {
+  const current = String(sh.getRange(1, col).getValue() || '').trim();
+  if (current && current !== header) throw new Error('META!' + letter + ' 已有其他設定，無法建立' + header);
+  if (!current) sh.getRange(1, col).setValue(header);
+}
+
+/** Make `name` a project starting `start` ('YYYY-MM'), move an existing project's start month, or
+ *  (start null / '') make it daily again. `name` must be in 種類清單 (getCategories_), and is stored
+ *  in its spelling there. Writes only H / I cells: an existing row is updated in place, a new
+ *  project goes after the last non-blank H cell (found by scanning H, not getLastRow, which is the
+ *  end of A:B), and a project turned daily has its H and I cells blanked. Returns the
+ *  authoritative project list. */
+function setCategoryProject(name, start) {
+  name = String(name == null ? '' : name).trim();
+  const month = (start == null || start === '') ? '' : projectMonthText_(start);
+  if (!name) throw new Error('請選擇類別');
+  if (start != null && start !== '' && !month) throw new Error('起始月格式需為 YYYY-MM');
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15 * 1000);
+  try {
+    const ss = getSpreadsheet_();
+    const sh = ss.getSheetByName(CFG.META_SHEET);
+    if (!sh) throw new Error('找不到 META 工作表');
+    const known = getCategories_(ss).filter(function (c) { return c.toLocaleLowerCase() === name.toLocaleLowerCase(); })[0];
+    if (!known) throw new Error('種類清單沒有「' + name + '」');
+
+    ensureMetaWidth_(sh, CFG.META_PROJECT_START_COL);
+    claimMetaHeader_(sh, CFG.META_PROJECT_COL, CFG.META_PROJECT_HEADER, 'H');
+    claimMetaHeader_(sh, CFG.META_PROJECT_START_COL, CFG.META_PROJECT_START_HEADER, 'I');
+
+    const last = Math.max(sh.getLastRow(), 1);
+    const values = last > 1 ? sh.getRange(2, CFG.META_PROJECT_COL, last - 1, 1).getValues() : [];
+    let row = 0;
+    let lastRow = 1;
+    for (let i = 0; i < values.length; i++) {
+      const current = String(values[i][0] || '').trim();
+      if (current) lastRow = i + 2;
+      if (!row && current && current.toLocaleLowerCase() === known.toLocaleLowerCase()) row = i + 2;
+    }
+
+    if (month) {
+      if (!row) {
+        row = lastRow + 1;
+        sh.getRange(row, CFG.META_PROJECT_COL).setValue(known);
+      }
+      // Plain text, or Sheets turns 2026-01 into a date.
+      sh.getRange(row, CFG.META_PROJECT_START_COL).setNumberFormat('@').setValue(month);
+    } else if (row) {
+      sh.getRange(row, CFG.META_PROJECT_COL, 1, 2).setValues([['', '']]);
+    }
+    SpreadsheetApp.flush();
+    return getProjects_(ss);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Store the daily baseline choice in META J: J2 'median' or 'budget', J3 the monthly budget. A
+ *  budget needs a positive whole amount; the median keeps whatever budget is stored (or stores
+ *  `amount` when one is given), so switching back restores it. Returns the stored setting. */
+function setDailyBaseline(mode, amount) {
+  mode = String(mode || '').trim();
+  if (mode !== 'median' && mode !== 'budget') throw new Error('比較對象只能是中位數或自訂預算');
+  const hasAmount = !(amount == null || amount === '');
+  const n = Number(amount);
+  if (hasAmount && !(n > 0 && Math.floor(n) === n && n <= 1e9)) throw new Error('預算需為正整數');
+  if (mode === 'budget' && !hasAmount) throw new Error('請輸入每月預算');
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15 * 1000);
+  try {
+    const ss = getSpreadsheet_();
+    const sh = ss.getSheetByName(CFG.META_SHEET);
+    if (!sh) throw new Error('找不到 META 工作表');
+    ensureMetaWidth_(sh, CFG.META_BASELINE_COL);
+    claimMetaHeader_(sh, CFG.META_BASELINE_COL, CFG.META_BASELINE_HEADER, 'J');
+    sh.getRange(2, CFG.META_BASELINE_COL).setValue(mode);
+    if (hasAmount) sh.getRange(3, CFG.META_BASELINE_COL).setValue(n);
+    SpreadsheetApp.flush();
+    return getBaselineSetting_(ss);
   } finally {
     lock.releaseLock();
   }

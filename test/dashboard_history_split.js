@@ -105,7 +105,7 @@ function testServerSplit() {
     assert.ok(full.some(t => ymKey(t) < BEFORE_KEY) && full.some(t => ymKey(t) >= BEFORE_KEY), order + ': precondition, rows on both sides');
 
     const recent = parsed(server.getDashboardData({ sinceMonths: 13 }));
-    assert.deepStrictEqual(Object.keys(recent).sort(), ['accounts', 'before', 'categories', 'complete', 'loadedFp', 'txns'],
+    assert.deepStrictEqual(Object.keys(recent).sort(), ['accounts', 'baseline', 'before', 'categories', 'complete', 'loadedFp', 'projects', 'txns'],
       order + ': the partial shape, with no older-rows fingerprint for edits to send');
     assert.strictEqual(recent.complete, false, order + ': marked incomplete');
     assert.deepStrictEqual(recent.before, BEFORE, order + ': before = the first loaded month, twelve months back in CFG.TZ');
@@ -138,7 +138,7 @@ function testServerSplit() {
     [undefined, {}, { sinceMonths: 0 }, { sinceMonths: 'x' }, { sinceMonths: 2.5 }].forEach(opts => {
       assert.deepStrictEqual(parsed(server.getDashboardData(opts)), whole, order + ': opts ' + JSON.stringify(opts) + ' behave exactly as before');
     });
-    assert.deepStrictEqual(Object.keys(whole).sort(), ['accounts', 'categories', 'olderFp', 'txns'], order + ': the whole-list shape is unchanged');
+    assert.deepStrictEqual(Object.keys(whole).sort(), ['accounts', 'baseline', 'categories', 'olderFp', 'projects', 'txns'], order + ': the whole-list shape is unchanged');
     assert.deepStrictEqual(whole.txns, full, order + ': and so is its list');
 
     // A page whose recent rows no longer match the sheet gets the whole list instead.
