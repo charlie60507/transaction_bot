@@ -280,6 +280,23 @@ function testClient() {
   assert.ok(handles().every(h => !/ disabled/.test(h)), '(5) handles are enabled at rest');
   assert.ok(!/上移|下移|data-cat-move/.test(el.innerHTML), '(5) no ↑/↓ buttons remain');
 
+  // With the icon helpers present each row gains a decorative tile between the handle and the
+  // name. The handle stays the row's only focusable control.
+  const iconEl = { innerHTML: '' };
+  const iconUi = loadFns(['settingsCategories', 'renderSettingsCategories', 'catIcon', 'catTile'], {
+    CATEGORY_LIST: ['飲食', '交通'], CATEGORY_SHOWN: null, CATEGORY_SAVE_PENDING: false,
+    IC: { q: '<circle/>' }, CATEGORY_ICON: {},
+    esc: s => String(s),
+    document: { getElementById: id => id === 'settings-category-list' ? iconEl : null }
+  });
+  iconUi.renderSettingsCategories();
+  ['飲食', '交通'].forEach((name, i) => {
+    assert.ok(new RegExp('<button type="button" class="settings-handle" data-cat-idx="' + i + '" aria-label="拖曳排序 ' + name + '，或按上下鍵移動">[\\s\\S]*?</button><span class="ctile s30 neutral" aria-hidden="true">[\\s\\S]*?</span><span class="settings-name">' + name + '</span>').test(iconEl.innerHTML),
+      '(5) ' + name + ': the handle keeps its markup and the tile sits before the name');
+  });
+  assert.strictEqual((iconEl.innerHTML.match(/<button /g) || []).length, 2, '(5) the tile adds no focusable control');
+  assert.ok(!/tabindex/.test(iconEl.innerHTML), '(5) the tile is not focusable');
+
   ui.saveCategoryOrder(['交通', '飲食', '娛樂']);
   assert.deepStrictEqual(sent, ['交通', '飲食', '娛樂'], '(5) the full reordered list is sent');
   assert.ok(el.innerHTML.indexOf('交通') < el.innerHTML.indexOf('飲食'), '(5) the new order is drawn at once');
