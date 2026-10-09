@@ -256,9 +256,234 @@ function testPayload() {
   assert.ok(/readMetaSettings_\(ss\)/.test(fn), '(3) read from the handle the load already opened');
 }
 
+// ---------------------------------------------------------------- client page
+/** The whole inline script of ToolPanel.html against a stub document, as dashboard_history_split
+ *  does; google.script.run calls are recorded for the test to answer. */
+function page(now) {
+  const html = fs.readFileSync(PANEL, 'utf8');
+  const script = extractInlineScript(html)
+    .replace('<?= now.year ?>', String(now.year)).replace('<?= now.month ?>', String(now.month))
+    .replace('<?= now.day ?>', String(now.day)).replace('<?= sheetUrl ?>', 'https://example.invalid/sheet');
+  const nodes = {};
+  function node() {
+    return { innerHTML: '', value: '', textContent: '', disabled: false, classList: { add() {}, remove() {}, contains: () => false },
+      querySelectorAll: () => [], querySelector: () => null, focus() {}, select() {}, setAttribute() {}, getAttribute: () => null };
+  }
+  const document = {
+    activeElement: null, querySelectorAll: () => [], querySelector: () => null, addEventListener() {},
+    getElementById(id) { return nodes[id] || (nodes[id] = node()); }
+  };
+  const calls = [];
+  let pending = {};
+  const run = new Proxy({}, {
+    get(_, name) {
+      if (name === 'withSuccessHandler') return f => { pending.success = f; return run; };
+      if (name === 'withFailureHandler') return f => { pending.failure = f; return run; };
+      return function () { calls.push({ fn: name, args: Array.from(arguments), success: pending.success, failure: pending.failure }); pending = {}; };
+    }
+  });
+  const sandbox = { console, document, window: { pageXOffset: 0, pageYOffset: 0, scrollTo() {} },
+    google: { script: { run } }, setTimeout: () => 0, clearTimeout() {} };
+  vm.createContext(sandbox);
+  vm.runInContext(script, sandbox);
+  sandbox.calls = calls;
+  sandbox.nodes = nodes;
+  return sandbox;
+}
+
+const NOW = { year: 2026, month: 10, day: 10 };
+const WAIT = '載入完整歷史中…';
+let seq = 0;
+function txn(y, m, d, cat, amount, extra) {
+  seq++;
+  return Object.assign({ id: 'syn-' + seq + '|x|' + amount + '|0000|0', rowId: 'row-' + seq, y, m, d, hm: '', type: '支出',
+    amount, charged: amount, mine: null, cat, merchant: '店' + seq, bank: '測試卡', last4: '0000', link: '', posted: true }, extra || {});
+}
+/** Synthetic rows. 飲食 is 1000 × (i+1) in month i from 2025-10 (so 2025-10..2026-08 is 1000..11000)
+ *  and 20000 in 2026-09; a daily subscription (家居, 300) and a project one (汽車, 5000) run
+ *  2026-05..2026-10; 房屋 and 旅遊 are projects; 2026-09 also has a refund and a 代墊 split. */
+function rows() {
+  seq = 0;
+  const out = [];
+  for (let i = 0; i < 11; i++) {
+    const t = new Date(2025, 9 + i, 1);
+    out.push(txn(t.getFullYear(), t.getMonth() + 1, 5, '飲食', 1000 * (i + 1)));
+  }
+  out.push(txn(2025, 9, 5, '飲食', 99999));                    // before BASE_FLOOR: never in a window
+  out.push(txn(2026, 9, 5, '飲食', 20000));
+  out.push(txn(2026, 9, 6, '購物', 300, { charged: 1000, mine: 300 }));   // 代墊 700
+  out.push(txn(2026, 9, 7, '退款', 500, { type: '收入' }));
+  out.push(txn(2026, 9, 8, '薪資', 60000, { type: '收入' }));
+  for (let m = 5; m <= 10; m++) {
+    out.push(txn(2026, m, 1, '家居', 300, { merchant: 'DailySub' }));
+    out.push(txn(2026, m, 2, '汽車', 5000, { merchant: 'CarLoan' }));
+  }
+  out.push(txn(2026, 10, 3, '飲食', 2000));
+  out.push(txn(2026, 1, 9, '房屋', 30000));
+  out.push(txn(2026, 9, 9, '房屋', 50000));
+  out.push(txn(2025, 9, 9, '旅遊', 7000));
+  out.push(txn(2026, 3, 9, '旅遊', 50000));
+  out.push(txn(2026, 9, 10, '旅遊', 3000));
+  return out;
+}
+const PROJ = [{ name: '房屋', start: '2026-01' }, { name: '汽車', start: '2026-06' }, { name: '旅遊', start: '2025-09' }];
+
+/** A page booted with `rows` and META settings; `partial` boots from 2025-10 on only (#58). */
+function booted(opts) {
+  opts = opts || {};
+  const p = page(NOW);
+  const all = rows();
+  const list = opts.partial ? all.filter(t => t.y * 100 + t.m >= 202510) : all;
+  const payload = Object.assign({ txns: list, olderFp: null, accounts: [] },
+    opts.noSettings ? {} : { projects: opts.projects || PROJ, baseline: opts.baseline || { mode: 'median', amount: null } },
+    { categories: ['飲食', '購物', '家居', '汽車', '房屋', '旅遊'] },
+    opts.partial ? { complete: false, before: { y: 2025, m: 10 }, loadedFp: 'fp' } : {});
+  const boot = p.calls.filter(c => c.fn === 'getDashboardData')[0];
+  boot.success(JSON.stringify(payload));
+  return p;
+}
+const scope = s => ({ month: { level: 'month', year: +s.split('-')[0], month: +s.split('-')[1] } }).month;
+function view(p, state, extra) {
+  Object.assign(p.state, { tab: 'analysis', q: '' }, state);
+  Object.assign(p, { openRow: null, openHeatDay: null, openProject: null }, extra || {});
+  p.render();
+  return p.nodes.app.innerHTML;
+}
+
+// ---------------------------------------------------------------- 4. computation
+function testComputation() {
+  const p = booted();
+  const sep = scope('2026-09');
+  const d = p.dailyOf(sep);
+  assert.strictEqual(d.gross, 20600, '(4) daily = the daily categories only (20000 + 300 我的消費 + 300 subscription), no 房屋 / 旅遊');
+  assert.strictEqual(d.refunds, 500, '(4) refunds in scope');
+  assert.strictEqual(d.total, 20100, '(4) and they are subtracted from daily, never from a project');
+  assert.strictEqual(p.advIn(d.list), 700, '(4) 代墊 stays outside, as before');
+  assert.strictEqual(p.projectOf('房屋', sep).total, 50000, '(4) project amount in the period');
+  assert.strictEqual(p.projectOf('房屋', sep).total + p.projectOf('旅遊', sep).total + p.projectOf('汽車', sep).total, 58000,
+    '(4) a refund never reduces a project');
+  assert.strictEqual(p.projectRunning('房屋', sep), 80000, '(4) running total from the start month through the period');
+  assert.strictEqual(p.projectRunning('旅遊', sep), 60000, '(4) 旅遊 from 2025-09');
+  assert.strictEqual(p.projectRunning('汽車', sep), 20000, '(4) 汽車 from 2026-06: its May row is before the start');
+  assert.strictEqual(p.projectRunning('房屋', scope('2025-12')), 0, '(4) a period before the start month has nothing yet');
+
+  const w = Array.from(p.baselineWindow('2026-09'));
+  assert.deepStrictEqual(w, ['2025-10', '2025-11', '2025-12', '2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08'],
+    '(4) September\'s window is the 11 months from 2025-10');
+  assert.ok(Array.from(p.baselineWindow('2026-10')).indexOf('2026-10') < 0 && p.baselineWindow('2026-10').length === 12,
+    '(4) the running month is never in a window, its own included');
+  assert.ok(Array.from(p.baselineWindow('2026-11')).indexOf('2026-10') < 0, '(4) nor in a later month\'s');
+  const mt = p.monthTotals();
+  // Window values: 1000..7000, then 8000..11000 each + 300 (the daily subscription from 2026-05).
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(p.dailyBaseline('2026-09', mt))), { ref: 6000, budget: false, months: 11 }, '(4) odd count: the middle month');
+  assert.strictEqual(p.dailyBaseline('2026-08', mt).ref, 5500, '(4) even count: the mean of the middle pair (5000, 6000)');
+  assert.strictEqual(p.dailyBaseline('2025-10', mt), null, '(4) nothing to compare 2025-10 with');
+  const cm = p.catMedians('2026-09', mt);
+  assert.strictEqual(cm.byCat['飲食'].ref, 6000, '(4) per-category median over the same window');
+  assert.strictEqual(cm.byCat['家居'].ref, 0, '(4) a category in fewer than half the months has a median of 0');
+  assert.ok(cm.byCat['家居'].any && !cm.byCat['購物'], '(4) …but did have spend; 購物 had none');
+
+  // Turning 旅遊 into a daily category moves its 2026-03 trip into daily and the baseline rises.
+  p.PROJECTS = PROJ.filter(x => x.name !== '旅遊');
+  assert.strictEqual(p.dailyOf(sep).total, 23100, '(4) 旅遊 as daily: its 3000 joins September\'s daily');
+  assert.strictEqual(p.dailyBaseline('2026-09', p.monthTotals()).ref, 7000, '(4) and the baseline rises (2026-03 is now 56000)');
+  p.PROJECTS = PROJ;
+
+  p.BASELINE = { mode: 'budget', amount: 45000 };
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(p.dailyBaseline('2026-09', mt))), { ref: 45000, budget: true, months: 0 }, '(4) a budget replaces the median');
+  p.BASELINE = { mode: 'median', amount: 45000 };
+
+  // Estimate for 2026-10 (day 10 of 31): (2000 so far without the daily subscription) / 10 × 31 + 300.
+  const oct = p.resolveScope('month');
+  assert.deepStrictEqual(Array.from(p.dailySubs(), x => x.name), ['DailySub'], '(4) only the daily-category subscription counts; CarLoan is a project');
+  assert.strictEqual(p.dailyEstimate(oct, p.dailyOf(oct)), 6500, '(4) the estimate uses daily rows and daily subscriptions only');
+
+  const tm = p.threeMonth('2026-09', false, mt);
+  assert.strictEqual(Math.round(tm.avg), Math.round((10300 + 11300 + 20100) / 3), '(4) 3-month average ends with the selected month');
+  // META without the H/I headers: every category is daily.
+  const none = booted({ noSettings: true });
+  assert.strictEqual(none.PROJECTS.length, 0, '(9) no projects in the payload');
+  assert.strictEqual(none.dailyOf(sep).total, 20100 + 50000 + 3000 + 5000, '(9) everything counts as daily');
+  const h = view(none, { scope: '2026-09' });
+  assert.ok(h.indexOf('class="panel hero"') >= 0 && h.indexOf('class="panel projects"') < 0, '(9) the page renders, with no projects card');
+}
+
+// ---------------------------------------------------------------- 5. rendering
+function testRendering() {
+  const p = booted();
+  let h = view(p, { scope: '2026-09' });
+  assert.ok(/<span class="chip (ok|good|warn|bad)">(高於|低於|接近)常態/.test(h), '(5) a past month shows the status chip');
+  assert.ok(h.indexOf('預估') < 0, '(5) without 預估');
+  assert.ok(h.indexOf('常態（11 個月中位數）$6,000') >= 0, '(5) and its baseline legend');
+  assert.ok(/class="delta (up|down|flat|new)"/.test(h), '(5) per-category deltas on a past month');
+  assert.ok(/<i class="rc-mark" style="left:/.test(h), '(5) with the normal-month marker on the bar');
+  assert.ok(h.indexOf('刷卡 $20,000') < 0 && h.indexOf('代墊 $700 不計入') >= 0, '(5) 代墊 is shown as not counted');
+  assert.ok(h.indexOf('class="panel projects"') >= 0 && h.indexOf('2026/01 起累計 $80,000') >= 0, '(5) projects card with the running total');
+  assert.ok(h.indexOf('專案合計 <b>$58,000</b>') >= 0, '(5) 專案合計 for the month (房屋 50000 + 汽車 5000 + 旅遊 3000)');
+  assert.ok(h.indexOf('hadd') < 0, '(5) no calendar cell carries an add button');
+  h = view(p, { scope: '2026-09' }, { openHeatDay: '2026-9-5' });
+  assert.ok(h.indexOf('data-dayadd="2026-09-05">＋ 在這天新增</button>') >= 0, '(5) the day detail header has the add button');
+
+  h = view(p, { scope: 'month' });
+  assert.ok(/<span class="chip [a-z]+">預估 /.test(h), '(5) the current month\'s chip compares the estimate');
+  assert.ok(h.indexOf('預估月底 $6,500') >= 0, '(5) and the legend shows it');
+  assert.ok(!/class="delta (up|down|flat|new)"/.test(h.split('日常類別')[1].split('class="panel projects"')[0]), '(5) no per-category delta in a running month');
+  ['year', 'all', '2025'].forEach(s => {
+    const y = view(p, { scope: s });
+    assert.ok(y.indexOf('class="chip') < 0, '(5) ' + s + ': no baseline chip');
+    assert.ok(!/class="delta (up|down|flat|new)"/.test(y.split('日常類別')[1].split('class="panel projects"')[0]), '(5) ' + s + ': no per-category deltas');
+    assert.ok(y.indexOf('rc-mark') < 0 && y.indexOf('個月中位數') < 0, '(5) ' + s + ': no normal marker, no median');
+    assert.ok(/平均每月 \$[\d,]+（\d+ 個完整月）/.test(y), '(5) ' + s + ': the average per complete month instead');
+  });
+
+  // A daily row re-categorised to a project moves to the projects card once the server answers.
+  const moved = p.TXNS.find(t => t.cat === '飲食' && t.y === 2026 && t.m === 9);
+  h = view(p, { scope: '2026-09' }, { openRow: '飲食' });
+  assert.ok(h.indexOf('data-category-txn="' + moved.id + '"') >= 0, '(5) precondition: the row is listed under 飲食');
+  p.applyEdit(moved.rowId, 'cat', '房屋');
+  const c = p.calls.filter(x => x.fn === 'updateTxn').pop();
+  const after = p.TXNS.map(t => Object.assign({}, t, t.rowId === moved.rowId ? { cat: '房屋' } : {}));
+  c.success({ ok: true, txns: after, olderFp: null });
+  h = view(p, { scope: '2026-09' }, { openProject: '房屋' });
+  const proj = h.split('class="panel projects"')[1];
+  assert.ok(proj.indexOf('data-category-txn="' + moved.id + '"') >= 0, '(5) after the save the row is in the 房屋 project');
+  assert.ok(h.split('日常類別')[1].split('class="panel projects"')[0].indexOf('$20,000') < 0, '(5) and out of the daily categories');
+  assert.strictEqual(p.dailyOf(scope('2026-09')).total, 100, '(5) daily drops by that row');
+}
+
+// ---------------------------------------------------------------- 6. history
+function testHistory() {
+  const p = booted({ partial: true });
+  assert.strictEqual(p.HISTORY.complete, false, '(6) precondition: partial load from 2025-10');
+  const h = view(p, { scope: '2026-09' });
+  assert.ok(h.indexOf('2025/09 起累計 ' + WAIT) >= 0, '(6) 旅遊 started before the loaded months: its running total waits');
+  assert.ok(h.indexOf('2026/01 起累計 $80,000') >= 0, '(6) 房屋 started inside them: shown');
+  assert.ok(h.indexOf('常態（11 個月中位數）$6,000') >= 0, '(6) the 2026-09 baseline needs only loaded months and is shown');
+  assert.ok(view(p, { scope: 'all' }).indexOf('class="panel hero"') < 0, '(6) 全部期間 still waits');
+  // Settings: 日常 → 專案 needs the earliest row, so it waits for the whole history.
+  assert.ok(/data-kind="project" data-kind-idx="0" aria-pressed="false" disabled title="載入完整歷史中…"/.test(p.categoryKind('飲食', 0)),
+    '(6) the 專案 switch is disabled with the wait text until the history is complete');
+}
+
+// ---------------------------------------------------------------- Settings saves
+function testSettingsSaves() {
+  const p = booted();
+  p.categoryKindClick({ target: { closest: () => ({ disabled: false, getAttribute: k => ({ 'data-kind-idx': '0', 'data-kind': 'project' })[k] }) } });
+  const c = p.calls.filter(x => x.fn === 'setCategoryProject').pop();
+  assert.deepStrictEqual(Array.from(c.args), ['飲食', '2025-09'], 'turning 飲食 into a project defaults to its earliest row\'s month');
+  c.success(PROJ.concat([{ name: '飲食', start: '2025-09' }]));
+  assert.ok(p.isProjectCat('飲食'), 'the server\'s list is adopted');
+  assert.ok(view(p, { scope: '2026-09' }).indexOf('class="panel hero"') >= 0, 'and the page re-renders from it');
+  p.saveDailyBaseline('budget', 60000);
+  const b = p.calls.filter(x => x.fn === 'setDailyBaseline').pop();
+  assert.deepStrictEqual(Array.from(b.args), ['budget', 60000]);
+  b.success({ mode: 'budget', amount: 60000 });
+  assert.ok(view(p, { scope: '2026-09' }).indexOf('自訂預算 $60,000') >= 0, 'the budget becomes the comparison');
+}
+
 module.exports = { Sheet, loadServer, metaSheet };
 
-const CASES = { testRead, testProjectWriter, testBaselineWriter, testPayload };
+const CASES = { testRead, testProjectWriter, testBaselineWriter, testPayload, testComputation, testRendering, testHistory, testSettingsSaves };
 
 function run() {
   Object.keys(CASES).forEach(n => CASES[n]());

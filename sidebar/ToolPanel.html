@@ -25,31 +25,38 @@
 
   .head { position: sticky; top: 0; z-index: 5; background: var(--bg-void); border-bottom: 1px solid var(--border);
     margin: 0 calc(-1 * var(--sp4)) var(--sp4); padding: var(--sp4) var(--sp4) 0; }
-  .head-top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp3); margin-bottom: var(--sp3); }
+  .head-top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp3); margin-bottom: var(--sp2); }
   .title-row { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
   .title { font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
   .head-actions { display: flex; align-items: center; gap: var(--sp2); flex-shrink: 0; }
-  .sheet-link { color: var(--text-muted); display: inline-flex; align-items: center; flex-shrink: 0;
-    line-height: 0; text-decoration: none; }
+  .sheet-link { color: var(--text-muted); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+    width: 44px; height: 44px; margin: 0 -10px 0 -6px; line-height: 0; text-decoration: none; border-radius: var(--r-ctl); }
   .sheet-link:hover { color: var(--accent); }
-  .sheet-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
-  .period { font-size: 14px; color: var(--text-muted); }
-  .tabs { display: flex; gap: var(--sp5); }
-  .tabs button { border: none; background: none; cursor: pointer; padding: 2px 0 10px; border-bottom: 2px solid transparent; text-align: left; }
-  .tabs button .tt { display: block; font-size: 14px; font-weight: 600; color: var(--text-muted); }
-  .tabs button .tsub { display: block; font-size: 11px; color: var(--text-muted); opacity: .85; margin-top: 1px; }
-  .tabs button.active { border-bottom-color: var(--accent); }
+  .sheet-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -6px; }
+  /* Tabs: a segmented control, three equal 44px targets. */
+  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 3px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-card); }
+  .tabs button { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; border: none; border-radius: var(--r-ctl); background: none; cursor: pointer; padding: 0 var(--sp2); font: inherit; }
+  .tabs button .tt { font-size: 14px; font-weight: 600; color: var(--text-muted); }
+  .tabs button .tsub { font-size: 11px; color: var(--text-muted); }
+  .tabs button.active { background: var(--bg-raised); box-shadow: 0 1px 3px rgba(0,0,0,.4); }
   .tabs button.active .tt { color: var(--text-primary); }
-  .controls { display: flex; align-items: center; gap: var(--sp2); flex-wrap: wrap; margin: var(--sp3) 0 var(--sp4); }
-  .clabel { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; margin-right: 2px; }
-  .ctl { border: 1px solid transparent; background: var(--bg-raised); color: var(--text-muted); height: 28px; padding: 0 14px;
-    border-radius: var(--r-pill); font-size: 12px; font-weight: 500; cursor: pointer; }
-  .ctl.active { background: transparent; border-color: var(--accent); color: var(--text-primary); }
-  .sel { display: flex; gap: var(--sp1); align-items: center; transition: opacity .12s; }
-  .sel.dim { opacity: 1; }
-  .sel select { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--r-ctl);
-    padding: 5px 8px; font-size: 12px; font-weight: 500; cursor: pointer; }
-  .sel.picked select { border-color: var(--accent); }
+  .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .head-search { margin-bottom: var(--sp2); }
+  .head-search .search { width: 100%; height: 44px; font-size: 16px; padding: 0 var(--sp3); }
+  .controls { display: flex; align-items: center; gap: var(--sp2); flex-wrap: wrap; margin: var(--sp3) 0 var(--sp3); }
+  /* Segmented control (period, inbox range, trend mode) and the ‹ label › stepper. */
+  .seg { display: inline-flex; padding: 2px; gap: 2px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-ctl); }
+  .seg button { min-height: 44px; min-width: 52px; padding: 0 var(--sp3); border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .controls .seg button { min-height: 44px; }
+  .seg button[aria-pressed="true"] { background: var(--bg-raised); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+  .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .stepper { display: inline-flex; align-items: center; margin-left: auto; }
+  .stepper button { width: 44px; height: 44px; border: 0; border-radius: var(--r-ctl); background: none; color: var(--text-primary); font-size: 22px; line-height: 1; cursor: pointer; }
+  .stepper button:hover:not([disabled]) { background: var(--bg-raised); }
+  .stepper button[disabled] { color: var(--text-muted); opacity: .35; cursor: default; }
+  .stepper button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .step-label { font-size: 14px; font-weight: 600; min-width: 92px; text-align: center; white-space: nowrap; }
+  .controls > .step-label { margin-left: auto; color: var(--text-muted); font-weight: 500; }
   .hint { font-size: 11px; color: var(--text-muted); }
 
   .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-bottom: var(--sp3); background: var(--border);
@@ -67,16 +74,58 @@
   @media (max-width: 640px) { .kpis, .kpis.k3 { grid-template-columns: repeat(2, 1fr); } }
 
 
+  /* 總覽: one column on a phone; two at a container of 700px or more (left hero + daily
+     categories, right projects + calendar). .wrap pads 16px a side, so that is a 732px viewport. */
+  .ovgrid { display: grid; grid-template-columns: 1fr; gap: var(--sp3); }
+  .ovcol { display: flex; flex-direction: column; gap: var(--sp3); min-width: 0; }
+  @media (min-width: 732px) { .ovgrid { grid-template-columns: 1fr 1fr; align-items: start; } }
+  .hero-top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp2); flex-wrap: wrap; }
+  .eyebrow { font-size: 13px; color: var(--text-muted); font-weight: 600; }
+  .chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: var(--r-pill); font-size: 12px; font-weight: 600; white-space: nowrap; background: var(--bg-raised); color: var(--text-muted); }
+  .chip.ok { color: var(--text-primary); }
+  .chip.good { color: var(--income); background: rgba(106,156,130,.14); }
+  .chip.warn { color: var(--warn); background: rgba(179,154,104,.16); }
+  .chip.bad { color: var(--spend); background: rgba(196,106,88,.16); }
+  .hero-num { font-size: 38px; font-weight: 700; letter-spacing: -.02em; line-height: 1.15; margin: 6px 0 10px; }
+  /* Meter: full width = 140% of the baseline; the marker is 100%, at 1/1.4 of the width. */
+  .hmeter { position: relative; height: 8px; border-radius: 4px; background: var(--bg-raised); overflow: hidden; }
+  .hmeter i { position: absolute; top: 0; bottom: 0; display: block; }
+  .hmeter .hm-fill { left: 0; background: var(--accent); }
+  .hmeter .hm-over { background: var(--spend); }
+  .hmeter .hm-mark { left: 71.43%; width: 2px; margin-left: -1px; background: var(--text-primary); }
+  .hero-legend { display: flex; justify-content: space-between; gap: var(--sp2); font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  .hero-sub { font-size: 12px; color: var(--text-muted); margin-top: var(--sp2); }
+  .hero-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp2); margin-top: var(--sp3); padding-top: var(--sp3); border-top: 1px solid var(--border); }
+  .hero-stats div { min-width: 0; }
+  .hero-stats span { display: block; font-size: 11px; color: var(--text-muted); }
+  .hero-stats b { display: block; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hero-stats b.inc { color: var(--income); } .hero-stats b.spend { color: var(--spend); }
+  @media (max-width: 420px) { .hero-stats { gap: 6px; } .hero-stats b { font-size: 13px; } }
+  .incsrc-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; margin-top: var(--sp2); padding: 0; border: 0; border-top: 1px solid var(--border); background: none; color: var(--text-muted); font: inherit; font-size: 13px; cursor: pointer; }
+  .incsrc-toggle[aria-expanded="true"] .chev { transform: rotate(90deg); }
+  .incsrc-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* 專案 card */
+  .pj-stack { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--bg-raised); }
+  .pj-stack i { display: block; height: 100%; }
+  .pj-sum { display: flex; justify-content: space-between; gap: var(--sp2); font-size: 12px; color: var(--text-muted); margin: var(--sp2) 0 var(--sp1); }
+  .pj-sum b { color: var(--text-primary); font-weight: 600; }
+  .pj-row { border-top: 1px solid var(--border); }
+  .pj-toggle { display: flex; align-items: center; gap: var(--sp2); width: 100%; min-height: 56px; padding: 6px 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .pj-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+  .pj-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .pj-name b { font-weight: 600; }
+  .pj-run { font-size: 12px; color: var(--text-muted); }
+  .pj-amt { display: flex; flex-direction: column; align-items: flex-end; white-space: nowrap; }
+  .pj-amt b { font-weight: 600; font-size: 15px; }
+  .pj-amt span { font-size: 12px; color: var(--text-muted); }
+  .pj-row.open .chev { transform: rotate(90deg); }
+  .pj-row .drill { display: block; margin-top: 0; }
   .grid2 { display: grid; grid-template-columns: 1.15fr 1fr; gap: var(--sp3); margin-bottom: var(--sp4); }
   @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
   .panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-card); padding: var(--sp4); }
-  .panel h3 { font-size: 12px; color: var(--text-muted); font-weight: 500; margin-bottom: var(--sp3); text-transform: uppercase; letter-spacing: .07em; display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp2); }
+  .panel h3 { font-size: 14px; color: var(--text-primary); font-weight: 650; margin-bottom: var(--sp3); display: flex; justify-content: space-between; align-items: center; gap: var(--sp2); flex-wrap: wrap; }
   .panel h3.inc { color: var(--income); }
-  .h3note { text-transform: none; letter-spacing: 0; color: var(--text-muted); font-weight: 400; }
-  .donut-wrap { display: flex; gap: var(--sp4); align-items: center; }
-  .legend { flex: 1; min-width: 0; }
-  .legend .lg { display: flex; align-items: center; gap: var(--sp2); font-size: 13px; margin-bottom: 7px; }
-  .legend .sw { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; }
+  .h3note { font-size: 12px; color: var(--text-muted); font-weight: 400; }
   /* Category icons. A tile is a rounded square holding the category's line icon: tinted (icon in the
      category colour on that colour + '2e', set inline by catTile) or neutral (the class below). */
   .ctile { display: inline-grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; border-radius: 7px; line-height: 0; }
@@ -96,9 +145,6 @@
   .catchip .catchip-caret { color: var(--text-muted); font-size: 10px; }
   .modal .catchip { width: 100%; padding: 8px 9px; font-size: 14px; }
   .modal .catchip .catchip-name { flex: 1; text-align: left; }
-  .legend .lg-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .legend .lg-amt { color: var(--text-primary); font-size: 12px; min-width: 64px; text-align: right; }
-  .legend .lg-pct { color: var(--text-muted); font-size: 12px; min-width: 36px; text-align: right; }
 
   .lrow { display: flex; align-items: center; gap: var(--sp2); font-size: 13px; padding: 6px 0; border-bottom: 1px solid var(--border); }
   .lrow:last-child { border-bottom: none; }
@@ -111,24 +157,37 @@
   .ltot .t-l { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; }
   .ltot .t-v { font-size: 20px; font-weight: 600; }
 
-  .trend { position: relative; display: flex; align-items: flex-end; gap: var(--sp2); height: 132px; padding-top: 18px; border-bottom: 1px solid var(--border); }
-  .tgrid { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--border); pointer-events: none; }
-  .tgrid span { position: absolute; right: 0; top: -8px; font-size: 11px; color: var(--text-muted); background: var(--bg-surface); padding-left: 4px; }
-  .tcol { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 0; justify-content: flex-end; z-index: 1; }
-  .tbars { display: flex; align-items: flex-end; gap: 3px; height: 108px; }
-  .tbars > i { width: 9px; border-radius: 2px 2px 0 0; display: block; }
-  .b-inc { background: var(--income); }
-  .spendstack { display: flex; flex-direction: column; justify-content: flex-end; width: 9px; }
-  .spendstack i { width: 9px; display: block; }
-  .b-exp { background: var(--spend); }
-  .b-proj { background: repeating-linear-gradient(-45deg, var(--spend) 0 3px, transparent 3px 6px); opacity: .5; border-radius: 2px 2px 0 0; }
-  .tcol.partial .b-exp, .tcol.partial .b-inc { opacity: .55; }
-  .tlabel { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
-  .tnetv { font-size: 10px; font-weight: 600; white-space: nowrap; }
+  /* 趨勢 monthly chart: stacked HTML bars under one SVG of lines (viewBox 0..100, stretched). */
+  .tchart { display: flex; gap: 6px; }
+  .tc-axis { position: relative; width: 34px; height: 150px; flex-shrink: 0; font-size: 10px; color: var(--text-muted); }
+  .tc-axis span { position: absolute; right: 0; transform: translateY(-50%); white-space: nowrap; }
+  .tc-plot { position: relative; flex: 1; min-width: 0; }
+  .tc-grid { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--border); pointer-events: none; }
+  .tc-bars { position: relative; display: flex; gap: 3px; }
+  .tc-col { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; }
+  .tc-bar { height: 150px; width: 100%; max-width: 26px; display: flex; flex-direction: column; justify-content: flex-end; border-bottom: 1px solid var(--border); }
+  .tc-bar i { display: block; width: 100%; }
+  .tc-bar i:first-child { border-radius: 3px 3px 0 0; }
+  .tc-col.partial .tc-bar i { opacity: .5; }
+  .tc-lbl { font-size: 10px; color: var(--text-muted); margin-top: 4px; white-space: nowrap; }
+  .tc-lines { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: 150px; overflow: visible; z-index: 2; pointer-events: none; }
+  .tc-lines line, .tc-lines polyline { fill: none; vector-effect: non-scaling-stroke; }
+  .tl-base { stroke: var(--text-primary); stroke-width: 1.2; stroke-dasharray: 5 4; opacity: .8; }
+  .tl-avg { stroke: var(--warn); stroke-width: 2; }
+  .tl-inc { stroke: var(--income); stroke-width: 2; }
+  .tlegend i.lk-base { width: 14px; height: 0; border-top: 1.5px dashed var(--text-primary); border-radius: 0; }
+  .tlegend i.lk-avg { width: 14px; height: 2px; background: var(--warn); }
+  .tlegend i.lk-inc { width: 14px; height: 2px; background: var(--income); }
+  .mtable-wrap { overflow-x: auto; }
+  .mtable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .mtable th, .mtable td { padding: 7px 4px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .mtable th { font-weight: 600; color: var(--text-muted); font-size: 12px; }
+  .mtable th:first-child, .mtable td:first-child { text-align: left; padding-left: 0; }
+  .mtable td:last-child { font-weight: 600; }
+  .mtable tr:last-child td { border-bottom: none; }
   .tlegend { display: flex; gap: var(--sp4); font-size: 11px; color: var(--text-muted); margin-top: var(--sp3); flex-wrap: wrap; }
   .tlegend span { display: inline-flex; align-items: center; gap: 5px; }
   .tlegend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
-  .tlegend i.proj { background: repeating-linear-gradient(-45deg, var(--spend) 0 2px, transparent 2px 4px); }
 
 
   .toolbar { display: flex; gap: var(--sp2); align-items: center; margin: var(--sp2) 0 var(--sp3); }
@@ -138,11 +197,10 @@
     padding: 5px 10px; font-size: 12px; width: 132px; height: 28px; }
   .search:focus { outline: none; border-color: var(--accent); }
   .search::placeholder { color: var(--text-muted); }
-  .controls .search { margin-left: auto; flex-shrink: 1; min-width: 96px; }
 
-  .row-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-card); padding: var(--sp3) var(--sp4);
-    margin-bottom: var(--sp2); cursor: pointer; transition: background .12s; }
-  .row-card:hover { background: var(--bg-raised); }
+  .row-card { border-top: 1px solid var(--border); padding: var(--sp3) 0; cursor: pointer; }
+  .row-card:first-of-type { border-top: 0; padding-top: 0; }
+  .row-card:hover .rc-name { color: var(--accent); }
   .rc-top { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp3); }
   .rc-name { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: var(--sp2); min-width: 0; }
   .rc-name .dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
@@ -151,12 +209,16 @@
   .row-card.open .chev { transform: rotate(90deg); }
   .rc-total { font-weight: 600; font-size: 15px; color: var(--text-primary); white-space: nowrap; }
   .rc-meta { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
-  .rc-bar { height: 5px; border-radius: 3px; background: var(--bg-raised); overflow: hidden; margin: 6px 0 4px; }
-  .rc-bar > i { display: block; height: 100%; }
+  .rc-bar { position: relative; height: 8px; border-radius: 4px; background: var(--bg-raised); margin: 8px 0 5px; }
+  .rc-bar > i { display: block; height: 100%; border-radius: 4px; }
+  /* The category's normal month: a thin white line across the bar. */
+  .rc-bar > i.rc-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text-primary); }
+  .delta.new { color: var(--accent); }
   .rc-bar + .rc-meta { margin-top: 0; }
   .drill { margin-top: var(--sp3); border-top: 1px solid var(--border); padding-top: var(--sp2); display: none; }
   .row-card.open .drill { display: block; }
-  .txn-toggle { display: block; width: 100%; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .txn-toggle { display: block; width: 100%; min-height: 44px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .txn-toggle .txn { min-height: 44px; }
   .txn-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
   .txn-toggle .txn::before { content: '▶'; color: var(--text-muted); font-size: 10px; }
   .txn-toggle[aria-expanded="true"] .txn::before { content: '▼'; }
@@ -188,14 +250,11 @@
      editor fits above the fold. */
   .cell { aspect-ratio: 1.7; max-height: 62px; border-radius: 5px; background: var(--bg-raised); border: 1px solid transparent;
     display: flex; align-items: flex-start; justify-content: flex-end; padding: 3px 4px; position: relative; }
-  @media (max-width: 520px) { .cell { aspect-ratio: 1.15; max-height: none; } }
+  /* On a phone the cells are square and at least 44px: 390px − 2×16 page − 2×12 panel − 6×4 gap = 310 = 7 × 44. */
+  @media (max-width: 520px) { .cal { gap: 4px; } .cell { aspect-ratio: 1; max-height: none; min-height: 44px; } .ovcol .panel { padding: var(--sp3); } }
   .cell .dn { font-size: 10px; color: var(--text-muted); opacity: .7; }
-  .cell .hadd { position: absolute; left: 2px; bottom: 2px; width: 30px; height: 30px; padding: 0;
-    display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent;
-    border-radius: 5px; background: transparent; color: var(--text-muted); font: inherit; font-size: 16px;
-    line-height: 1; cursor: pointer; opacity: .75; }
-  .cell .hadd:hover { background: rgba(255,255,255,.07); border-color: var(--border); color: var(--text-primary); opacity: 1; }
-  .cell .hadd:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; color: var(--text-primary); opacity: 1; }
+  .cell[data-hday] { cursor: pointer; }
+  .cell[data-hday]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   /* Income/transfer-only hit: 4px muted dot. Borders already mean today/sel. */
   .cell .mark { position: absolute; left: 50%; bottom: 5px; width: 4px; height: 4px; margin-left: -2px;
     border-radius: 50%; background: var(--text-muted); pointer-events: none; }
@@ -215,8 +274,10 @@
 
   /* editable day list */
   .ev-head { display: flex; align-items: center; gap: var(--sp2); margin: var(--sp3) 0 var(--sp2); flex-wrap: wrap; }
-  .ev-head .lbl { font-size: 12px; color: var(--text-muted); }
-  .ev-toggle { margin-left: auto; font-size: 12px; color: var(--accent); background: none; border: 1px solid var(--border); border-radius: var(--r-pill); padding: 3px 12px; cursor: pointer; }
+  .ev-head .lbl { font-size: 12px; color: var(--text-muted); flex: 1; min-width: 0; }
+  .dayadd { min-height: 44px; padding: 0 var(--sp3); border: 1px solid var(--accent); border-radius: var(--r-ctl); background: none; color: var(--accent); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .dayadd:hover { background: var(--accent); color: #0e1220; }
+  .ev-toggle { margin-left: auto; min-height: 44px; font-size: 12px; color: var(--accent); background: none; border: 1px solid var(--border); border-radius: var(--r-pill); padding: 3px 14px; cursor: pointer; }
   .ev-toggle:hover { background: var(--bg-raised); }
   .erow { padding: 9px 0; border-bottom: 1px solid var(--border); transition: opacity .15s; }
   .erow:last-child { border-bottom: none; }
@@ -244,13 +305,17 @@
   .er2 { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
   .er2 .fld { display: flex; align-items: center; gap: 4px; }
   .er2 .fld .lb { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
-  .er2 select { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; font-size: 12px; cursor: pointer; }
+  .er2 select { min-height: 44px; background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; font-size: 12px; cursor: pointer; }
+  .er2 .catchip, .er2 .amtcor, .er1 .merin, .er1 .amtbtn { min-height: 44px; }
+  .er1 .amtbtn { min-width: 44px; text-align: right; }
+  .er1 { align-items: center; }
+  .er1 .mail { width: 44px; height: 44px; justify-content: center; margin: 0 -10px; }
   .er2 select:focus { outline: none; border-color: var(--accent); }
   .er2 .amtcor { background: var(--bg-raised); color: var(--text-primary); border: 1px solid var(--border);
     border-radius: 6px; padding: 5px 7px; font: inherit; font-size: 12px; width: 132px; }
   .er2 .amtcor { width: 96px; text-align: right; }
   .er2 .amtcor:focus { outline: none; border-color: var(--accent); }
-  .erec { margin-left: auto; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-muted); border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .erec { margin-left: auto; min-height: 44px; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-muted); border-radius: 7px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 
   /* 我的消費 split. An unsplit row must look exactly as it did before this feature existed,
      so .amtbtn is a button that renders as plain text — the only tell is a hover underline. */
@@ -267,8 +332,9 @@
     background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; }
   .split .sin:focus { outline: none; border-color: var(--accent); }
   .split .shint { font-size: 12px; color: var(--text-muted); }
-  .split .sbtn { border: 1px solid var(--border); background: var(--bg-surface); color: var(--text-muted);
-    border-radius: 7px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .split .sbtn { min-height: 44px; border: 1px solid var(--border); background: var(--bg-surface); color: var(--text-muted);
+    border-radius: 7px; padding: 5px 14px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .split .sin { min-height: 44px; }
   .split .sbtn.ok { margin-left: auto; border-color: var(--accent); color: var(--accent); }
   .split .sbtn:hover { color: var(--text-primary); }
   .split .sbtn.ok:hover { background: var(--accent); color: #17191f; }
@@ -281,11 +347,11 @@
   .toast.err { border-color: var(--spend); color: var(--spend); }
 
   /* header actions + modal */
-  .addbtn { display: inline-flex; align-items: center; gap: 5px; background: var(--accent); color: #0e1220; border: none; border-radius: var(--r-ctl); padding: 7px 14px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .addbtn { display: inline-flex; align-items: center; gap: 5px; min-height: 44px; background: var(--accent); color: #0e1220; border: none; border-radius: var(--r-ctl); padding: 0 14px; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
   .addbtn:hover { filter: brightness(1.08); }
-  .settingsbtn { display: inline-flex; align-items: center; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-primary); border-radius: var(--r-ctl); padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .settingsbtn { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text-primary); border-radius: var(--r-ctl); padding: 0; cursor: pointer; }
   .settingsbtn:hover { border-color: var(--accent); color: var(--accent); }
-  .txdel, .erdel { background: none; border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; width: 26px; height: 24px; cursor: pointer; flex-shrink: 0; font-size: 12px; }
+  .txdel, .erdel { background: none; border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; width: 44px; height: 44px; cursor: pointer; flex-shrink: 0; font-size: 14px; }
   .txdel:hover, .erdel:hover { border-color: var(--spend); color: var(--spend); }
   .overlay { position: fixed; inset: 0; background: rgba(8,10,14,.6); display: none; align-items: flex-start; justify-content: center; padding: 6vh var(--sp4); z-index: 30; }
   .overlay.on { display: flex; }
@@ -338,24 +404,24 @@
   .settings-sheet .settings-status.err { color: var(--spend); }
   .settings-sheet .settings-status.err .settings-dot { background: var(--spend); }
   @keyframes settings-pulse { to { opacity: .3; } }
-  .settings-sheet .settings-x { width: 32px; height: 32px; border-radius: 50%; border: 0; background: var(--bg-raised); color: var(--text-muted); font-size: 18px; line-height: 1; cursor: pointer; display: grid; place-items: center; flex-shrink: 0; }
+  .settings-sheet .settings-x { width: 44px; height: 44px; border-radius: 50%; border: 0; background: var(--bg-raised); color: var(--text-muted); font-size: 18px; line-height: 1; cursor: pointer; display: grid; place-items: center; flex-shrink: 0; }
   .settings-sheet .settings-x:hover { color: var(--text-primary); }
   .settings-sheet .settings-tabs { position: relative; display: grid; grid-template-columns: 1fr 1fr; margin: 0 var(--sp4) var(--sp3); padding: 3px; background: var(--bg-raised); border-radius: var(--r-ctl); flex-shrink: 0; }
   .settings-sheet .settings-tab-pill { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px); background: var(--bg-surface); border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.45); transition: transform .22s cubic-bezier(.3,.7,.3,1); }
   .settings-sheet .settings-tabs[data-active="categories"] .settings-tab-pill { transform: translateX(100%); }
-  .settings-sheet .settings-tabs button { position: relative; z-index: 1; border: 0; background: transparent; font: inherit; font-size: 13px; font-weight: 600; color: var(--text-muted); padding: 7px 0; border-radius: 6px; cursor: pointer; }
+  .settings-sheet .settings-tabs button { position: relative; z-index: 1; border: 0; background: transparent; font: inherit; font-size: 13px; font-weight: 600; color: var(--text-muted); min-height: 44px; padding: 7px 0; border-radius: 6px; cursor: pointer; }
   .settings-sheet .settings-tabs button[aria-selected="true"] { color: var(--text-primary); }
   .settings-sheet .settings-tab-n { margin-left: 4px; font-weight: 500; color: var(--text-muted); }
   .settings-sheet .settings-body { overflow-y: auto; overscroll-behavior: contain; padding: 0 var(--sp4) var(--sp4); }
   .settings-sheet .settings-hint { font-size: 12px; color: var(--text-muted); margin-bottom: var(--sp2); }
   .settings-sheet .settings-group { border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--bg-raised); }
   .settings-sheet .settings-list { list-style: none; }
-  .settings-sheet .settings-row { position: relative; display: flex; align-items: center; gap: var(--sp2); min-height: 46px; padding: 0 var(--sp3) 0 var(--sp1); background: var(--bg-raised); border-bottom: 1px solid var(--border); }
+  .settings-sheet .settings-row { position: relative; display: flex; align-items: center; gap: var(--sp2); min-height: 48px; padding: 0 var(--sp2) 0 0; background: var(--bg-raised); border-bottom: 1px solid var(--border); }
   .settings-sheet .settings-row:first-child { border-radius: var(--r-ctl) var(--r-ctl) 0 0; }
   .settings-sheet .settings-name { flex: 1; min-width: 0; padding-left: var(--sp2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .settings-sheet .settings-acct-list .settings-name { padding-left: var(--sp3); }
   .settings-sheet .settings-empty { color: var(--text-muted); padding-left: var(--sp4); }
-  .settings-sheet .settings-handle { width: 36px; height: 40px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: grab; touch-action: none; }
+  .settings-sheet .settings-handle { width: 44px; height: 44px; flex-shrink: 0; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: grab; touch-action: none; }
   .settings-sheet .settings-handle svg { width: 14px; height: 14px; fill: currentColor; }
   .settings-sheet .settings-handle:hover { color: var(--text-primary); }
   .settings-sheet .settings-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -369,10 +435,25 @@
   .settings-sheet .settings-add-form { display: flex; align-items: center; gap: var(--sp2); padding: 6px var(--sp2) 6px var(--sp3); }
   .settings-sheet .settings-add-form input { flex: 1; min-width: 0; background: var(--bg-surface); border-color: var(--accent); padding: 7px 9px; }
   .settings-sheet .settings-add-form input.bad { border-color: var(--spend); }
-  .settings-sheet .settings-add-form button { border: 0; border-radius: 6px; padding: 7px 12px; background: var(--accent); color: #0e1220; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .settings-sheet .settings-add-form button { min-height: 44px; border: 0; border-radius: 6px; padding: 7px 12px; background: var(--accent); color: #0e1220; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
   .settings-sheet .settings-add-form button[disabled] { opacity: .5; cursor: default; }
   .settings-sheet .settings-add-form .settings-add-cancel { background: transparent; color: var(--text-muted); padding: 7px 6px; }
   .settings-sheet .settings-foot { font-size: 12px; color: var(--text-muted); margin: var(--sp2) 2px 0; }
+  .settings-sheet .settings-kind { display: inline-flex; flex-shrink: 0; padding: 2px; gap: 2px; background: var(--bg-surface); border-radius: 7px; }
+  .settings-sheet .settings-kind button { min-width: 44px; min-height: 44px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .settings-sheet .settings-kind button[aria-pressed="true"] { background: var(--bg-raised); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,.4); }
+  .settings-sheet .settings-kind button[data-kind="project"][aria-pressed="true"] { color: var(--accent); }
+  .settings-sheet .settings-kind button[disabled] { opacity: .45; cursor: default; }
+  .settings-sheet .settings-start { flex-shrink: 0; width: 104px; min-height: 44px; padding: 4px 6px; font-size: 12px; }
+  .settings-sheet .settings-baseline-h { margin-top: var(--sp4); }
+  .settings-sheet .settings-baseline { padding: var(--sp2); }
+  .settings-sheet .settings-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; background: var(--bg-surface); border-radius: 7px; }
+  .settings-sheet .settings-seg button { min-height: 44px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .settings-sheet .settings-seg button[aria-pressed="true"] { background: var(--bg-raised); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,.4); }
+  .settings-sheet .settings-budget-row { display: flex; align-items: center; gap: var(--sp2); margin-top: var(--sp2); font-size: 13px; }
+  .settings-sheet .settings-budget-row[hidden] { display: none; }
+  .settings-sheet .settings-budget-row input { flex: 1; min-width: 0; min-height: 44px; text-align: right; }
+  .settings-sheet .settings-budget-row input.bad { border-color: var(--spend); }
   .settings-sheet .settings-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   @media (max-width: 640px) {
     #settingsOverlay { align-items: flex-end; padding: 0; overflow: hidden; }
@@ -422,18 +503,17 @@
   .dsec .dw { font-size: 11px; color: var(--text-muted); }
   .dsec .dage { font-size: 11px; color: var(--text-muted); }
   .dsec .dsum { margin-left: auto; font-size: 12px; color: var(--text-muted); }
-  .dbulk { border: 1px solid var(--border); background: none; color: var(--accent); border-radius: var(--r-pill);
-    padding: 3px 11px; font-size: 11px; cursor: pointer; white-space: nowrap; }
+  .dbulk { min-height: 44px; border: 1px solid var(--border); background: none; color: var(--accent); border-radius: var(--r-pill);
+    padding: 3px 14px; font-size: 12px; cursor: pointer; white-space: nowrap; }
   .dbulk:hover { background: var(--bg-raised); border-color: var(--income); color: var(--income); }
   .dbulk[disabled] { opacity: .4; cursor: default; }
   .footer { text-align: center; padding: var(--sp4); font-size: 12px; color: var(--text-muted); }
   .loading, .error { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
   .error { color: var(--spend); }
   @media (max-width: 520px) {
-    .head-top { align-items: flex-start; }
     .head-actions { gap: 6px; }
-    .head-actions .period { display: none; }
-    .settingsbtn, .addbtn { padding: 7px 10px; }
+    .addbtn { padding: 0 12px; }
+    .step-label { min-width: 0; }
     .overlay { padding: var(--sp3); overflow-y: auto; }
     .modal { margin: auto 0; }
     .source-new { flex-wrap: wrap; }
@@ -499,8 +579,16 @@
           <button type="button" class="settings-add-toggle" id="settings-category-add"><span aria-hidden="true">＋</span>新增類別</button>
           <div class="settings-add-form" id="settings-category-form" hidden><input id="settings-category-name" maxlength="20" placeholder="類別名稱" aria-label="新類別名稱" spellcheck="false" autocomplete="off"><button type="button" id="settings-category-create">加入</button><button type="button" class="settings-add-cancel" id="settings-category-cancel">取消</button></div>
         </div>
-        <p class="settings-foot">「未分類」固定在選單最上面，不在這裡排序。</p>
+        <p class="settings-foot">「未分類」固定在選單最上面，不在這裡排序。專案類別不計入日常支出，另有自己的累計。</p>
         <div class="settings-sr" id="settings-category-live" aria-live="assertive"></div>
+        <p class="settings-hint settings-baseline-h" id="settings-baseline-label">日常的比較對象</p>
+        <div class="settings-group settings-baseline">
+          <div class="settings-seg" role="group" aria-labelledby="settings-baseline-label">
+            <button type="button" id="settings-baseline-median" data-baseline="median" aria-pressed="true">過去 12 個月中位數</button>
+            <button type="button" id="settings-baseline-budget" data-baseline="budget" aria-pressed="false">自訂預算</button>
+          </div>
+          <div class="settings-budget-row" id="settings-budget-row" hidden><label for="settings-budget">每月預算</label><input id="settings-budget" type="number" inputmode="numeric" min="1" step="1" placeholder="例如 60000"><span>元</span></div>
+        </div>
       </div>
     </div>
   </div>
@@ -524,9 +612,9 @@
   </div>
 </div>
 <script>
-  // muted, cool-leaning, and deliberately AVOIDS red/green so category hues never read as spend/income
+  // Card colours for 信用卡別 (cardPanel) only: muted, cool-leaning, and deliberately AVOIDS
+  // red/green so they never read as spend/income. Categories use catColor (CATEGORY_COLOR).
   var PALETTE = ['#5f9aa0','#6f88a8','#9a8bb0','#b39a68','#6d8f9e','#8497b8','#7b9ca6','#a99a6a'];
-  var REST_COLOR = '#5a6070';
   // Category icons: a fixed in-code map, not stored in the sheet and not editable in Settings.
   // 24x24 line icons; an element with class "f" is filled. A category missing from
   // CATEGORY_ICON (e.g. one added later in Settings) falls back to "q".
@@ -570,10 +658,17 @@
   var CATEGORY_KEY_TIMER = null;    // the armed 600ms keyboard-reorder debounce
   var CATEGORY_DRAG = null;         // the active pointer drag
   var SETTINGS_STATUS_TIMER = null;
+  // META H:I as last confirmed by the server (getDashboardData / setCategoryProject):
+  // [{ name, start: 'YYYY-MM' }]. A category listed here is a project; every other one is daily.
+  var PROJECTS = [];
+  // META J: the daily baseline, { mode: 'median' | 'budget', amount } (setDailyBaseline).
+  var BASELINE = { mode:'median', amount:null };
+  var PROJECT_SAVING = {};          // category -> true while its setCategoryProject is in flight
+  var BASELINE_SAVING = false;
 
   var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'',
-                inboxScope:'all', inboxDone:false };
-  var openRow=null, openHeatDay=null, openSplit=null;
+                inboxScope:'all', inboxDone:false, trendMode:'all' };
+  var openRow=null, openHeatDay=null, openSplit=null, openProject=null, incomeOpen=false;
   var addHeatDate=null;
   var openCategoryTxn=null;
 
@@ -663,7 +758,7 @@
     var body=own.call(IC,key)?IC[key]:IC.q;
     return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'+body+'</svg>';
   }
-  /** A decorative icon tile, size 22/28/30/34. With a colour (a 6-digit hex from PALETTE) it is
+  /** A decorative icon tile, size 22/28/30/34. With a colour (a 6-digit hex from catColor) it is
    *  tinted: icon in that colour on colour + '2e'. Without one it is the neutral tile. */
   function catTile(name,color,size){
     var style=color?' style="color:'+color+';background:'+color+'2e"':'';
@@ -673,37 +768,24 @@
   function catChipInner(name){
     return '<span class="catchip-ic">'+catIcon(name)+'</span><span class="catchip-name">'+esc(name)+'</span><span class="catchip-caret" aria-hidden="true">▾</span>';
   }
-  function isPick(){ return /^\d{4}(-\d{2})?$/.test(state.scope); }
-  function yearOptions(){ var ys={}; ys[NOW.year]=1; TXNS.forEach(function(t){ if(t.y) ys[t.y]=1; }); var arr=Object.keys(ys).map(Number).sort(function(a,b){return b-a;}); var o=''; arr.forEach(function(y){ o+='<option value="'+y+'"'+(y===state.selYear?' selected':'')+'>'+y+'</option>'; }); return o; }
-  function monthOptions(){ var o='<option value="0"'+(state.selMonth===0?' selected':'')+'>全年</option>'; for(var m=1;m<=12;m++) o+='<option value="'+m+'"'+(m===state.selMonth?' selected':'')+'>'+m+' 月</option>'; return o; }
-  function meterColor(rate){ return rate<10?'var(--spend)':(rate<20?'var(--warn)':'var(--income)'); }
-
-  // month-end projection: exclude one-off lumps AND recurring subs from the daily base, add them once
-  function projectMonth(expOfMonth, elapsed, dim, subNames, subTot){
-    if(elapsed>=dim) return sum(expOfMonth);
-    var lumpCut=Math.max(8000, 3*median(expOfMonth.map(function(t){return t.amount;})));
-    var base=expOfMonth.filter(function(t){return t.amount<lumpCut && !subNames[t.merchant];});
-    var lump=expOfMonth.filter(function(t){return t.amount>=lumpCut;});
-    return Math.round(sum(base)/elapsed*dim + sum(lump) + subTot);
+  // ---------- category colours ----------
+  // A fixed name-keyed map: one hue per category, distinct from each other and from the spend /
+  // income tokens. Daily spending as a whole is --accent. A category added later in Settings gets a
+  // stable colour from CATEGORY_COLOR_FALLBACK, chosen by a hash of its name, so it keeps the same
+  // colour across reloads. Every value is a 6-digit hex: catTile appends '2e' for its tint.
+  var DAILY_COLOR = '#8296c4';
+  var CATEGORY_COLOR = { 飲食:'#d08a63', 交通:'#5fa3b5', 超市:'#78ad7f', 購物:'#b98cc4', 娛樂:'#c9b06a', 個人:'#8296c4',
+    家居:'#c27a8c', 醫療:'#6fbfa3', 禮金:'#d6a0b0', 其他:'#8f9a6a', 未分類:'#6b7080', 房屋:'#a98bc0', 汽車:'#c4a66a',
+    旅遊:'#5fa3a0', 投資:'#9fb0c8', 重機:'#b5a07a', 結婚:'#c99ab0' };
+  var CATEGORY_COLOR_FALLBACK = ['#a3a86f','#7fa0c4','#c48f7a','#8fb59a','#b48fb0','#c4b07f','#7fb5b5','#a08fc4'];
+  function catColor(name){
+    var own=Object.prototype.hasOwnProperty;
+    if(own.call(CATEGORY_COLOR,name)) return CATEGORY_COLOR[name];
+    var s=String(name||''), h=0;
+    for(var i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))%1000003;
+    return CATEGORY_COLOR_FALLBACK[h%CATEGORY_COLOR_FALLBACK.length];
   }
 
-  function donut(items,grand,caption){
-    var R=52,C=2*Math.PI*R,cx=70,cy=70;
-    var top=items.slice(0,6),rest=items.slice(6),segs=top.map(function(it,i){return {total:it.total,color:PALETTE[i]};});
-    if(rest.length) segs.push({total:rest.reduce(function(s,x){return s+x.total;},0),color:REST_COLOR});
-    var s='<svg width="140" height="140" viewBox="0 0 140 140" role="img" aria-label="分佈">';
-    s+='<circle cx="'+cx+'" cy="'+cy+'" r="'+R+'" fill="none" stroke="var(--bg-raised)" stroke-width="20"/>';
-    var acc=0;
-    if(grand>0) segs.forEach(function(sg){ var dash=sg.total/grand*C;
-      s+='<circle cx="'+cx+'" cy="'+cy+'" r="'+R+'" fill="none" stroke="'+sg.color+'" stroke-width="20" stroke-dasharray="'+Math.max(0,dash-3).toFixed(2)+' '+(C-Math.max(0,dash-3)).toFixed(2)+'" stroke-dashoffset="'+(-acc).toFixed(2)+'" transform="rotate(-90 '+cx+' '+cy+')"/>'; acc+=dash; });
-    s+='<text x="'+cx+'" y="65" text-anchor="middle" font-size="10" fill="var(--text-muted)">'+(caption||'合計')+'</text>';
-    s+='<text x="'+cx+'" y="85" text-anchor="middle" font-size="14" font-weight="600" fill="var(--text-primary)">$'+fmt(grand)+'</text></svg>';
-    return s;
-  }
-  function legend(items,grand){ if(!items.length) return '<div style="color:var(--text-muted);font-size:12px">無資料</div>'; var top=items.slice(0,6),rest=items.slice(6),out=''; top.forEach(function(it,i){ out+=lg(PALETTE[i],it.name,it.total,grand,true); }); if(rest.length){ var rt=rest.reduce(function(s,x){return s+x.total;},0); out+=lg(REST_COLOR,'其他 '+rest.length+' 項',rt,grand); } return out; }
-  // isCat: a ranked category gets its icon tile; the "其他 N 項" rest bucket is not a category and
-  // keeps the plain swatch.
-  function lg(color,name,total,grand,isCat){ var pct=grand>0?Math.round(total/grand*100):0; var mark=(isCat&&typeof catTile==='function')?catTile(name,color,22):'<span class="sw" style="background:'+color+'"></span>'; return '<div class="lg">'+mark+'<span class="lg-name">'+esc(name)+'</span><span class="lg-amt num">$'+fmt(total)+'</span><span class="lg-pct num">'+pct+'%</span></div>'; }
   function kpi(label,valHtml,subHtml,cls){ return '<div class="kpi"><div class="k-label">'+label+'</div><div class="k-value num '+(cls||'')+'">'+valHtml+'</div>'+(subHtml||'')+'</div>'; }
 
   /** What a tab shows for a period whose numbers need the history still loading (#58). */
@@ -711,230 +793,278 @@
     return '<div class="empty">'+esc(periodLabel(r))+' · '+historyWaitText()+historyRetry()+'</div>';
   }
 
-  // ---------- 分析: everything about the ONE selected period ----------
-  // Categories used to be answered twice: this tab's rowCard list gave amount + share +
-  // drilldown, and a separate 排行 panel on another tab gave the vs-previous-period ▲▼ for the
-  // same grouping of the same rows. Seeing "飲食 spent this much, and that is 18% more than
-  // last month, and here are the transactions" meant switching tabs. The delta now lives on
-  // the list row and 排行 is gone. Everything focused on a single period — totals, the day
-  // heatmap, the split, the per-category detail — sits here together.
-  function periodTab(){
-    var r=resolveScope(state.scope), partial=isPartialCur(r);
-    if(scopeNeedsHistory(r)) return historyPanel(r);
-    var grossExp=sumScope(isConsumption,r);
-    var refunds=sumScope(isRefund,r);
-    var expTotal=grossExp-refunds;
-    var incTotal=sumScope(isIncome,r);
-    var net=incTotal-expTotal;
-    var expList=TXNS.filter(function(t){return isConsumption(t)&&inScope(t,r);});
-    var incCount=TXNS.filter(function(t){return isIncome(t)&&inScope(t,r);}).length, expCount=expList.length;
-    // Monthly baselines only mean something for a single month. A year or 全部期間 has no
-    // "typical month of the same kind" to sit against, so the comparison is withheld there —
-    // same rule the previous-period version used, for the same reason.
-    var selKey=(r.level==='month')?r.year+'-'+('0'+r.month).slice(-2):null;
-    var prog=monthProgress(r);
-    // The baseline is a median over EVERY month with data, so until the history is complete it
-    // would be a number computed from part of them: the loading text stands in for it.
-    var waitBase=!!selKey&&!HISTORY.complete;
-    var baseExp=selKey&&!waitBase?monthlyBaseline(isConsumption,selKey):null;
-    var baseInc=selKey&&!waitBase?monthlyBaseline(isIncome,selKey):null;
-
-    var subs=recurring(), subTot=subs.reduce(function(s,x){return s+x.amt;},0), subNames={}; subs.forEach(function(x){ subNames[x.name]=1; });
-    var dim=daysInMonth(r.year,r.month), proj=isCurMonth(r)?projectMonth(expList,Math.min(NOW.day,dim),dim,subNames,subTot)-refunds:null;
-    var projNet = proj!=null ? incTotal-proj : net;
-    var saveRate, saveLbl, saveNote='';
-    if(partial && incTotal>0 && proj!=null){ saveRate=Math.round(projNet/incTotal*100); saveLbl='預估儲蓄率'; saveNote='<div class="k-sub2">基於預估月底支出</div>'; }
-    else { saveRate=incTotal>0?Math.round(net/incTotal*100):null; saveLbl='儲蓄率'; }
-
-    var advTotal=advIn(expList);
-    var expSub='<div class="k-sub">'+(waitBase?historyWaitText():avgDeltaStr(expTotal,baseExp,true,prog))+'</div>'+(refunds>0?'<div class="k-sub2 num">已折抵退款 −$'+fmt(refunds)+'</div>':'')
-      +(advTotal>0?'<div class="k-sub2 num adv">刷卡 $'+fmt(grossExp+advTotal)+' · 代墊 $'+fmt(advTotal)+' 不計入</div>':'');
-    var avgPer=expCount?Math.round(grossExp/expCount):0;
-
-    var h='<div class="kpis">'
-      + kpi('總支出','$'+fmt(expTotal), expSub, 'spend')
-      + kpi('總收入','$'+fmt(incTotal), '<div class="k-sub">'+(waitBase?historyWaitText():avgDeltaStr(incTotal,baseInc,false,prog))+'</div>', 'income')
-      + kpi('結餘',(net>=0?'+':'−')+'$'+fmt(Math.abs(net)),
-          '<div class="k-sub">'+saveLbl+' '+(saveRate!=null?saveRate+'%':'—')+'</div>'+(saveRate!=null?'<div class="meter"><i style="width:'+Math.max(0,Math.min(100,saveRate))+'%;background:'+meterColor(saveRate)+'"></i></div>':'')+saveNote,
-          net>=0?'pos':'neg')
-      + kpi('交易筆數', fmt(expCount+incCount), '<div class="k-sub num">平均支出 $'+fmt(avgPer)+'/筆</div>', '')
-      + '</div>';
-
-    // Totals, then WHAT the money went on, then WHICH DAY it went. Summary before detail: the
-    // split is a one-glance read of the period, the calendar is where you go to look something up.
-    var map={}; expList.forEach(function(t){ if(!map[t.cat])map[t.cat]={total:0,count:0}; map[t.cat].total+=t.amount; map[t.cat].count++; });
-    var items=Object.keys(map).map(function(k){return {name:k,total:map[k].total,count:map[k].count};}).sort(function(a,b){return b.total-a.total;});
-
-    h+='<div class="grid2">'
-      +'<div class="panel"><h3>支出分類 · 類別 <span class="h3note">'+(refunds>0?'毛額 $'+fmt(grossExp)+' − 退款 $'+fmt(refunds):'')+'</span></h3><div class="donut-wrap">'+donut(items,grossExp,'支出毛額')+'<div class="legend">'+legend(items,grossExp)+'</div></div></div>'
-      +'<div class="panel"><h3 class="inc">收入來源</h3>'+incomeList(TXNS.filter(function(t){return isIncome(t)&&inScope(t,r);}),incTotal)+'</div>'
-      +'</div>';
-
-    var heat=heatPanel(r,isConsumption);
-    h+='<div class="panel" style="margin-bottom:var(--sp4)"><h3>消費日曆熱力圖 <span class="h3note">'
-      + (heat ? r.year+' / '+r.month+' · 每日花費濃淡 · 點有交易的日子看當天明細' : '') + '</span></h3>'
-      + (heat || '<div class="empty" style="padding:var(--sp4) 0">熱力圖只在選擇「單一月份」時顯示。目前為'+(r.level==='year'?'整年':'全部期間')+',請切到「當月」或用右上指定某月。</div>')
-      + '</div>';
-
-    // Per-category monthly means for the chip on each list row. Null outside month scope, which
-    // drops the whole column rather than filling it with em-dashes.
-    var catBase=waitBase?'wait':(selKey?catBaselines(selKey):null);
-
-    h+='<div class="toolbar"><h2>支出明細 · 依類別 <span class="th">金額 · 占比 · 對比常態月 · 點開看交易</span></h2></div>';
-    if(!items.length) h+='<div class="empty">此範圍沒有支出</div>';
-    else { var max=items[0].total; items.forEach(function(it,i){ h+=rowCard(it,i,max,expList,catBase,prog); }); }
-    return h;
+  // ---------- daily (日常) vs project (專案) ----------
+  // A row is a project row if and only if its category is listed in META H (PROJECTS); every other
+  // consumption row is daily. Refunds always offset daily, whatever their category: the Issue's
+  // settled rule, even though a large project refund can make daily dip in that month.
+  var BASE_FLOOR = '2025-10';   // the Gmail-bot era; the earlier Moze months under-record small spends
+  function ymKey(y,m){ return y+'-'+('0'+m).slice(-2); }
+  function addMonths(key,n){ var p=key.split('-'), t=(+p[0])*12+(+p[1]-1)+n; return ymKey(Math.floor(t/12),t%12+1); }
+  function keyCovered(key){ var p=key.split('-'); return historyCovers(+p[0],+p[1]); }
+  function projectStart(name){
+    for(var i=0;i<PROJECTS.length;i++) if(PROJECTS[i].name===name) return PROJECTS[i].start;
+    return null;
+  }
+  function isProjectCat(name){ return projectStart(name)!=null; }
+  function isDailyTxn(t){ return isConsumption(t)&&!isProjectCat(t.cat); }
+  /** Daily spending in scope r: the daily consumption rows, their gross, the refunds in scope and
+   *  the net total (gross − refunds). */
+  function dailyOf(r){
+    var list=TXNS.filter(function(t){ return isDailyTxn(t)&&inScope(t,r); });
+    var gross=sum(list), refunds=sumScope(isRefund,r);
+    return { list:list, gross:gross, refunds:refunds, total:gross-refunds };
+  }
+  /** One project category's consumption rows in scope r. */
+  function projectOf(cat,r){
+    var list=TXNS.filter(function(t){ return isConsumption(t)&&t.cat===cat&&inScope(t,r); });
+    return { list:list, total:sum(list), count:list.length };
+  }
+  /** Last month key the scope reaches ('9999-12' for 全部期間). */
+  function scopeEndKey(r){
+    if(r.level==='month') return ymKey(r.year,r.month);
+    if(r.level==='year') return ymKey(r.year,12);
+    return '9999-12';
+  }
+  /** A project's running total: its consumption from its start month through the end of scope r.
+   *  null while the rows from the start month are not all loaded yet (#58). */
+  function projectRunning(cat,r){
+    var start=projectStart(cat); if(start==null) return null;
+    if(!keyCovered(start)) return null;
+    var end=scopeEndKey(r);
+    return TXNS.reduce(function(s,t){
+      if(!isConsumption(t)||t.cat!==cat) return s;
+      var k=ymKey(t.y,t.m); return (k>=start&&k<=end)?s+t.amount:s;
+    },0);
+  }
+  /** Per month 'YYYY-MM': daily (net of refunds), gross daily, refunds, income, and the
+   *  consumption per daily category (cats) and per project (proj). One pass over TXNS. */
+  function monthTotals(){
+    var out={};
+    TXNS.forEach(function(t){
+      if(!t.y||!t.m) return;
+      var k=ymKey(t.y,t.m), o=out[k]||(out[k]={ daily:0, gross:0, refunds:0, income:0, cats:{}, proj:{} });
+      if(isConsumption(t)){
+        if(isProjectCat(t.cat)) o.proj[t.cat]=(o.proj[t.cat]||0)+t.amount;
+        else { o.gross+=t.amount; o.cats[t.cat]=(o.cats[t.cat]||0)+t.amount; }
+      } else if(isRefund(t)) o.refunds+=t.amount;
+      else if(isIncome(t)) o.income+=t.amount;
+    });
+    Object.keys(out).forEach(function(k){ out[k].daily=out[k].gross-out[k].refunds; });
+    return out;
   }
 
-  // ---------- 趨勢: only what needs MORE THAN ONE period to mean anything ----------
-  function trendTab(){
-    var r=resolveScope(state.scope);
-    if(scopeNeedsHistory(r)) return historyPanel(r);
-    var expList=TXNS.filter(function(t){return isConsumption(t)&&inScope(t,r);});
-    var cardExpList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
-    var subs=recurring(), subTot=subs.reduce(function(s,x){return s+x.amt;},0), subNames={}; subs.forEach(function(x){ subNames[x.name]=1; });
-
-    var h='<div class="panel" style="margin-bottom:var(--sp4)"><h3>每月收支趨勢 <span class="h3note">'+trendMaxNote(r,subNames,subTot)+'</span></h3>'+trendChart(r,subNames,subTot)+'</div>';
-
-    h+='<div class="grid2"><div class="panel"><h3>定期訂閱 <span class="h3note">每月固定 · 年約 $'+fmt(subTot*12)+'</span></h3>'+subPanel(subs,subTot)+'</div>'
-      +'<div class="panel"><h3>Top 商店 <span class="h3note">本範圍</span></h3>'+topMerchants(expList)+'</div></div>';
-
-    // 信用卡別 sits here rather than on 分析: which card was used is not part of reading a month,
-    // it is a slow-moving habit, and it was crowding the page the owner actually reads.
-    h+='<div class="panel"><h3>信用卡別分析 <span class="h3note">各卡本範圍支出</span></h3>'+cardPanel(cardExpList)+'</div>';
-
-    // The 轉帳 panel is deliberately absent. Categorized transfers already participate in
-    // consumption analysis, while payment-type presentation remains on each transaction row.
-    return h;
-  }
-  function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+splitMark(t)+'</span></div>'; }
-  // ---------- monthly baseline: "how does this month compare to a typical month" ----------
-  // Replaces the previous-period comparison. Comparing July to June answers a different, noisier
-  // question — one unusual month poisons the next month's reading. A monthly mean says how far
-  // this month sits from normal, which is what the number is being read for.
-  //
-  // Baseline months are every month that HAS data, minus two exclusions: the month being looked
-  // at (it cannot be its own baseline) and the current month whenever it is still running, since
-  // a part-month total is not a representative month. A month with data but zero in some category
-  // still counts as a zero for that category — that is what an average over months means.
-  function monthKeysWithData(){
-    var s={}; TXNS.forEach(function(t){ if(t.y&&t.m) s[t.y+'-'+('0'+t.m).slice(-2)]=1; });
-    return Object.keys(s).sort();
-  }
   function curPartialKey(){
     return NOW.day<daysInMonth(NOW.year,NOW.month) ? NOW.year+'-'+('0'+NOW.month).slice(-2) : null;
   }
-  function baselineKeys(selKey){
-    var skip={}; skip[selKey]=1; var cp=curPartialKey(); if(cp) skip[cp]=1;
-    return monthKeysWithData().filter(function(k){ return !skip[k]; });
+  /**
+   * The months a selected month is compared against: the 12 complete months before it, counting
+   * only months from BASE_FLOOR on, and never the running current month. For 2026-09 that is
+   * 2025-10..2026-08, 11 months. Calendar months: a month with no rows counts as a zero.
+   */
+  function baselineWindow(selKey){
+    var cp=curPartialKey(), now=ymKey(NOW.year,NOW.month), keys=[];
+    for(var i=1;i<=12;i++){
+      var k=addMonths(selKey,-i);
+      if(k<BASE_FLOOR) break;
+      if(k===cp||k>now) continue;
+      keys.unshift(k);
+    }
+    return keys;
   }
   /**
-   * The baseline is the MEDIAN monthly total, not the mean.
-   *
-   * Measured on the real 11 completed months: mean total spend is $121,037, median is $74,580 —
-   * the mean sits 62% higher and only 3 of the 11 months clear it, so a mean baseline would label
-   * two thirds of normal months "below average". One month (2026-01, $414,102) does that all by
-   * itself. Per category it is worse: 旅遊's mean is 540% above its median, 家居's 343%. Median is
-   * what "a typical month" means when a few months are extreme, which is the question being asked.
-   *
-   * Sparse categories fall back to the mean: a category appearing in fewer than half the months
-   * has a median of 0, and dividing by it would flag it as brand new every single time. The
-   * tooltip says which basis was used, so the number is never silently one or the other.
-   * (To use the mean everywhere instead, return `avg` from pickBasis_.)
+   * The median of a sorted list; an even count averages the middle pair. A median, not a mean:
+   * a few extreme months (a house down payment, a trip) would otherwise label most normal months
+   * "below average". `median()` above returns the upper middle and is kept for recurring().
    */
   function median_(sorted){
     if(!sorted.length) return 0;
     var n=sorted.length;
     return n%2 ? sorted[(n-1)/2] : (sorted[n/2-1]+sorted[n/2])/2;
   }
-  function pickBasis_(vals){
-    var sorted=vals.slice().sort(function(a,b){ return a-b; });
-    var med=median_(sorted);
-    var avg=vals.reduce(function(s,v){ return s+v; },0)/(vals.length||1);
-    return med>0 ? { ref: med, basis: '月常態' } : { ref: avg, basis: '月平均(偶發類別)' };
+  function sortNum(a){ return a.slice().sort(function(x,y){ return x-y; }); }
+  /** The daily baseline for month selKey: the owner's monthly budget when that is the chosen
+   *  comparison, else the median daily total over baselineWindow. null when there is no window
+   *  month; 'wait' while a window month is not loaded yet (#58). `mt` is monthTotals(). */
+  function dailyBaseline(selKey,mt){
+    if(BASELINE&&BASELINE.mode==='budget'&&BASELINE.amount>0) return { ref:BASELINE.amount, budget:true, months:0 };
+    var keys=baselineWindow(selKey); if(!keys.length) return null;
+    if(!keys.every(keyCovered)) return 'wait';
+    var vals=sortNum(keys.map(function(k){ return mt[k]?mt[k].daily:0; }));
+    return { ref:median_(vals), budget:false, months:keys.length };
   }
-  /** Monthly baseline for the rows `pred` accepts, over the months that count. */
-  function monthlyBaseline(pred,selKey){
-    var keys=baselineKeys(selKey); if(!keys.length) return null;
-    var tot={}; keys.forEach(function(k){ tot[k]=0; });
-    TXNS.forEach(function(t){ var k=t.y+'-'+('0'+t.m).slice(-2); if(k in tot && pred(t)) tot[k]+=t.amount; });
-    var b=pickBasis_(keys.map(function(k){ return tot[k]; }));
-    b.months=keys.length;
-    return b;
-  }
-  /** Same, per category, in one pass over the rows. */
-  function catBaselines(selKey){
-    var keys=baselineKeys(selKey); if(!keys.length) return null;
-    var idx={}; keys.forEach(function(k,i){ idx[k]=i; });
-    var per={};   // cat -> array of monthly totals, one slot per baseline month
-    TXNS.forEach(function(t){
-      if(!isConsumption(t)) return;
-      var i=idx[t.y+'-'+('0'+t.m).slice(-2)]; if(i===undefined) return;
-      if(!per[t.cat]){ per[t.cat]=[]; for(var j=0;j<keys.length;j++) per[t.cat].push(0); }
-      per[t.cat][i]+=t.amount;
+  /** Per daily category, its median over the same window: { byCat: { cat: { ref, any } }, months }.
+   *  `any` says the category had spend in some window month; a category missing from byCat had none. */
+  function catMedians(selKey,mt){
+    var keys=baselineWindow(selKey); if(!keys.length) return null;
+    if(!keys.every(keyCovered)) return 'wait';
+    var cats={};
+    keys.forEach(function(k){ if(mt[k]) Object.keys(mt[k].cats).forEach(function(c){ cats[c]=1; }); });
+    var byCat={};
+    Object.keys(cats).forEach(function(c){
+      var vals=keys.map(function(k){ return (mt[k]&&mt[k].cats[c])||0; });
+      byCat[c]={ ref:median_(sortNum(vals)), any:vals.some(function(v){ return v>0; }) };
     });
-    var out={}; Object.keys(per).forEach(function(c){ out[c]=pickBasis_(per[c]); });
-    return { byCat: out, months: keys.length };
+    return { byCat:byCat, months:keys.length };
   }
-  /** Fraction of the selected month elapsed, so a part-month total is compared to a part-month
-   *  baseline instead of always reading as "way below average". 1 for any completed month. */
-  function monthProgress(r){
-    if(!isPartialCur(r)) return 1;
-    return NOW.day/daysInMonth(r.year,r.month);
+  /** Detected subscriptions (recurring()) whose recent rows are all in daily categories. A project's
+   *  recurring charge (a car loan, say) never feeds the daily estimate. */
+  function dailySubs(){
+    var recent={}; monthsBack(6).forEach(function(o){ recent[ymKey(o.y,o.m)]=1; });
+    var projMerchants={};
+    TXNS.forEach(function(t){ if(isConsumption(t)&&isProjectCat(t.cat)&&recent[ymKey(t.y,t.m)]) projMerchants[t.merchant]=1; });
+    return recurring().filter(function(s){ return !projMerchants[s.name]; });
+  }
+  /** Month-end estimate of daily spending for the current month r: daily so far without the
+   *  daily-category subscriptions, per elapsed day, times the days in the month, plus those
+   *  subscriptions' monthly total, less this month's refunds. The month's own total once it ends. */
+  function dailyEstimate(r,dly){
+    var dim=daysInMonth(r.year,r.month), el=Math.min(NOW.day,dim);
+    if(el>=dim) return dly.total;
+    var subs=dailySubs(), names={}, subTot=0;
+    subs.forEach(function(s){ names[s.name]=1; subTot+=s.amt; });
+    var base=sum(dly.list.filter(function(t){ return !names[t.merchant]; }));
+    return Math.round(base/el*dim+subTot-dly.refunds);
+  }
+  /** Average daily total of the 3 months ending with the selected month (the previous month while
+   *  it is still running) and its change against the 3 months before. null when those months reach
+   *  before BASE_FLOOR; 'wait' while one is not loaded. `delta` is null when the previous three do. */
+  function threeMonth(selKey,partial,mt){
+    var end=partial?addMonths(selKey,-1):selKey;
+    var last=[addMonths(end,-2),addMonths(end,-1),end], prev=[addMonths(end,-5),addMonths(end,-4),addMonths(end,-3)];
+    if(last[0]<BASE_FLOOR) return null;
+    var withPrev=prev[0]>=BASE_FLOOR;
+    if(!last.concat(withPrev?prev:[]).every(keyCovered)) return 'wait';
+    function avg(keys){ return keys.reduce(function(s,k){ return s+(mt[k]?mt[k].daily:0); },0)/keys.length; }
+    var a=avg(last), b=withPrev?avg(prev):null;
+    return { avg:a, delta:(b>0)?Math.round((a-b)/b*100):null };
+  }
+  /** Year / 全部期間: the complete months in scope, from the first month with data, never the
+   *  running one. Their daily average is what those scopes show instead of a baseline. */
+  function completeMonthsIn(r,mt){
+    var keys=Object.keys(mt).sort(); if(!keys.length) return [];
+    var cp=curPartialKey(), lastDone=cp?addMonths(cp,-1):ymKey(NOW.year,NOW.month);
+    var start=keys[0], end=lastDone;
+    if(r.level==='year'){ if(ymKey(r.year,1)>start) start=ymKey(r.year,1); if(ymKey(r.year,12)<end) end=ymKey(r.year,12); }
+    var out=[]; for(var k=start;k<=end;k=addMonths(k,1)) out.push(k);
+    return out;
   }
 
-  function baseTip(base,ref,prog){
-    return base.basis+' $'+fmt(ref)+'('+base.months+' 個月'+(prog<1?' · 已依進度折算':'')+')';
-  }
-  function avgDeltaStr(cur,base,spend,prog){
-    if(base==null||!base.ref) return '無常態可比';
-    var ref=base.ref*prog;
-    var lbl='vs '+base.basis.split('(')[0]+(prog<1?' (依進度折算)':'');
-    if(ref<500){ var diff=cur-ref; return lbl+' '+(diff>=0?'+':'−')+'$'+fmt(Math.abs(diff)); }
-    var d=Math.round((cur-ref)/ref*100);
-    if(d===0) return lbl+' 持平';
-    var up=d>0, cls=spend?(up?'up':'down'):(up?'down':'up');
-    return lbl+' <span class="delta '+cls+'" title="'+baseTip(base,ref,prog)+'">'+(up?'▲':'▼')+Math.abs(d)+'%</span>';
-  }
+  function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+splitMark(t)+'</span></div>'; }
   function incomeList(list,incTotal){ if(!list.length) return '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">此範圍沒有收入</div>'; var imap={}; list.forEach(function(t){ imap[t.cat]=(imap[t.cat]||0)+t.amount; }); var items=Object.keys(imap).map(function(k){return {name:k,total:imap[k]};}).sort(function(a,b){return b.total-a.total;}); var out=''; items.forEach(function(it){ var pct=incTotal>0?it.total/incTotal*100:0; out+='<div style="padding:6px 0;border-bottom:1px solid var(--border)"><div class="lrow" style="padding:0;border:none"><span class="ln">'+esc(it.name)+'</span><span class="la inc num">$'+fmt(it.total)+'</span></div><div class="sharebar"><i style="width:'+pct.toFixed(0)+'%"></i></div></div>'; }); out+='<div class="ltot"><span class="t-l">收入合計</span><span class="t-v num" style="color:var(--income)">$'+fmt(incTotal)+'</span></div>'; return out; }
   function monthsBack(n){ var arr=[],y=NOW.year,mm=NOW.month; for(var i=0;i<n;i++){ arr.unshift({y:y,m:mm}); mm--; if(mm<1){mm=12;y--;} } return arr; }
-  function trendData(r,subNames,subTot){ var months=r.level==='year'?(function(){ var a=[],last=(r.year===NOW.year)?NOW.month:12; for(var m=1;m<=last;m++)a.push({y:r.year,m:m}); return a; })():monthsBack(6); return months.map(function(o){ var e=0,in_=0,exps=[]; TXNS.forEach(function(t){ if(t.y===o.y&&t.m===o.m){ if(isConsumption(t)){e+=t.amount; exps.push(t);} else if(isIncome(t)) in_+=t.amount; } }); var dim=daysInMonth(o.y,o.m); var part=(o.y===NOW.year&&o.m===NOW.month&&NOW.day<dim); var proj=part?projectMonth(exps,NOW.day,dim,subNames||{},subTot||0):e; return {label:o.m+'月',exp:e,inc:in_,partial:part,proj:proj,net:in_-e}; }); }
-  function trendMaxNote(r,sn,st){ var d=trendData(r,sn,st); var mx=Math.max.apply(null,d.map(function(x){return Math.max(x.proj,x.inc);})); return '單月上限 $'+fmt(mx); }
-  function trendChart(r,sn,st){
-    var data=trendData(r,sn,st), max=Math.max(1,Math.max.apply(null,data.map(function(d){return Math.max(d.proj,d.inc);})));
-    var out='<div class="tgrid" style="top:18px"><span class="num">$'+fmt(max)+'</span></div><div class="tgrid" style="top:'+(18+54)+'px"><span class="num">$'+fmt(max/2)+'</span></div>';
-    data.forEach(function(d){ var hi=Math.round(d.inc/max*108), he=Math.round(d.exp/max*108), hp=d.partial?Math.round((d.proj-d.exp)/max*108):0;
-      var expTop=(hp>0?'0 0 0 0':'2px 2px 0 0');
-      // fmt() is numeric-only (Math.round().toLocaleString()), so the 'k' suffix must be
-      // appended AFTER formatting — passing "196k" back into fmt() yields NaN.
-      var netc=d.net>=0?'var(--income)':'var(--spend)', an=Math.abs(d.net), nets=(d.net>=0?'+':'−')+'$'+(an/1000>=1?fmt(an/1000)+'k':fmt(an));
-      out+='<div class="tcol'+(d.partial?' partial':'')+'"><div class="tbars"><i class="b-inc" style="height:'+Math.max(2,hi)+'px" title="收入 $'+fmt(d.inc)+'"></i><div class="spendstack">'+(hp>0?'<i class="b-proj" style="height:'+hp+'px" title="預估再增 $'+fmt(d.proj-d.exp)+'"></i>':'')+'<i class="b-exp" style="height:'+Math.max(2,he)+'px;border-radius:'+expTop+'" title="支出 $'+fmt(d.exp)+'"></i></div></div><div class="tlabel">'+d.label+(d.partial?' 至今':'')+'</div><div class="tnetv" style="color:'+netc+'" title="淨額 '+(d.net>=0?'+':'−')+'$'+fmt(Math.abs(d.net))+'">淨'+nets+'</div></div>'; });
-    return '<div class="trend">'+out+'</div><div class="tlegend"><span><i style="background:var(--income)"></i>收入</span><span><i style="background:var(--spend)"></i>支出</span><span><i class="proj"></i>月底預估</span><span>「淨」=當月收支差</span></div>';
-  }
   function recurring(){ var m={}; TXNS.filter(isConsumption).forEach(function(t){ var k=t.y+'-'+('0'+t.m).slice(-2); if(!m[t.merchant])m[t.merchant]={}; m[t.merchant][k]=(m[t.merchant][k]||0)+t.amount; }); var recent=monthsBack(6).map(function(o){return o.y+'-'+('0'+o.m).slice(-2);}); var last2=recent.slice(-2); var out=[]; Object.keys(m).forEach(function(name){ var present=recent.filter(function(k){return m[name][k]!=null;}); if(present.length<4) return; if(!last2.some(function(k){return m[name][k]!=null;})) return; var amts=present.map(function(k){return m[name][k];}); var med=median(amts); if(amts.every(function(a){return Math.abs(a-med)<=med*0.12;})) out.push({name:name,amt:med}); }); return out.sort(function(a,b){return b.amt-a.amt;}); }
   function subPanel(subs,tot){ if(!subs.length) return '<div style="color:var(--text-muted);font-size:12px">未偵測到定期扣款</div>'; var out=''; subs.forEach(function(x){ out+='<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls">每月</span><span class="la num">$'+fmt(x.amt)+'</span></div>'; }); out+='<div class="ltot"><span class="t-l">每月合計</span><span class="t-v num">$'+fmt(tot)+'</span></div>'; return out; }
   function topMerchants(exp){ var m={}; exp.forEach(function(t){ if(!m[t.merchant])m[t.merchant]={total:0,count:0}; m[t.merchant].total+=t.amount; m[t.merchant].count++; }); var arr=Object.keys(m).map(function(k){return {name:k,total:m[k].total,count:m[k].count};}).sort(function(a,b){return b.total-a.total;}).slice(0,6); if(!arr.length) return '<div style="color:var(--text-muted);font-size:12px">無資料</div>'; var out=''; arr.forEach(function(x){ out+='<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls num">'+x.count+' 筆</span><span class="la num">$'+fmt(x.total)+'</span></div>'; }); return out; }
-  /** vs-monthly-mean chip for one category. `catBase` null ⇒ nothing comparable, render nothing
-   *  at all rather than an em-dash. `prog` scales the baseline for a month still in progress. */
-  function catDelta(name,cur,catBase,prog){
-    if(!catBase) return '';
-    if(catBase==='wait') return '<span class="delta flat" title="'+historyWaitText()+'">…</span>';
-    var b=catBase.byCat[name];
-    if(!b||!b.ref) return '<span class="delta up" title="其他月份沒有這一類">新</span>';
-    var ref=b.ref*prog, tip=baseTip({basis:b.basis,months:catBase.months},ref,prog);
-    var d=Math.round((cur-ref)/ref*100);
-    if(d===0) return '<span class="delta flat" title="'+tip+'">持平</span>';
+
+  // ---------- 總覽 ----------
+  // Daily spending is the headline, compared with a normal month (the median of the window, or the
+  // owner's budget). Project categories sit in their own card with this period's amount and a
+  // running total since their start month. Baselines and per-category deltas only mean something
+  // for a single month; a year or 全部期間 shows the daily total and its average per complete month.
+  function periodTab(){
+    var r=resolveScope(state.scope);
+    if(scopeNeedsHistory(r)) return historyPanel(r);
+    var mt=monthTotals(), dly=dailyOf(r);
+    var selKey=(r.level==='month')?ymKey(r.year,r.month):null;
+    var left=heroCard(r,selKey,mt,dly)+dailyCard(r,selKey,mt,dly);
+    var heat=heatPanel(r,isConsumption);
+    var right=projectsCard(r,dly)
+      +'<div class="panel"><h3>消費日曆 <span class="h3note">'+(heat?r.year+' / '+r.month+' · 含專案 · 點日子看明細':'')+'</span></h3>'
+      +(heat||'<div class="empty" style="padding:var(--sp4) 0">消費日曆只在「月」顯示。</div>')+'</div>';
+    return '<div class="ovgrid"><div class="ovcol">'+left+'</div><div class="ovcol">'+right+'</div></div>';
+  }
+  /** The status chip: within ±5% of normal, then warn up to +20% and bad above, good below. */
+  function heroChip(value,base,estimate){
+    if(base==='wait') return '<span class="chip flat">'+historyWaitText()+'</span>';
+    if(!base||!(base.ref>0)) return '';
+    var d=Math.round((value-base.ref)/base.ref*100), pre=estimate?'預估 ':'';
+    if(Math.abs(d)<=5) return '<span class="chip ok">'+pre+'接近常態</span>';
+    if(d>0) return '<span class="chip '+(d>20?'bad':'warn')+'">'+pre+'高於常態 '+d+'%</span>';
+    return '<span class="chip good">'+pre+'低於常態 '+Math.abs(d)+'%</span>';
+  }
+  function heroCard(r,selKey,mt,dly){
+    var partial=isPartialCur(r), cur=isCurMonth(r);
+    var base=selKey?dailyBaseline(selKey,mt):null;
+    var est=(selKey&&cur)?dailyEstimate(r,dly):null;
+    var h='<div class="panel hero"><div class="hero-top"><span class="eyebrow">日常支出</span>'
+      +(selKey?heroChip(est!=null&&partial?est:dly.total,base,est!=null&&partial):'')+'</div>'
+      +'<div class="hero-num num">$'+fmt(dly.total)+'</div>';
+    if(selKey){
+      var ref=(base&&base!=='wait')?base.ref:0, ratio=ref>0?dly.total/ref:0;
+      var fill=Math.min(ratio,1)/1.4*100, over=Math.max(0,Math.min(ratio,1.4)-1)/1.4*100;
+      h+='<div class="hmeter" aria-hidden="true"><i class="hm-fill" style="width:'+fill.toFixed(1)+'%"></i>'
+        +(over>0?'<i class="hm-over" style="left:'+(100/1.4).toFixed(1)+'%;width:'+over.toFixed(1)+'%"></i>':'')
+        +'<i class="hm-mark"></i></div>';
+      var leftTxt=base==='wait'?historyWaitText()
+        :(!base?'尚無常態可比':(base.budget?'自訂預算 $'+fmt(base.ref):'常態（'+base.months+' 個月中位數）$'+fmt(base.ref)));
+      var rightTxt=(est!=null&&partial)?'預估月底 $'+fmt(est):(ref>0?Math.round(ratio*100)+'%':'');
+      h+='<div class="hero-legend num"><span>'+leftTxt+'</span><span>'+rightTxt+'</span></div>';
+    } else {
+      var months=completeMonthsIn(r,mt), tot=months.reduce(function(s,k){ return s+(mt[k]?mt[k].daily:0); },0);
+      h+='<div class="hero-legend num"><span>'+(months.length?'平均每月 $'+fmt(tot/months.length)+'（'+months.length+' 個完整月）':'尚無完整月份')+'</span></div>';
+    }
+    var adv=advIn(dly.list), notes=[];
+    if(dly.refunds>0) notes.push('已折抵退款 −$'+fmt(dly.refunds));
+    if(adv>0) notes.push('<span class="adv">刷卡 $'+fmt(dly.gross+adv)+' · 代墊 $'+fmt(adv)+' 不計入</span>');
+    if(selKey){
+      var tm=threeMonth(selKey,partial,mt);
+      if(tm==='wait') notes.push('近 3 月平均 '+historyWaitText());
+      else if(tm) notes.push('近 3 月平均 $'+fmt(tm.avg)+(tm.delta==null?'':(tm.delta===0?' 持平':' <span class="delta '+(tm.delta>0?'up':'down')+'">'+(tm.delta>0?'▲':'▼')+Math.abs(tm.delta)+'%</span>')));
+    }
+    if(notes.length) h+='<div class="hero-sub num">'+notes.join(' · ')+'</div>';
+    // Income, balance and savings rate against ALL outflow (daily + projects), as before the split.
+    var incList=TXNS.filter(function(t){ return isIncome(t)&&inScope(t,r); }), inc=sum(incList);
+    var outflow=sumScope(isConsumption,r)-dly.refunds, net=inc-outflow;
+    var count=TXNS.filter(function(t){ return (isConsumption(t)||isIncome(t))&&inScope(t,r); }).length;
+    h+='<div class="hero-stats num">'
+      +'<div><span>收入</span><b class="inc">'+(inc>0?'$'+fmt(inc):'—')+'</b></div>'
+      +'<div><span>結餘</span><b class="'+(net>=0?'inc':'spend')+'">'+(inc>0?(net>=0?'+':'−')+'$'+fmt(Math.abs(net)):'—')+'</b></div>'
+      +'<div><span>儲蓄率</span><b>'+(inc>0?Math.round(net/inc*100)+'%':'—')+'</b></div>'
+      +'<div><span>筆數</span><b>'+fmt(count)+'</b></div></div>';
+    if(incList.length){
+      h+='<button type="button" class="incsrc-toggle" data-incsrc aria-expanded="'+(incomeOpen?'true':'false')+'"><span>收入來源</span><span class="chev">▶</span></button>'
+        +(incomeOpen?'<div class="incsrc">'+incomeList(incList,inc)+'</div>':'');
+    }
+    return h+'</div>';
+  }
+  /** Daily categories as horizontal bars, largest first, each with a white marker at its normal
+   *  month and a vs-normal chip; tapping one lists its rows, tapping a row opens editRow. Deltas
+   *  only for a completed single month. */
+  function dailyCard(r,selKey,mt,dly){
+    var map={}; dly.list.forEach(function(t){ if(!map[t.cat]) map[t.cat]={total:0,count:0}; map[t.cat].total+=t.amount; map[t.cat].count++; });
+    var items=Object.keys(map).map(function(k){ return {name:k,total:map[k].total,count:map[k].count}; }).sort(function(a,b){ return b.total-a.total; });
+    var norms=(selKey&&!isPartialCur(r))?catMedians(selKey,mt):null;
+    var scale=items.length?items[0].total:0;
+    if(norms&&norms!=='wait') items.forEach(function(it){ var b=norms.byCat[it.name]; if(b&&b.ref>scale) scale=b.ref; });
+    var h='<div class="panel"><h3>日常類別 <span class="h3note">'+(norms&&norms!=='wait'?'白線 = 常態月':'')+'</span></h3>';
+    if(!items.length) return h+'<div class="empty" style="padding:var(--sp4) 0">此範圍沒有日常支出</div></div>';
+    items.forEach(function(it){ h+=rowCard(it,scale,dly.list,norms); });
+    return h+'</div>';
+  }
+  /** vs-normal chip for one daily category. `norms` null ⇒ nothing (year / 全部 / a running month);
+   *  'wait' ⇒ the loading mark. No spend in any window month ⇒ 新; spend but a median of 0 (it shows
+   *  up in fewer than half the months) ⇒ no chip, since a percentage of 0 means nothing. */
+  function catDelta(name,cur,norms){
+    if(!norms) return '';
+    if(norms==='wait') return '<span class="delta flat" title="'+historyWaitText()+'">…</span>';
+    var b=norms.byCat[name];
+    if(!b||!b.any) return '<span class="delta new" title="常態月份沒有這一類">新</span>';
+    if(!(b.ref>0)) return '';
+    var d=Math.round((cur-b.ref)/b.ref*100), tip='常態 $'+fmt(b.ref)+'（'+norms.months+' 個月中位數）';
+    if(Math.abs(d)<=10) return '<span class="delta flat" title="'+tip+'">≈ 常態</span>';
     return '<span class="delta '+(d>0?'up':'down')+'" title="'+tip+'">'+(d>0?'▲':'▼')+Math.abs(d)+'%</span>';
   }
-  function rowCard(it,i,max,exp,catBase,prog){
-    var color=PALETTE[Math.min(i,PALETTE.length-1)],isOpen=(openRow===it.name);
-    var grand=exp.reduce(function(s,t){return s+t.amount;},0);
+  function rowCard(it,scale,exp,norms){
+    var color=catColor(it.name), isOpen=(openRow===it.name);
+    var grand=exp.reduce(function(s,t){ return s+t.amount; },0);
     var pct=grand>0?Math.round(it.total/grand*100):0;
-    var list=exp.filter(function(t){return t.cat===it.name;}).sort(function(a,b){return (a.y-b.y)||(a.m-b.m)||(a.d-b.d);});
+    var list=exp.filter(function(t){ return t.cat===it.name; }).sort(function(a,b){ return (a.y-b.y)||(a.m-b.m)||(a.d-b.d); });
     var advCat=advIn(list);
-    var h='<div class="row-card'+(isOpen?' open':'')+'" data-row="'+esc(it.name)+'"><div class="rc-top"><span class="rc-name">'+(typeof catTile==='function'?catTile(it.name,color,28):'<span class="dot" style="background:'+color+'"></span>')+esc(it.name)+'</span>'
-      +'<span class="rc-end">'+catDelta(it.name,it.total,catBase,prog)+'<span class="rc-total num">$'+fmt(it.total)+'</span><span class="chev">▶</span></span></div>'
-      +'<div class="rc-bar"><i style="width:'+(max>0?(it.total/max*100).toFixed(1):0)+'%;background:'+color+'"></i></div>'
+    var b=(norms&&norms!=='wait')?norms.byCat[it.name]:null;
+    var mark=(b&&b.ref>0&&scale>0)?'<i class="rc-mark" style="left:'+(b.ref/scale*100).toFixed(1)+'%"></i>':'';
+    var h='<div class="row-card'+(isOpen?' open':'')+'" data-row="'+esc(it.name)+'"><div class="rc-top"><span class="rc-name">'+(typeof catTile==='function'?catTile(it.name,color,28):'')+esc(it.name)+'</span>'
+      +'<span class="rc-end">'+catDelta(it.name,it.total,norms)+'<span class="rc-total num">$'+fmt(it.total)+'</span><span class="chev">▶</span></span></div>'
+      +'<div class="rc-bar"><i style="width:'+(scale>0?(it.total/scale*100).toFixed(1):0)+'%;background:'+color+'"></i>'+mark+'</div>'
       +'<div class="rc-meta num">'+it.count+' 筆 · 平均 $'+fmt(it.total/it.count)+' · 占 '+pct+'%'
       +(advCat>0?' · <span class="adv">代墊 $'+fmt(advCat)+' 未計入</span>':'')+'</div>';
     var d='';
@@ -943,6 +1073,125 @@
     }
     return h+d+'</div>';
   }
+  /** Project categories: a thin stacked bar of daily + each project, the period's 專案合計 and
+   *  總流出, then one row per project with its running total since its start month. Hidden when no
+   *  category is a project. */
+  function projectsCard(r,dly){
+    if(!PROJECTS.length) return '';
+    var rows=PROJECTS.map(function(p){ var o=projectOf(p.name,r); o.name=p.name; o.start=p.start; return o; });
+    var projTot=rows.reduce(function(s,o){ return s+o.total; },0), outflow=Math.max(0,dly.total)+projTot;
+    var bar='<div class="pj-stack" aria-hidden="true">'+(outflow>0?'<i style="width:'+(Math.max(0,dly.total)/outflow*100).toFixed(1)+'%;background:'+DAILY_COLOR+'"></i>'
+      +rows.map(function(o){ return '<i style="width:'+(o.total/outflow*100).toFixed(1)+'%;background:'+catColor(o.name)+'"></i>'; }).join(''):'')+'</div>';
+    var h='<div class="panel projects"><h3>專案</h3>'+bar
+      +'<div class="pj-sum num"><span>專案合計 <b>$'+fmt(projTot)+'</b></span><span>總流出 <b>$'+fmt(outflow)+'</b></span></div>';
+    rows.forEach(function(o){
+      var isOpen=openProject===o.name, run=projectRunning(o.name,r), p=o.start.split('-');
+      var runTxt=p[0]+'/'+p[1]+' 起累計 '+(run==null?historyWaitText():'$'+fmt(run));
+      h+='<div class="pj-row'+(isOpen?' open':'')+'" data-proj="'+esc(o.name)+'">'
+        +'<button type="button" class="pj-toggle" data-projtoggle="'+esc(o.name)+'" aria-expanded="'+(isOpen?'true':'false')+'">'
+        +(typeof catTile==='function'?catTile(o.name,catColor(o.name),28):'')
+        +'<span class="pj-name"><b>'+esc(o.name)+'</b><span class="pj-run num">'+runTxt+'</span></span>'
+        +'<span class="pj-amt num"><b>$'+fmt(o.total)+'</b><span>'+o.count+' 筆</span></span><span class="chev">▶</span></button>';
+      if(isOpen){
+        var list=o.list.slice().sort(function(a,b){ return (a.y-b.y)||(a.m-b.m)||(a.d-b.d); });
+        h+='<div class="drill">'+(list.length?list.map(categoryTxn).join(''):'<div style="color:var(--text-muted);font-size:12px">此範圍沒有交易</div>')+'</div>';
+      }
+      h+='</div>';
+    });
+    return h+'</div>';
+  }
+
+  // ---------- 趨勢: only what needs MORE THAN ONE period to mean anything ----------
+  /** One row per month from BASE_FLOOR through the current month: daily (net of refunds), each
+   *  project, total outflow, income, and whether the month is still running. */
+  function trendRows(mt){
+    var cp=curPartialKey(), now=ymKey(NOW.year,NOW.month), out=[];
+    for(var k=BASE_FLOOR;k<=now;k=addMonths(k,1)){
+      var o=mt[k]||{ daily:0, income:0, proj:{} }, proj={}, pt=0;
+      PROJECTS.forEach(function(p){ proj[p.name]=o.proj[p.name]||0; pt+=proj[p.name]; });
+      out.push({ key:k, daily:o.daily, proj:proj, total:o.daily+pt, income:o.income, partial:k===cp });
+    }
+    return out;
+  }
+  function trendTab(){
+    var r=resolveScope(state.scope);
+    if(scopeNeedsHistory(r)) return historyPanel(r);
+    var expList=TXNS.filter(function(t){return isConsumption(t)&&inScope(t,r);});
+    var cardExpList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
+    var subs=recurring(), subTot=subs.reduce(function(s,x){return s+x.amt;},0);
+    var dailyOnly=state.trendMode==='daily';
+    var seg='<span class="seg" role="group" aria-label="圖表範圍"><button type="button" data-trendmode="all" aria-pressed="'+(!dailyOnly)+'">日常＋專案</button><button type="button" data-trendmode="daily" aria-pressed="'+dailyOnly+'">只看日常</button></span>';
+    var h='<div class="panel" style="margin-bottom:var(--sp4)"><h3>每月支出 '+seg+'</h3>';
+    var floor=BASE_FLOOR.split('-');
+    if(!historyCovers(+floor[0],+floor[1])) h+='<div class="empty">'+historyWaitText()+historyRetry()+'</div></div>';
+    else {
+      var mt=monthTotals(), rows=trendRows(mt);
+      h+=trendChart(rows,mt,dailyOnly)+'</div>'+monthTable(rows);
+    }
+    h+='<div class="grid2"><div class="panel"><h3>定期訂閱 <span class="h3note">每月固定 · 年約 $'+fmt(subTot*12)+'</span></h3>'+subPanel(subs,subTot)+'</div>'
+      +'<div class="panel"><h3>Top 商店 <span class="h3note">本範圍</span></h3>'+topMerchants(expList)+'</div></div>';
+    // 信用卡別 sits here rather than on 總覽: which card was used is not part of reading a month,
+    // it is a slow-moving habit, and it was crowding the page the owner actually reads.
+    h+='<div class="panel"><h3>信用卡別分析 <span class="h3note">各卡本範圍支出</span></h3>'+cardPanel(cardExpList)+'</div>';
+    return h;
+  }
+  function wan(n){ var v=n/10000; return (v>=10||v===Math.round(v)?Math.round(v):v.toFixed(1))+' 萬'; }
+  /** Stacked monthly bars (daily, then each project), y-axis in 萬. Daily-only mode adds the
+   *  dashed baseline (the current month's) and the 3-month rolling average of complete months; an
+   *  income line is drawn whenever the range has income. Lines are one SVG laid over the bars. */
+  function trendChart(rows,mt,dailyOnly){
+    var n=rows.length, base=dailyOnly?dailyBaseline(ymKey(NOW.year,NOW.month),mt):null;
+    var baseRef=(base&&base!=='wait'&&base.ref>0)?base.ref:0;
+    var hasInc=rows.some(function(o){ return o.income>0; });
+    var max=1;
+    rows.forEach(function(o){ max=Math.max(max,dailyOnly?o.daily:o.total,hasInc?o.income:0); });
+    if(baseRef) max=Math.max(max,baseRef);
+    max=Math.ceil(max/10000)*10000;
+    var H=150, y=function(v){ return (1-Math.max(0,v)/max)*100; }, x=function(i){ return (i+0.5)/n*100; };
+    var bars=rows.map(function(o){
+      var segs='<i style="height:'+(Math.max(0,o.daily)/max*H).toFixed(1)+'px;background:'+DAILY_COLOR+'" title="日常 $'+fmt(o.daily)+'"></i>';
+      if(!dailyOnly) PROJECTS.forEach(function(p){ var v=o.proj[p.name]; if(v>0) segs='<i style="height:'+(v/max*H).toFixed(1)+'px;background:'+catColor(p.name)+'" title="'+esc(p.name)+' $'+fmt(v)+'"></i>'+segs; });
+      var m=+o.key.split('-')[1];
+      return '<div class="tc-col'+(o.partial?' partial':'')+'"><div class="tc-bar">'+segs+'</div><div class="tc-lbl">'+(m===1||o.key===BASE_FLOOR?o.key.split('-')[0].slice(2)+'/':'')+m+'</div></div>';
+    }).join('');
+    var lines='';
+    if(baseRef) lines+='<line class="tl-base" x1="0" x2="100" y1="'+y(baseRef).toFixed(2)+'" y2="'+y(baseRef).toFixed(2)+'"/>';
+    if(dailyOnly){
+      var pts=[];
+      rows.forEach(function(o,i){
+        if(i<2||o.partial||rows[i-1].partial) return;
+        pts.push(x(i).toFixed(2)+','+y((o.daily+rows[i-1].daily+rows[i-2].daily)/3).toFixed(2));
+      });
+      if(pts.length>1) lines+='<polyline class="tl-avg" points="'+pts.join(' ')+'"/>';
+    }
+    if(hasInc) lines+='<polyline class="tl-inc" points="'+rows.map(function(o,i){ return x(i).toFixed(2)+','+y(o.income).toFixed(2); }).join(' ')+'"/>';
+    var out='<div class="tchart"><div class="tc-axis num"><span style="top:0">'+wan(max)+'</span><span style="top:'+(H/2)+'px">'+wan(max/2)+'</span><span style="top:'+H+'px">0</span></div>'
+      +'<div class="tc-plot"><div class="tc-grid" style="top:0"></div><div class="tc-grid" style="top:'+(H/2)+'px"></div>'
+      +'<svg class="tc-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">'+lines+'</svg>'
+      +'<div class="tc-bars">'+bars+'</div></div></div>';
+    var leg='<div class="tlegend"><span><i style="background:'+DAILY_COLOR+'"></i>日常</span>';
+    if(!dailyOnly) PROJECTS.forEach(function(p){ leg+='<span><i style="background:'+catColor(p.name)+'"></i>'+esc(p.name)+'</span>'; });
+    if(baseRef) leg+='<span><i class="lk-base"></i>'+(base.budget?'自訂預算':'常態')+' $'+fmt(baseRef)+'</span>';
+    else if(dailyOnly&&base==='wait') leg+='<span>常態 '+historyWaitText()+'</span>';
+    if(dailyOnly) leg+='<span><i class="lk-avg"></i>3 個月平均</span>';
+    if(hasInc) leg+='<span><i class="lk-inc"></i>收入</span>';
+    if(rows.some(function(o){ return o.partial; })) leg+='<span>淡色 = 本月至今</span>';
+    return out+leg+'</div>';
+  }
+  /** 月份 / 日常 / one column per project / 總流出, newest first. */
+  function monthTable(rows){
+    var h='<div class="panel" style="margin-bottom:var(--sp4)"><h3>每月明細</h3><div class="mtable-wrap"><table class="mtable num"><thead><tr><th>月份</th><th>日常</th>';
+    PROJECTS.forEach(function(p){ h+='<th>'+esc(p.name)+'</th>'; });
+    h+='<th>總流出</th></tr></thead><tbody>';
+    rows.slice().reverse().forEach(function(o){
+      var p=o.key.split('-');
+      h+='<tr><td>'+p[0].slice(2)+'/'+p[1]+(o.partial?' 至今':'')+'</td><td>$'+fmt(o.daily)+'</td>';
+      PROJECTS.forEach(function(pj){ h+='<td>'+(o.proj[pj.name]?'$'+fmt(o.proj[pj.name]):'—')+'</td>'; });
+      h+='<td>$'+fmt(o.total)+'</td></tr>';
+    });
+    return h+'</tbody></table></div></div>';
+  }
+
   function categoryTxn(t){
     var isOpen=openCategoryTxn===t.id;
     // Reuse the compact transaction summary; mount the shared editor only on selection.
@@ -1894,7 +2143,8 @@
     var n=document.getElementById('settings-account-count'); if(n) n.textContent=banks.length;
   }
   /** The Settings 類別 list in its shown order (settingsCategories). Every handle is disabled while a
-   *  save is in flight. The count is the sortable rows only: 未分類 is display-only and never here. */
+   *  save is in flight. The count is the sortable rows only: 未分類 is display-only and never here.
+   *  Each row also carries its 日常 / 專案 switch and, for a project, its start month (categoryKind). */
   function renderSettingsCategories(){
     var el=document.getElementById('settings-category-list'); if(!el) return;
     var cats=settingsCategories(), off=CATEGORY_SAVE_PENDING?' disabled':'';
@@ -1902,10 +2152,108 @@
     el.innerHTML=cats.length
       ? cats.map(function(name,i){
           return '<li class="settings-row"><button type="button" class="settings-handle" data-cat-idx="'+i+'" aria-label="拖曳排序 '+esc(name)+'，或按上下鍵移動"'+off+'>'+grip+'</button>'
-            +((typeof catTile==='function')?catTile(name,null,30):'')+'<span class="settings-name">'+esc(name)+'</span></li>';
+            +((typeof catTile==='function')?catTile(name,null,30):'')+'<span class="settings-name">'+esc(name)+'</span>'
+            +((typeof categoryKind==='function')?categoryKind(name,i):'')+'</li>';
         }).join('')
       : '<li class="settings-row settings-empty">尚無類別</li>';
     var n=document.getElementById('settings-category-count'); if(n) n.textContent=cats.length;
+  }
+  /** The month a category's first row falls in ('YYYY-MM'), or the current month when it has none:
+   *  the start month a category gets when it is turned into a project. */
+  function earliestCatMonth(name){
+    var first=null;
+    TXNS.forEach(function(t){ if(t.cat===name&&isConsumption(t)){ var k=ymKey(t.y,t.m); if(first==null||k<first) first=k; } });
+    return first||ymKey(NOW.year,NOW.month);
+  }
+  /** One category row's 日常 / 專案 switch and, for a project, its type="month" start input. The
+   *  專案 side waits for the whole history (its default start month is the category's earliest row),
+   *  and the whole row is inert while its own save is in flight. */
+  function categoryKind(name,i){
+    var start=projectStart(name), proj=start!=null, busy=!!PROJECT_SAVING[name];
+    var waitProj=!proj&&!HISTORY.complete;
+    var dis=busy?' disabled':'';
+    return '<span class="settings-kind" role="group" aria-label="'+esc(name)+' 的類型">'
+      +'<button type="button" data-kind="daily" data-kind-idx="'+i+'" aria-pressed="'+(!proj)+'"'+dis+'>日常</button>'
+      +'<button type="button" data-kind="project" data-kind-idx="'+i+'" aria-pressed="'+proj+'"'+((busy||waitProj)?' disabled':'')+(waitProj?' title="'+historyWaitText()+'"':'')+'>專案</button></span>'
+      +(proj?'<input type="month" class="settings-start" data-start-idx="'+i+'" value="'+esc(start)+'" max="'+ymKey(NOW.year,NOW.month)+'" aria-label="'+esc(name)+' 起始月"'+dis+'>':'');
+  }
+  /** One setCategoryProject call. PROJECTS only takes the server's answer: on success the 總覽 / 趨勢
+   *  views re-render from it at once, on failure the row snaps back to it. */
+  function saveCategoryProject(name,start){
+    if(PROJECT_SAVING[name]) return;
+    PROJECT_SAVING[name]=true; setSettingsStatus('saving'); renderSettingsCategories();
+    google.script.run
+      .withSuccessHandler(function(list){
+        PROJECTS=list||[]; delete PROJECT_SAVING[name];
+        renderSettingsCategories(); render(); setSettingsStatus('ok');
+      })
+      .withFailureHandler(function(err){
+        delete PROJECT_SAVING[name]; renderSettingsCategories(); setSettingsStatus('err');
+        toast((err&&err.message)?err.message:String(err),true);
+      })
+      .setCategoryProject(name,start);
+  }
+  function categoryKindClick(e){
+    var b=e.target&&e.target.closest?e.target.closest('[data-kind]'):null;
+    if(!b||b.disabled) return;
+    var name=settingsCategories()[Number(b.getAttribute('data-kind-idx'))]; if(name==null) return;
+    var kind=b.getAttribute('data-kind'), proj=isProjectCat(name);
+    if(kind==='project'&&!proj){ if(!HISTORY.complete) return; saveCategoryProject(name,earliestCatMonth(name)); }
+    else if(kind==='daily'&&proj) saveCategoryProject(name,null);
+  }
+  function categoryStartChange(e){
+    var inp=e.target; if(!inp||!inp.getAttribute||inp.getAttribute('data-start-idx')==null) return;
+    var name=settingsCategories()[Number(inp.getAttribute('data-start-idx'))]; if(name==null) return;
+    var v=String(inp.value||'');
+    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(v)){ inp.value=projectStart(name)||''; return; }
+    if(v!==projectStart(name)) saveCategoryProject(name,v);
+  }
+  /** 日常的比較對象: the median of the past 12 months (default) or a monthly budget. */
+  function renderSettingsBaseline(){
+    var budget=BASELINE&&BASELINE.mode==='budget';
+    ['median','budget'].forEach(function(m){
+      var b=document.getElementById('settings-baseline-'+m); if(!b) return;
+      b.setAttribute('aria-pressed',(m==='budget')===!!budget?'true':'false'); b.disabled=BASELINE_SAVING;
+    });
+    var row=document.getElementById('settings-budget-row'), inp=document.getElementById('settings-budget');
+    if(row) row.hidden=!budget&&!(row.getAttribute&&row.getAttribute('data-open')==='1');
+    if(inp&&document.activeElement!==inp) inp.value=(BASELINE&&BASELINE.amount)?String(BASELINE.amount):'';
+    if(inp) inp.disabled=BASELINE_SAVING;
+  }
+  function saveDailyBaseline(mode,amount){
+    if(BASELINE_SAVING) return;
+    BASELINE_SAVING=true; setSettingsStatus('saving'); renderSettingsBaseline();
+    google.script.run
+      .withSuccessHandler(function(b){
+        BASELINE=b||{ mode:'median', amount:null }; BASELINE_SAVING=false;
+        var row=document.getElementById('settings-budget-row'); if(row&&row.setAttribute) row.setAttribute('data-open','0');
+        renderSettingsBaseline(); render(); setSettingsStatus('ok');
+      })
+      .withFailureHandler(function(err){
+        BASELINE_SAVING=false; renderSettingsBaseline(); setSettingsStatus('err');
+        toast((err&&err.message)?err.message:String(err),true);
+      })
+      .setDailyBaseline(mode,amount);
+  }
+  /** Choosing 自訂預算 with a stored amount saves at once; without one it opens the amount input and
+   *  saves when an amount is entered. 中位數 always saves at once. */
+  function pickBaseline(mode){
+    if(BASELINE_SAVING) return;
+    if(mode==='median'){ if(BASELINE.mode!=='median') saveDailyBaseline('median',null); return; }
+    if(BASELINE.mode==='budget') return;
+    if(BASELINE.amount>0){ saveDailyBaseline('budget',BASELINE.amount); return; }
+    var row=document.getElementById('settings-budget-row'), inp=document.getElementById('settings-budget');
+    if(row){ row.setAttribute('data-open','1'); row.hidden=false; }
+    if(inp&&inp.focus) inp.focus();
+  }
+  function commitBudget(){
+    var inp=document.getElementById('settings-budget'); if(!inp||BASELINE_SAVING) return;
+    var raw=String(inp.value||'').trim().replace(/[$,]/g,''), n=Number(raw);
+    if(!raw) return;
+    if(!(n>0&&Math.floor(n)===n)){ inp.classList.add('bad'); return; }
+    inp.classList.remove('bad');
+    if(BASELINE.mode==='budget'&&n===BASELINE.amount) return;
+    saveDailyBaseline('budget',n);
   }
   function categoryHandle(i){
     var el=document.getElementById('settings-category-list');
@@ -2056,7 +2404,7 @@
     var ov=document.getElementById('settingsOverlay'); if(!ov) return;
     setSettingsTab('accounts'); setSettingsAdd('account',false); setSettingsAdd('category',false);
     if(!CATEGORY_SAVE_PENDING&&!ACCOUNT_CREATE_PENDING) setSettingsStatus('');
-    renderSettingsAccounts(); renderSettingsCategories(); ov.classList.add('on');
+    renderSettingsAccounts(); renderSettingsCategories(); if(typeof renderSettingsBaseline==='function') renderSettingsBaseline(); ov.classList.add('on');
     var tab=document.getElementById('settings-tab-accounts'); if(tab&&tab.focus) tab.focus();
   }
   /** Cancels a drag, sends a keyboard order still inside its debounce, and collapses the add rows. A
@@ -2391,9 +2739,13 @@
     var spendList=all.filter(isConsumption);
     var spend=spendList.reduce(function(s,t){ return s+t.amount; },0);
     var advDay=advIn(spendList);
+    var iso=y+'-'+('0'+m).slice(-2)+'-'+('0'+sd).slice(-2);
+    // The add-on-this-day action lives here, in the detail header, not inside a calendar cell
+    // where it overlapped the day number and the spend colour.
     var h='<div class="hdetail"><div class="ev-head"><span class="lbl">'+m+' / '+sd+' 當天 · <b style="color:var(--text-primary)">'+all.length+'</b> 筆 · 支出 <b class="num" style="color:var(--text-primary)">$'+fmt(spend)+'</b>'
       +(advDay>0?' <span class="orig num">刷卡 $'+fmt(spend+advDay)+'</span>':'')
-      +(pendN?' · 其中 <b style="color:var(--spend)">'+pendN+'</b> 筆待記帳':'')+'</span></div>';
+      +(pendN?' · 其中 <b style="color:var(--spend)">'+pendN+'</b> 筆待記帳':'')+'</span>'
+      +'<button type="button" class="dayadd" data-dayadd="'+iso+'">＋ 在這天新增</button></div>';
     if(!all.length){ return h+'<div class="empty" style="padding:var(--sp4) 0">這天沒有交易</div></div>'; }
     all.forEach(function(t){ h+=editRow(t); });
     return h+'</div>';
@@ -2542,13 +2894,14 @@
       var dd=x.d, v=x.v, future=x.future, today=isCur&&dd===NOW.day;
       if(!future){ total+=v; if(v>0) spentDays++; if(v>peak.v) peak={d:dd,v:v}; }
       var t=maxDay>0?v/maxDay:0, bg=(future||v<=0)?'var(--bg-raised)':blendSpend(0.18+t*0.72);
-      var hit=x.kind!=='inert', sel=hit&&openHeatDay===(y+'-'+m+'-'+dd);
+      // Every real day opens its detail, which lists the day's rows and carries the
+      // ＋ 在這天新增 button; `hit` (days with rows) keeps the hover outline and the dot rule.
+      var hit=x.kind!=='inert', sel=openHeatDay===(y+'-'+m+'-'+dd);
       var dot=x.kind==='zero-spend-hit';
-      var iso=y+'-'+('0'+m).slice(-2)+'-'+('0'+dd).slice(-2);
-      grid+='<div class="cell'+(future?' future':'')+(today?' today':'')+(hit?' hit':'')+(sel?' sel':'')+'"'+(hit?' data-hday="'+y+'-'+m+'-'+dd+'"':'')+' style="background:'+bg+'" title="'+y+'/'+m+'/'+dd+(future?'':' $'+fmt(v))+'"><span class="dn num">'+dd+'</span>'+(dot?'<i class="mark"></i>':'')+'<button type="button" class="hadd" data-hadd="'+iso+'" aria-label="新增 '+y+'/'+m+'/'+dd+' 交易">＋</button></div>';
+      grid+='<div class="cell'+(future?' future':'')+(today?' today':'')+(hit?' hit':'')+(sel?' sel':'')+'" data-hday="'+y+'-'+m+'-'+dd+'" role="button" tabindex="0" aria-label="'+m+' 月 '+dd+' 日'+(future?'':' 支出 $'+fmt(v))+'" style="background:'+bg+'" title="'+y+'/'+m+'/'+dd+(future?'':' $'+fmt(v))+'"><span class="dn num">'+dd+'</span>'+(dot?'<i class="mark"></i>':'')+'</div>';
     });
     grid+='</div>';
-    var tip='<div class="heat-tip"><span>最高:<b class="num">'+(peak.d?m+'/'+peak.d+' · $'+fmt(peak.v):'—')+'</b></span><span>有消費 <b class="num">'+spentDays+'</b> 天</span><span>日均 <b class="num">$'+fmt(lastDay?total/lastDay:0)+'</b></span><span style="margin-left:auto;opacity:.85">點有交易的日子看當天明細</span></div>';
+    var tip='<div class="heat-tip"><span>最高:<b class="num">'+(peak.d?m+'/'+peak.d+' · $'+fmt(peak.v):'—')+'</b></span><span>有消費 <b class="num">'+spentDays+'</b> 天</span><span>日均 <b class="num">$'+fmt(lastDay?total/lastDay:0)+'</b></span><span style="margin-left:auto;opacity:.85">點日子看當天明細、新增交易</span></div>';
     var leg='<div class="heatlegend"><span>少</span><span class="sw" style="background:'+blendSpend(0.18)+'"></span><span class="sw" style="background:'+blendSpend(0.5)+'"></span><span class="sw" style="background:'+blendSpend(0.9)+'"></span><span>多</span></div>';
     var det='';
     if(openHeatDay){ var pp=openHeatDay.split('-'); if(+pp[0]===y&&+pp[1]===m){ det=dayEditor(y,m,+pp[2]); } }
@@ -2556,7 +2909,7 @@
   }
 
   function headSearch(){
-    return '<input class="search" id="q" placeholder="搜尋…" value="'+esc(state.q)+'" spellcheck="false">';
+    return '<input class="search" id="q" type="search" placeholder="搜尋…" aria-label="搜尋交易" value="'+esc(state.q)+'" spellcheck="false">';
   }
   function searchPanel(q){
     var hits=searchHits(TXNS,q), extra=Math.max(0,hits.length-SEARCH_CAP);
@@ -2569,22 +2922,74 @@
     return h+'</div>';
   }
 
+  // ---------- period controls: 月 / 當年 / 全部 plus a ‹ label › stepper ----------
+  /** The scope string for a month or a year: 'month' / 'year' for the current one (so the period
+   *  follows the clock as before), 'YYYY-MM' / 'YYYY' for any other. */
+  function monthScope(y,m){ return (y===NOW.year&&m===NOW.month)?'month':ymKey(y,m); }
+  function yearScope(y){ return y===NOW.year?'year':String(y); }
+  /** First month with a row, so the stepper stops there. The current month when there are none. */
+  function firstDataKey(){
+    var first=null;
+    TXNS.forEach(function(t){ if(t.y&&t.m){ var k=ymKey(t.y,t.m); if(first==null||k<first) first=k; } });
+    var now=ymKey(NOW.year,NOW.month);
+    return (first==null||first>now)?now:first;
+  }
+  function setPeriod(level){
+    var r=resolveScope(state.scope);
+    if(r.level==='month'||r.level==='year') state.selYear=r.year;
+    if(r.level==='month') state.selMonth=r.month;
+    if(level==='month'){
+      // From a year, land on its last month that has happened.
+      var y=state.selYear, m=(y===NOW.year)?Math.min(state.selMonth,NOW.month):state.selMonth;
+      state.scope=monthScope(y,m); state.selMonth=m;
+    } else if(level==='year') state.scope=yearScope(state.selYear);
+    else state.scope='all';
+    openRow=null; openHeatDay=null; openProject=null;
+  }
+  function stepPeriod(dir){
+    var r=resolveScope(state.scope);
+    if(r.level==='month'){
+      var k=addMonths(ymKey(r.year,r.month),dir), now=ymKey(NOW.year,NOW.month);
+      if(k>now||k<firstDataKey()) return;
+      var p=k.split('-'); state.selYear=+p[0]; state.selMonth=+p[1]; state.scope=monthScope(+p[0],+p[1]);
+    } else if(r.level==='year'){
+      var y=r.year+dir;
+      if(y>NOW.year||y<+firstDataKey().split('-')[0]) return;
+      state.selYear=y; state.scope=yearScope(y);
+    } else return;
+    openRow=null; openHeatDay=null; openProject=null;
+  }
+  function periodControls(){
+    var r=resolveScope(state.scope), lv=r.level;
+    function sb(level,label){ return '<button type="button" data-period="'+level+'" aria-pressed="'+(lv===level)+'">'+label+'</button>'; }
+    var h='<div class="controls"><span class="seg" role="group" aria-label="期間">'+sb('month','月')+sb('year','當年')+sb('all','全部')+'</span>';
+    if(lv!=='all'){
+      var first=firstDataKey(), canPrev, canNext, label;
+      if(lv==='month'){ var k=ymKey(r.year,r.month); canPrev=addMonths(k,-1)>=first; canNext=k<ymKey(NOW.year,NOW.month); label=r.year+' 年 '+r.month+' 月'; }
+      else { canPrev=r.year>+first.split('-')[0]; canNext=r.year<NOW.year; label=r.year+' 年'; }
+      h+='<span class="stepper"><button type="button" data-step="-1" aria-label="上一'+(lv==='month'?'個月':'年')+'"'+(canPrev?'':' disabled')+'>‹</button>'
+        +'<span class="step-label num">'+label+'</span>'
+        +'<button type="button" data-step="1" aria-label="下一'+(lv==='month'?'個月':'年')+'"'+(canNext?'':' disabled')+'>›</button></span>';
+    } else h+='<span class="step-label">全部期間</span>';
+    return h+'</div>';
+  }
+
   function render(){
-    var r=resolveScope(state.scope), tab=state.tab, isInbox=tab==='inbox';
+    var tab=state.tab, isInbox=tab==='inbox';
     var nPend=pendingTxns().length;
-    var periodTxt = isInbox ? (state.inboxScope==='year'?NOW.year+' 年 · 待記帳':'全部期間 · 待記帳')
-                  : esc(periodLabel(r));
-    function tb(id,tt,sub){ return '<button data-tab="'+id+'" class="'+(tab===id?'active':'')+'"><span class="tt">'+tt+'</span><span class="tsub">'+sub+'</span></button>'; }
+    function tb(id,tt,sub){ return '<button data-tab="'+id+'" class="'+(tab===id?'active':'')+'" aria-pressed="'+(tab===id)+'"><span class="tt">'+tt+'</span>'+(sub?'<span class="tsub">'+sub+'</span>':'')+'</button>'; }
     // The badge counts every pending row of any date, so it waits for the whole history.
-    var inboxSub = !HISTORY.complete ? historyWaitText() : (nPend ? '<span class="cnt">'+nPend+'</span>筆待處理' : '已全部記帳');
-    var h='<div class="head"><div class="head-top"><span class="title-row"><span class="title">交易 Dashboard</span>'+sheetLink()+'</span><span class="head-actions"><span class="period">'+periodTxt+'</span><button class="settingsbtn" data-settings aria-label="開啟設定">設定</button><button class="addbtn" data-add>＋ 新增</button></span></div>'
-      +'<div class="tabs">'+tb('analysis','分析','這段期間花在哪、哪天花的?')+tb('trend','趨勢','幾個月下來的變化?')+tb('inbox','待記帳',inboxSub)+'</div>';
+    var inboxSub = !HISTORY.complete ? historyWaitText() : (nPend ? '<span class="cnt">'+nPend+'</span>' : '');
+    var settingsIcon='<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
+    var h='<div class="head"><div class="head-top"><span class="title-row"><span class="title">交易 Dashboard</span>'+sheetLink()+'</span><span class="head-actions"><button class="settingsbtn" data-settings aria-label="開啟設定" title="設定">'+settingsIcon+'</button><button class="addbtn" data-add aria-label="新增交易">＋ 新增</button></span></div>'
+      +'<div class="head-search">'+headSearch()+'</div>'
+      +'<div class="tabs">'+tb('analysis','總覽','')+tb('trend','趨勢','')+tb('inbox','待記帳',inboxSub)+'</div>';
     if(isInbox){
-      h+='<div class="controls"><span class="clabel">範圍</span><button class="ctl'+(state.inboxScope==='all'?' active':'')+'" data-iscope="all">全部</button><button class="ctl'+(state.inboxScope==='year'?' active':'')+'" data-iscope="year">本年</button>'
-        +'<button class="ev-toggle" style="margin-left:6px" data-inboxdone>'+(state.inboxDone?'只看待記帳':'一併顯示近 '+INBOX_DONE_DAYS+' 天已記帳')+'</button>'
-        +'<span class="hint">'+(state.inboxDone?'已記帳只回看 '+INBOX_DONE_DAYS+' 天(誤按時取回用)':'待記帳與期間篩選分開,積壓不會被月份藏起來')+'</span>'+headSearch()+'</div>';
+      h+='<div class="controls"><span class="seg" role="group" aria-label="範圍"><button type="button" data-iscope="all" aria-pressed="'+(state.inboxScope==='all')+'">全部</button><button type="button" data-iscope="year" aria-pressed="'+(state.inboxScope==='year')+'">本年</button></span>'
+        +'<button class="ev-toggle" data-inboxdone>'+(state.inboxDone?'只看待記帳':'一併顯示近 '+INBOX_DONE_DAYS+' 天已記帳')+'</button>'
+        +'<span class="hint">'+(state.inboxDone?'已記帳只回看 '+INBOX_DONE_DAYS+' 天(誤按時取回用)':'待記帳與期間篩選分開,積壓不會被月份藏起來')+'</span></div>';
     } else {
-      h+='<div class="controls"><span class="clabel">期間</span><button class="ctl'+(state.scope==='all'?' active':'')+'" data-scope="all">全部</button><button class="ctl'+(state.scope==='month'?' active':'')+'" data-scope="month">當月</button><button class="ctl'+(state.scope==='year'?' active':'')+'" data-scope="year">當年</button><span class="clabel" style="margin-left:6px">或指定</span><span class="sel'+(isPick()?' picked':' dim')+'"><select id="selYear">'+yearOptions()+'</select><select id="selMonth">'+monthOptions()+'</select></span>'+headSearch()+'</div>';
+      h+=periodControls();
     }
     // A failed background history read keeps one retry control in view whatever the tab.
     if(!HISTORY.complete&&HISTORY.failed) h+='<div class="hint">完整歷史載入失敗:'+esc(HISTORY.failed)+' · 需要完整歷史的數字暫不顯示'+historyRetry()+'</div>';
@@ -2593,13 +2998,24 @@
       : (tab==='analysis' ? periodTab() : (tab==='trend' ? trendTab() : (tab==='inbox' ? inboxTab() : periodTab())));
     h+='<div class="footer">即時讀取自 Transactions · 冷石板深色</div>';
     document.getElementById('app').innerHTML=h; attach();
+    // An open Settings sheet follows the page: its 專案 switches wait for the whole history.
+    var so=document.getElementById('settingsOverlay'), list=document.getElementById('settings-category-list');
+    if(so&&so.classList&&so.classList.contains('on')&&!CATEGORY_DRAG&&list&&!(list.contains&&list.contains(document.activeElement))) renderSettingsCategories();
   }
   function attach(){
     var app=document.getElementById('app');
-    app.querySelectorAll('.tabs button').forEach(function(b){ b.onclick=function(){ state.tab=this.getAttribute('data-tab'); openRow=null; openHeatDay=null; render(); }; });
-    app.querySelectorAll('.ctl[data-scope]').forEach(function(b){ b.onclick=function(){ var s=this.getAttribute('data-scope'); state.scope=s; if(s==='year'){state.selYear=NOW.year;state.selMonth=0;} else if(s==='month'){state.selYear=NOW.year;state.selMonth=NOW.month;} openRow=null; openHeatDay=null; render(); }; });
-    app.querySelectorAll('.cell[data-hday]').forEach(function(c){ c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); }; });
-    app.querySelectorAll('[data-hadd]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); openAddModal(this.getAttribute('data-hadd')); }; });
+    app.querySelectorAll('.tabs button').forEach(function(b){ b.onclick=function(){ state.tab=this.getAttribute('data-tab'); openRow=null; openProject=null; openHeatDay=null; render(); }; });
+    app.querySelectorAll('[data-period]').forEach(function(b){ b.onclick=function(){ setPeriod(this.getAttribute('data-period')); render(); }; });
+    app.querySelectorAll('[data-step]').forEach(function(b){ b.onclick=function(){ if(this.disabled) return; stepPeriod(+this.getAttribute('data-step')); render(); }; });
+    app.querySelectorAll('.cell[data-hday]').forEach(function(c){
+      c.onclick=function(){ var d=this.getAttribute('data-hday'); openHeatDay=(openHeatDay===d)?null:d; render(); };
+      c.onkeydown=function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); this.onclick(); } };
+    });
+    app.querySelectorAll('[data-dayadd]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); openAddModal(this.getAttribute('data-dayadd')); }; });
+    app.querySelectorAll('[data-trendmode]').forEach(function(b){ b.onclick=function(){ state.trendMode=this.getAttribute('data-trendmode'); render(); }; });
+    app.querySelectorAll('[data-incsrc]').forEach(function(b){ b.onclick=function(){ incomeOpen=!incomeOpen; render(); }; });
+    app.querySelectorAll('[data-projtoggle]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); var n=this.getAttribute('data-projtoggle'); openProject=(openProject===n)?null:n; openCategoryTxn=null; openSplit=null; render(); }; });
+    app.querySelectorAll('.pj-row .drill').forEach(function(d){ d.onclick=function(e){ e.stopPropagation(); }; });
     app.querySelectorAll('[data-ef]').forEach(function(el){
       var field=el.getAttribute('data-ef'), id=el.getAttribute('data-trow')||el.getAttribute('data-id');
       el.onchange=function(e){ e.stopPropagation(); applyEdit(id,field,this.value); };
@@ -2656,15 +3072,12 @@
     app.querySelectorAll('[data-hretry]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); loadHistory(); render(); }; });
     var settingsB=app.querySelector('[data-settings]'); if(settingsB) settingsB.onclick=openSettingsModal;
     app.querySelectorAll('[data-del]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); deleteTxnRow(this.getAttribute('data-trow')||this.getAttribute('data-del')); }; });
-    app.querySelectorAll('.ctl[data-iscope]').forEach(function(b){ b.onclick=function(){ state.inboxScope=this.getAttribute('data-iscope'); render(); }; });
+    app.querySelectorAll('[data-iscope]').forEach(function(b){ b.onclick=function(){ state.inboxScope=this.getAttribute('data-iscope'); render(); }; });
     var ibd=app.querySelector('[data-inboxdone]'); if(ibd) ibd.onclick=function(){ state.inboxDone=!state.inboxDone; render(); };
     app.querySelectorAll('[data-dbulk]').forEach(function(b){ b.onclick=function(){
       var k=this.getAttribute('data-dbulk');
       bulkPost(pendingTxns().filter(function(t){ return dayKeyOf(t)===k; }).map(function(t){ return t.id; }));
     }; });
-    var sy=document.getElementById('selYear'), sm=document.getElementById('selMonth');
-    function pickSel(){ state.selYear=+sy.value; state.selMonth=+sm.value; state.scope=state.selMonth===0?String(state.selYear):(state.selYear+'-'+('0'+state.selMonth).slice(-2)); openRow=null; openHeatDay=null; render(); }
-    if(sy) sy.onchange=pickSel; if(sm) sm.onchange=pickSel;
     var q=document.getElementById('q');
     if(q){
       // Focus and caret used to be restored here by hand; repaint() now does that for every
@@ -2709,6 +3122,8 @@
         var data=JSON.parse(raw);
         ACCOUNT_SOURCES=(data&&data.accounts)||[];
         CATEGORY_LIST=(data&&data.categories)||[];
+        PROJECTS=(data&&data.projects)||[];
+        BASELINE=(data&&data.baseline)||{ mode:'median', amount:null };
         var partial=!!(data&&data.complete===false&&data.before);
         HISTORY={ complete:!partial, before:partial?data.before:null, loadedFp:partial?data.loadedFp:null, loading:false, failed:null };
         adoptTxns(data&&data.txns, data&&data.olderFp); render();
@@ -2742,6 +3157,12 @@
     if(e.key==='Enter'){ e.preventDefault(); createCategory(); }
   };
   document.getElementById('settings-category-list').onpointerdown=categoryPointerDown;
+  document.getElementById('settings-category-list').onclick=categoryKindClick;
+  document.getElementById('settings-category-list').onchange=categoryStartChange;
+  document.getElementById('settings-baseline-median').onclick=function(){ pickBaseline('median'); };
+  document.getElementById('settings-baseline-budget').onclick=function(){ pickBaseline('budget'); };
+  document.getElementById('settings-budget').onchange=commitBudget;
+  document.getElementById('settings-budget').onkeydown=function(e){ if(e.key==='Enter'){ e.preventDefault(); commitBudget(); } };
   document.getElementById('settings-category-list').onkeydown=categoryHandleKeydown;
   document.addEventListener('pointermove',categoryPointerMove);
   document.addEventListener('pointerup',function(e){ if(CATEGORY_DRAG&&e.pointerId===CATEGORY_DRAG.id) endCategoryDrag(false); });

@@ -301,26 +301,24 @@ function testPartialViews() {
     needsHistory.forEach(v => {
       const h = body(p, v);
       assert.ok(h.indexOf(WAIT) >= 0, order + ': ' + label(v) + ' shows the loading state');
-      assert.ok(h.indexOf('class="kpi"') < 0 && h.indexOf('row-card') < 0 && h.indexOf('class="trend"') < 0,
+      assert.ok(h.indexOf('class="panel hero"') < 0 && h.indexOf('row-card') < 0 && h.indexOf('class="tchart"') < 0,
         order + ': ' + label(v) + ' shows no number at all');
     });
-    // A loaded month shows its own numbers exactly as a full load does, except the baselines,
-    // which are medians over every month and so wait.
+    // #80: a loaded month's baseline is the median of the 12 months before it from 2025-10 on, all
+    // inside the first load, so a loaded month shows everything — baseline, chips, 3-month average
+    // — exactly as a full load does, and nothing waits.
     ['month', '2026-09', '2025-10'].forEach(scope => {
       const v = { tab: 'analysis', scope };
       const h = body(p, v);
-      assert.ok(h.indexOf('class="kpi"') >= 0, order + ': ' + scope + ' renders its totals');
-      assert.ok(h.indexOf('vs 月常態') < 0 && h.indexOf('vs 月平均') < 0 && h.indexOf('無常態可比') < 0,
-        order + ': ' + scope + ' shows no baseline comparison computed from part of the months');
-      assert.ok(h.indexOf('<div class="k-sub">' + WAIT + '</div>') >= 0, order + ': ' + scope + ' shows the loading state in its place');
-      assert.ok(/class="delta flat" title="載入完整歷史中…">…<\/span>/.test(h), order + ': ' + scope + ' per-category chips wait too');
-      const strip = s => s.replace(/<div class="k-sub">[^<]*(<span[^>]*>[^<]*<\/span>)?<\/div>/g, '').replace(/<span class="delta[^"]*"[^>]*>[^<]*<\/span>/g, '')
-        .replace(/<div class="tabs">[\s\S]*?<\/div><div class="controls">/, '').replace(/<select id="selYear">[\s\S]*?<\/select>/, '');
-      assert.strictEqual(strip(h), strip(body(ref, v)), order + ': ' + scope + ': every total, list and calendar equals a full load\'s');
+      assert.ok(h.indexOf('class="panel hero"') >= 0, order + ': ' + scope + ' renders its totals');
+      assert.ok(h.indexOf(WAIT) < 0, order + ': ' + scope + ' needs only loaded months');
+      assert.strictEqual(h, body(ref, v), order + ': ' + scope + ': every total, baseline, list and calendar equals a full load\'s');
     });
+    assert.ok(/常態（11 個月中位數）\$/.test(body(p, { tab: 'analysis', scope: '2026-09' })), order + ': 2026-09 is compared with the 11 months from 2025-10');
     ['month', '2026-09', 'year', '2026'].forEach(scope => {
       const h = body(p, { tab: 'trend', scope });
-      assert.ok(h.indexOf(WAIT) < 0 && h.indexOf('class="trend"') >= 0, order + ': trend ' + scope + ' needs only loaded months and renders');
+      assert.ok(h.indexOf(WAIT) < 0 && h.indexOf('class="tchart"') >= 0, order + ': trend ' + scope + ' needs only loaded months and renders');
+      assert.strictEqual(h, body(ref, { tab: 'trend', scope }), order + ': trend ' + scope + ' equals a full load\'s');
     });
     // The 待記帳 badge and totals cover every date, so they wait; the loaded rows stay workable.
     const inbox = show(p, { tab: 'inbox', inboxScope: 'all' });
@@ -346,12 +344,12 @@ function testPartialViews() {
     assert.notStrictEqual(p.nodes.app.innerHTML, before, order + ': the page repaints once the history is in');
     assertReload(p, server, order + ': after the background read');
     assertSameViews(p, ref, order + ': after the background read');
-    // Baselines explicitly: the median over every month equals the full load's.
+    // Baselines explicitly: the windowed medians equal the full load's.
     ['2026-09', '2025-10', '2024-02'].forEach(k => {
-      assert.deepStrictEqual(wire(p.monthlyBaseline(p.isConsumption, k)), wire(ref.monthlyBaseline(ref.isConsumption, k)), order + ': monthlyBaseline ' + k);
-      assert.deepStrictEqual(wire(p.catBaselines(k)), wire(ref.catBaselines(k)), order + ': catBaselines ' + k);
+      assert.deepStrictEqual(wire(p.dailyBaseline(k, p.monthTotals())), wire(ref.dailyBaseline(k, ref.monthTotals())), order + ': dailyBaseline ' + k);
+      assert.deepStrictEqual(wire(p.catMedians(k, p.monthTotals())), wire(ref.catMedians(k, ref.monthTotals())), order + ': catMedians ' + k);
     });
-    assert.ok(p.monthlyBaseline(p.isConsumption, '2026-09').months > 13, order + ': and the baseline really spans the older months');
+    assert.strictEqual(p.dailyBaseline('2026-09', p.monthTotals()).months, 11, order + ': the 2026-09 window is 2025-10..2026-08');
   });
 }
 
@@ -514,11 +512,11 @@ function testBackgroundFailureAndRetry() {
   assert.ok(all.indexOf('完整歷史載入失敗') >= 0 && all.indexOf('data-hretry') >= 0, '全部期間 shows the failure and a retry control');
   assert.ok(all.indexOf('<button class="ev-toggle" style="margin-left:6px" data-hretry title="逾時">重試</button>') >= 0,
     'the retry control is a well-formed button carrying the error');
-  assert.ok(all.indexOf('class="kpi"') < 0, 'and still no partial number');
+  assert.ok(all.indexOf('class="panel hero"') < 0, 'and still no partial number');
   const month = show(p, { tab: 'analysis', scope: 'month' });
-  assert.ok(month.indexOf('class="kpi"') >= 0 && month.indexOf('row-card') >= 0, 'the recent view stays usable');
+  assert.ok(month.indexOf('class="panel hero"') >= 0 && month.indexOf('row-card') >= 0, 'the recent view stays usable');
   assert.ok(month.indexOf('data-hretry') >= 0, 'with the retry control in view');
-  assert.ok(month.indexOf('vs 月常態') < 0, 'and its baselines still wait');
+  assert.ok(/常態（\d+ 個月中位數）/.test(month), 'and its baseline, from loaded months only, is shown');
   assert.ok(show(p, { tab: 'inbox' }).indexOf('<span class="tsub">完整歷史載入失敗</span>') >= 0, 'the inbox badge says so too');
   // The recent view still edits; the edit's whole list would complete the history, so retry first.
   p.loadHistory();

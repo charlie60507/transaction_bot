@@ -121,7 +121,7 @@ function run() {
     openSplit: null,
     openCategoryTxn: null,
     openRow: null,
-    PALETTE: ['#5f9aa0'],
+    catColor: function () { return '#5f9aa0'; },
     catDelta: function () { return ''; },
     ensureTextRowKey: function (t) { return t._textKey || String(t.id); },
     splitBox: function () { return ''; },
@@ -192,14 +192,14 @@ function run() {
 
   const t = sample();
   const item = { name: t.cat, total: t.amount, count: 1 };
-  assert.ok(!fns.rowCard(item, 0, 120, [t], null, 1).includes('data-erow='), 'collapsed category mounts no editor');
+  assert.ok(!fns.rowCard(item, 120, [t], null).includes('data-erow='), 'collapsed category mounts no editor');
   fns.openRow = t.cat;
-  const category = fns.rowCard(item, 0, 120, [t], null, 1);
+  const category = fns.rowCard(item, 120, [t], null);
   assert.ok(category.includes('data-category-txn="'+t.id+'"'), 'expanded category lists selectable transactions');
   assert.ok(category.includes('aria-expanded="false"'), 'transaction starts collapsed');
   assert.ok(!category.includes('data-erow='), 'category expansion does not open every editor');
   fns.openCategoryTxn = t.id;
-  const selected = fns.rowCard(item, 0, 120, [t], null, 1);
+  const selected = fns.rowCard(item, 120, [t], null);
   assert.ok(selected.includes('aria-expanded="true"'), 'selected transaction is expanded');
   assert.ok(selected.includes('data-erow="'+t.id+'"'), 'selected transaction mounts the shared editor');
   assert.ok(!fns.categoryTxn(sample({id:'another-row'})).includes('data-erow='), 'other transactions stay collapsed');

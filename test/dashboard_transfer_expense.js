@@ -270,8 +270,9 @@ function run() {
 
   let dashboardTxns = server.getAllTxns();
   let dashboard = loadFns(
-    ['isConsumption', 'inScope', 'sumScope', 'daysInMonth', 'sum', 'median', 'projectMonth', 'isIncome', 'heatDaysForMonth', 'trendData'],
-    { TXNS: dashboardTxns, NOW: { year: 2026, month: 9, day: 30 } }
+    ['isConsumption', 'inScope', 'sumScope', 'daysInMonth', 'sum', 'median', 'isIncome', 'isRefund', 'heatDaysForMonth',
+      'ymKey', 'addMonths', 'projectStart', 'isProjectCat', 'curPartialKey', 'monthTotals', 'trendRows'],
+    { TXNS: dashboardTxns, NOW: { year: 2026, month: 9, day: 30 }, PROJECTS: [], BASE_FLOOR: '2025-10' }
   );
   assert.strictEqual(dashboard.isConsumption(retained), true);
   assert.strictEqual(dashboard.isConsumption(fubonRetained), true);
@@ -286,9 +287,10 @@ function run() {
     { kind: 'spend-hit', value: 3845 },
     'categorized transfers contribute to heatmap intensity'
   );
-  const trend = dashboard.trendData({ level: 'year', year: 2026 }, {}, 0);
-  assert.strictEqual(trend[7].exp, 700, 'historical categorized transfer contributes to its month trend');
-  assert.strictEqual(trend[8].exp, 3845, 'current categorized transfers contribute to trend totals');
+  const trend = dashboard.trendRows(dashboard.monthTotals());
+  const month = key => trend.find(o => o.key === key);
+  assert.strictEqual(month('2026-08').total, 700, 'historical categorized transfer contributes to its month trend');
+  assert.strictEqual(month('2026-09').total, 3845, 'current categorized transfers contribute to trend totals');
 
   const cardRows = dashboardTxns.filter(txn => txn.type === '支出');
   assert.strictEqual(cardRows.map(txn => txn.id.split('|')[0]).join(','), 'historical-expense',
