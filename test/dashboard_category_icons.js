@@ -1,8 +1,10 @@
 'use strict';
 /*
  * Category icons: every category name renders an icon from the fixed in-code map (IC +
- * CATEGORY_ICON) on the donut legend, the 支出明細 row card, the edit-row chip, the add-dialog chip
- * and the Settings 類別 list, and the 類別 selects are replaced by an icon picker.
+ * CATEGORY_ICON) on the 日常類別 row card, the 專案 rows, the edit-row chip, the add-dialog chip
+ * and the Settings 類別 list, and the 類別 selects are replaced by an icon picker. #80 gave every
+ * category its own fixed colour (CATEGORY_COLOR, with a stable fallback for later categories); the
+ * donut and its rank-coloured legend are gone.
  *
  * The functions and the two map literals are lifted out of ToolPanel.html and run against small
  * DOM stubs, so the markup asserted here is the real markup, and a pick is observed as the call
@@ -25,13 +27,21 @@ function extractVar(name) {
   return m[0];
 }
 
-/** Loads the named functions plus the icon maps into one sandbox. */
+/** `var NAME = [ ... ];` from the panel script, as source. */
+function extractList(name) {
+  const m = new RegExp('var ' + name + ' = \\[[^\\]]*\\];').exec(SCRIPT);
+  if (!m) throw new Error('var ' + name + ' not found in ToolPanel.html');
+  return m[0];
+}
+
+/** Loads the named functions plus the icon and colour maps into one sandbox. */
 function load(names, extras) {
   const sandbox = Object.assign({ console: console }, extras || {});
   vm.createContext(sandbox);
-  const src = [extractVar('IC'), extractVar('CATEGORY_ICON')]
+  const src = [extractVar('IC'), extractVar('CATEGORY_ICON'), extractVar('CATEGORY_COLOR'), extractList('CATEGORY_COLOR_FALLBACK'),
+    "var DAILY_COLOR = '#8296c4';"]
     .concat(names.map(n => extractFunction(SCRIPT, n))).join('\n')
-    + '\nthis.IC = IC; this.CATEGORY_ICON = CATEGORY_ICON;';
+    + '\nthis.IC = IC; this.CATEGORY_ICON = CATEGORY_ICON; this.CATEGORY_COLOR = CATEGORY_COLOR;';
   vm.runInContext(src, sandbox);
   return sandbox;
 }
@@ -83,33 +93,29 @@ function run() {
   assert.ok(!/tabindex|<button|<a /.test(tinted + neutral), 'tiles are not focusable');
   assert.ok(base.catTile('<b>', null, 30).indexOf('<b>') < 0, 'a category name never reaches the tile markup');
 
-  // ---- donut legend: ranked categories get a tile, the rest bucket keeps the swatch
-  const lgFns = load(PANEL_FNS.concat(['legend', 'lg']), {
-    PALETTE: ['#5f9aa0', '#6f88a8', '#9a8bb0', '#b39a68', '#6d8f9e', '#8497b8', '#7b9ca6', '#a99a6a'],
-    REST_COLOR: '#5a6070'
+  // ---- colours (#80): the Issue's 17 values, a stable fallback, daily = --accent
+  const colors = load(PANEL_FNS.concat(['catColor']));
+  const ISSUE = { 飲食: '#d08a63', 交通: '#5fa3b5', 超市: '#78ad7f', 購物: '#b98cc4', 娛樂: '#c9b06a', 個人: '#8296c4',
+    家居: '#c27a8c', 醫療: '#6fbfa3', 禮金: '#d6a0b0', 其他: '#8f9a6a', 未分類: '#6b7080', 房屋: '#a98bc0', 汽車: '#c4a66a',
+    旅遊: '#5fa3a0', 投資: '#9fb0c8', 重機: '#b5a07a', 結婚: '#c99ab0' };
+  Object.keys(ISSUE).forEach(name => assert.strictEqual(colors.catColor(name), ISSUE[name], name + ' has the Issue\'s colour'));
+  assert.strictEqual(Object.keys(colors.CATEGORY_COLOR).length, 17, 'exactly the 17 colours of the Issue');
+  assert.ok(/--accent: #8296c4;/.test(HTML) && /var DAILY_COLOR = '#8296c4';/.test(SCRIPT), 'daily is --accent #8296c4');
+  ['寵物', '新類別', 'constructor', ''].forEach(name => {
+    const c = colors.catColor(name);
+    assert.ok(/^#[0-9a-f]{6}$/.test(c), JSON.stringify(name) + ' falls back to a 6-digit hex (catTile appends 2e)');
+    assert.strictEqual(colors.catColor(name), c, JSON.stringify(name) + ' always gets the same fallback colour');
   });
-  const items = LIVE.slice(0, 8).map((name, i) => ({ name: name, total: 100 - i }));
-  const leg = lgFns.legend(items, 1000);
-  const rows = leg.match(/<div class="lg">[\s\S]*?<\/div>/g);
-  assert.strictEqual(rows.length, 7, 'six ranked rows plus the rest bucket');
-  rows.slice(0, 6).forEach((r, i) => {
-    assert.ok(r.indexOf('<span class="ctile s22" aria-hidden="true" style="color:' + lgFns.PALETTE[i] + ';background:' + lgFns.PALETTE[i] + '2e">') === '<div class="lg">'.length,
-      'legend row ' + i + ' leads with a 22px tile in its rank colour');
-    assert.ok(r.indexOf('class="sw"') < 0, 'legend row ' + i + ' has no swatch');
-  });
-  assert.ok(/^<div class="lg"><span class="sw" style="background:#5a6070"><\/span><span class="lg-name">其他 2 項<\/span>/.test(rows[6]),
-    'the 其他 N 項 rest bucket keeps its plain REST_COLOR swatch');
+  assert.ok(!/function (donut|legend|lg)\(/.test(SCRIPT), 'the donut and its legend are gone');
 
-  // ---- row card: 28px tile in the same rank colour as its bar
-  const rc = load(PANEL_FNS.concat(['rowCard', 'catDelta', 'advIn', 'advOf', 'isSplitTxn', 'chargedOf']), {
-    PALETTE: ['#5f9aa0', '#6f88a8', '#9a8bb0'], openRow: null
-  });
-  const card = rc.rowCard({ name: '交通', total: 200, count: 2 }, 1, 300,
-    [{ cat: '交通', amount: 200, y: 2026, m: 10, d: 1 }], null, 1);
-  assert.ok(card.indexOf('<span class="rc-name"><span class="ctile s28" aria-hidden="true" style="color:#6f88a8;background:#6f88a82e">') >= 0,
-    'row card name leads with a 28px tile in the rank colour');
+  // ---- row card: 28px tile in the category's own colour, the same as its bar
+  const rc = load(PANEL_FNS.concat(['rowCard', 'catDelta', 'advIn', 'advOf', 'isSplitTxn', 'chargedOf', 'catColor']), { openRow: null });
+  const card = rc.rowCard({ name: '交通', total: 200, count: 2 }, 300,
+    [{ cat: '交通', amount: 200, y: 2026, m: 10, d: 1 }], null);
+  assert.ok(card.indexOf('<span class="rc-name"><span class="ctile s28" aria-hidden="true" style="color:#5fa3b5;background:#5fa3b52e">') >= 0,
+    'row card name leads with a 28px tile in the category colour');
   assert.ok(card.indexOf('class="dot"') < 0, 'the 9px dot is gone');
-  assert.ok(card.indexOf('background:#6f88a8"></i>') >= 0, 'the bar keeps the same rank colour');
+  assert.ok(card.indexOf('background:#5fa3b5"></i>') >= 0, 'the bar keeps the same colour');
 
   // ---- edit row: the 類別 chip
   const er = load(PANEL_FNS.concat(['isSplitTxn', 'chargedOf', 'splitMark', 'typeColor', 'delBtn', 'mailLink', 'selOpts', 'editRow']), {

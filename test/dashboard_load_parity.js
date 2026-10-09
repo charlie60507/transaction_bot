@@ -153,15 +153,21 @@ const EXPECTED = {
   }
 };
 
-/** #65 appended `categories` (META!D) to getDashboardData's payload as its LAST key. Strip only
- *  that key, so the rest of the text is still compared byte for byte with the 5b3edcc captures;
- *  the captures themselves stay untouched. Returns the text and whether a key was stripped. */
+/** #65 appended `categories` (META!D) to getDashboardData's payload as its LAST key, and #80 put
+ *  `projects` and `baseline` (META H:J) right in front of it. Strip only those three keys, so the
+ *  rest of the text is still compared byte for byte with the 5b3edcc captures; the captures
+ *  themselves stay untouched. Returns the text and whether the keys were stripped. */
 function stripCategories(s) {
   const obj = JSON.parse(s);
   if (!Object.prototype.hasOwnProperty.call(obj, 'categories')) return { text: s, stripped: false };
   const keys = Object.keys(obj);
-  assert.strictEqual(keys[keys.length - 1], 'categories', '`categories` is the last key of the load payload');
+  assert.deepStrictEqual(keys.slice(-3), ['projects', 'baseline', 'categories'],
+    '`categories` is the last key of the load payload, right after `projects` and `baseline`');
   assert.ok(Array.isArray(obj.categories), '`categories` is an array');
+  assert.ok(Array.isArray(obj.projects), '`projects` is an array');
+  assert.ok(obj.baseline && (obj.baseline.mode === 'median' || obj.baseline.mode === 'budget'), '`baseline` carries a mode');
+  delete obj.projects;
+  delete obj.baseline;
   delete obj.categories;
   return { text: JSON.stringify(obj), stripped: true };
 }
@@ -174,8 +180,9 @@ function testParityWithBeforeChange() {
     if (r.stripped) stripped++;
     return r.text;
   });
-  // getDashboardData() and getDashboardData({ sinceMonths: 13 }) per fixture carry `categories`.
-  assert.strictEqual(stripped, 2 * Object.keys(EXPECTED).length, 'both getDashboardData responses carry `categories`');
+  // getDashboardData() and getDashboardData({ sinceMonths: 13 }) per fixture carry `categories`,
+  // `projects` and `baseline`.
+  assert.strictEqual(stripped, 2 * Object.keys(EXPECTED).length, 'both getDashboardData responses carry `categories`, `projects` and `baseline`');
   assert.deepStrictEqual(Object.keys(got), Object.keys(EXPECTED), 'every captured fixture is checked');
   Object.keys(EXPECTED).forEach(name => {
     const e = EXPECTED[name];

@@ -129,7 +129,7 @@ function run() {
   const cell = { getAttribute: function () { return '2026-8-20'; } };
   const app = {
     querySelectorAll: function (selector) {
-      if (selector === '[data-hadd]') return [button];
+      if (selector === '[data-dayadd]') return [button];
       if (selector === '.cell[data-hday]') return [cell];
       return [];
     },
@@ -142,9 +142,20 @@ function run() {
   });
   attached.attach();
   button.onclick({ stopPropagation: function () { stopped++; } });
-  assert.strictEqual(stopped, 1, 'heatmap add stops the cell click');
+  assert.strictEqual(stopped, 1, 'the day-detail add button stops the click from reaching the calendar');
   assert.strictEqual(opened, '2026-08-20', 'pointer/native button click opens the matching date');
-  assert.strictEqual(attached.openHeatDay, null, 'heatmap add does not toggle populated-day detail');
+  assert.strictEqual(attached.openHeatDay, null, 'adding does not toggle the day detail');
+  cell.onclick();
+  assert.strictEqual(attached.openHeatDay, '2026-8-20', 'a day cell opens its detail');
+
+  // #80: the add action sits in the day detail header, so it can no longer overlap a cell.
+  const day = loadFns(['dayEditor', 'byTimeThenAmount', 'advIn', 'advOf', 'isSplitTxn', 'chargedOf', 'fmt', 'isConsumption'], {
+    TXNS: [], editRow: function () { return ''; }
+  });
+  const empty = day.dayEditor(2026, 8, 4);
+  assert.ok(/<div class="ev-head">[\s\S]*<button type="button" class="dayadd" data-dayadd="2026-08-04">＋ 在這天新增<\/button><\/div>/.test(empty),
+    'an empty day\'s detail header carries ＋ 在這天新增 for that date');
+  assert.ok(empty.indexOf('這天沒有交易') >= 0, 'and says the day is empty');
 }
 
 if (require.main === module) {

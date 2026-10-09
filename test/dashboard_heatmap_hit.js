@@ -47,14 +47,16 @@ function run() {
   assert.strictEqual(spentDays, 1, '有消費 counts expense totals > 0 only (not payday, not $0 split)');
 
   const html = fns.heatPanel({ level: 'month', year: 2026, month: 8 });
-  assert.ok(html.indexOf('點有交易的日子看當天明細') >= 0);
+  assert.ok(html.indexOf('點日子看當天明細、新增交易') >= 0);
   assert.strictEqual(html.indexOf('點任一格'), -1);
-  assert.strictEqual((html.match(/\bdata-hadd="/g) || []).length, 31,
-    'every real August date gets exactly one add button');
+  // #80: the add action moved out of the cells into the day detail header (no overlap), so every
+  // real date opens its detail instead — an empty day included, which is where an add starts.
+  assert.strictEqual(html.indexOf('hadd'), -1, 'no cell carries the old in-cell + button');
+  assert.strictEqual((html.match(/\bdata-hday="/g) || []).length, 31, 'every real August date opens its detail');
   const voidCells = html.match(/<div class="cell void"[^>]*><\/div>/g) || [];
   assert.strictEqual(voidCells.length, 6, 'August leading padding is still rendered');
-  assert.ok(voidCells.every(function (cell) { return cell.indexOf('data-hadd=') < 0; }),
-    'calendar padding never gets an add button');
+  assert.ok(voidCells.every(function (cell) { return cell.indexOf('data-hday=') < 0; }),
+    'calendar padding never opens anything');
 
   const c1 = cellHtml(html, 1);
   const c2 = cellHtml(html, 2);
@@ -69,15 +71,15 @@ function run() {
   assert.ok(/\bhit\b/.test(c2.cls) && c2.inner.indexOf('class="mark"') >= 0, 'income-only day: hit + dot');
   assert.ok(/\bhit\b/.test(c3.cls) && c3.inner.indexOf('class="mark"') >= 0, 'transfer-only day: hit + dot');
 
-  assert.ok(!/\bhit\b/.test(c4.cls) && c4.attrs.indexOf('data-hday=') < 0);
+  assert.ok(!/\bhit\b/.test(c4.cls), 'an empty day is not a hit');
+  assert.ok(c4.attrs.indexOf('data-hday="2026-8-4"') >= 0, 'but still opens its detail, for the add button there');
   assert.strictEqual(c4.inner.indexOf('class="mark"'), -1, 'empty day has no dot');
-  assert.ok(c4.inner.indexOf('data-hadd="2026-08-04"') >= 0, 'empty day still has its add button');
 
   assert.ok(/\bhit\b/.test(c5.cls), '$0 我的消費 expense day is still clickable');
   assert.strictEqual(c5.inner.indexOf('class="mark"'), -1);
 
   assert.ok(/\bfuture\b/.test(c20.cls) && !/\bhit\b/.test(c20.cls));
-  assert.ok(c20.inner.indexOf('data-hadd="2026-08-20"') >= 0, 'future day still has its add button');
+  assert.ok(c20.attrs.indexOf('data-hday="2026-8-20"') >= 0, 'a future day still opens its detail (adding a planned row)');
   assert.ok(/有消費 <b class="num">1<\/b> 天/.test(html));
 }
 
