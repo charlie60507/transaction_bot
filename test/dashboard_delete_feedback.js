@@ -163,7 +163,7 @@ function run() {
   inert.ROW_DELETE_INTENTS[iKey] = { sent: true };
   const html = inert.rowHtml(B);
   [/<input class="merin"[^>]* disabled>/, /<input class="amtcor[^>]* disabled>/,
-    /<select data-ef="cat"[^>]* disabled>/, /<select data-ef="type"[^>]* disabled>/,
+    /<button type="button" class="catchip" data-catpick="[^"]*"[^>]* disabled>/, /<select data-ef="type"[^>]* disabled>/,
     /<button class="erec"[^>]* disabled>/, /<input class="sin[^>]* disabled>/,
     /<button type="button" class="sbtn ok"[^>]* disabled>/].forEach(function (re) {
     assert.ok(re.test(html), 'deleting row renders disabled: ' + re);
