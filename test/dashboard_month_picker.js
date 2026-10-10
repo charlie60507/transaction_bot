@@ -8,14 +8,15 @@
  *   1. Default: 日常 → 專案 opens the picker on the current month, with the new-project labels.
  *   2. Cancel by the button, the scrim and Esc writes nothing and leaves the category daily; Esc is
  *      stopped in the capture phase so Settings behind the picker stays open.
- *   3. Confirm calls setCategoryProject once with the chosen 'YYYY-MM'.
+ *   3. Confirm calls setCategoryProject once with the chosen 'YYYY-MM', and focus is back on the
+ *      專案 switch after the save's last re-render (success and failure), unless the user moved it.
  *   4. Year bounds: the earliest row's year to the current year; the arrows stop at the limits; a
  *      category without rows has only the current year.
  *   5. Months after the current month are disabled and cannot be selected.
  *   6. The earliest month carries the dot, the legend is shown and the subtitle names it.
  *   7. Partial history: back to 2020, no dot, no legend, no second subtitle sentence.
- *   8. Editing a project opens on its start; the same month makes no call; another month saves and
- *      the 總覽 running total follows; a start before the range widens it; a start after the current
+ *   8. Editing a project opens on its start; the same month makes no call; another month saves,
+ *      focus is back on the start-month button after the save, and the 總覽 running total follows; a start before the range widens it; a start after the current
  *      month opens on the current month.
  *   9. Markup: no native month input in the panel; every row has the start column, empty on a
  *      daily row and a `YYYY/MM 起` button on a project; nothing opens while the row saves.
@@ -38,6 +39,19 @@ function makeNode(id) {
     querySelectorAll: () => [], querySelector: () => null, focus() { this.focused++; }, select() {},
     setAttribute(k, v) { attrs[k] = String(v); }, getAttribute: k => (k in attrs ? attrs[k] : null)
   };
+}
+
+/** Makes the 類別 list record its renders (innerHTML writes) and every focus on a control queried
+ *  from it, with the render count at that moment: a focus taken before the last render landed on an
+ *  element that render destroyed. */
+function trackList(p) {
+  const list = p.nodes['settings-category-list'];
+  const t = { renders: 0, focus: [] };
+  let html = list.innerHTML;
+  Object.defineProperty(list, 'innerHTML', { get: () => html, set: v => { html = v; t.renders++; } });
+  list.querySelector = sel => ({ disabled: false, focus() { t.focus.push({ sel, renders: t.renders }); } });
+  t.last = () => t.focus[t.focus.length - 1];
+  return t;
 }
 
 const CATS = ['飲食', '購物', '家居', '汽車', '房屋', '旅遊', '醫療'];   // 醫療 has no rows
@@ -109,17 +123,37 @@ function testCancel() {
 // ---------------------------------------------------------------- 3. confirm
 function testConfirm() {
   const p = open();
-  let back = null;
-  p.nodes['settings-category-list'].querySelector = sel => ({ disabled: false, focus() { back = sel; } });
+  const t = trackList(p);
+  const SWITCH = '[data-kind="project"][data-kind-idx="0"]';
   projectClick(p, '飲食');
   p.nodes['monthpick-ok'].onclick();
   assert.strictEqual(writes(p).length, 1, '(3) confirm calls setCategoryProject once');
   assert.deepStrictEqual(Array.from(writes(p)[0].args), ['飲食', '2026-10'], '(3) with the default month');
   assert.ok(!overlayOn(p), '(3) and closes the picker');
-  assert.strictEqual(back, '[data-kind="project"][data-kind-idx="0"]', '(3) focus returns to the 專案 switch');
   assert.ok(p.PROJECT_SAVING['飲食'], '(3) the save is in flight');
   writes(p)[0].success(PROJ.concat([{ name: '飲食', start: '2026-10' }]));
   assert.ok(p.isProjectCat('飲食'), '(3) the server answer is adopted');
+  assert.strictEqual(t.last().sel, SWITCH, '(3) focus returns to the 專案 switch');
+  assert.strictEqual(t.last().renders, t.renders, '(3) after the save\'s last re-render, not before it');
+
+  // Failure: the row snaps back to daily and focus still lands on its re-rendered 專案 switch.
+  const f = open();
+  const ft = trackList(f);
+  projectClick(f, '飲食');
+  f.closeMonthPicker(true);
+  writes(f)[0].failure(new Error('boom'));
+  assert.ok(!f.isProjectCat('飲食'), '(3) a failed save leaves 飲食 daily');
+  assert.ok(ft.last().sel === SWITCH && ft.last().renders === ft.renders, '(3) and focus is back on the 專案 switch after the re-render');
+
+  // Focus the user moved elsewhere while the save was in flight is left alone.
+  const m = open();
+  const mt = trackList(m);
+  projectClick(m, '飲食');
+  m.closeMonthPicker(true);
+  const before = mt.focus.length;
+  m.document.activeElement = { id: 'elsewhere' };
+  writes(m)[0].success(PROJ.concat([{ name: '飲食', start: '2026-10' }]));
+  assert.strictEqual(mt.focus.length, before, '(3) a settled save does not take focus back from another element');
 
   const q = open();
   projectClick(q, '購物');
@@ -201,21 +235,22 @@ function testPartial() {
 // ---------------------------------------------------------------- 8. editing an existing project
 function testEdit() {
   const p = open();
-  let back = null;
-  p.nodes['settings-category-list'].querySelector = sel => ({ disabled: false, focus() { back = sel; } });
+  const t = trackList(p);
+  const START = '[data-start-idx="' + idx(p, '房屋') + '"]';
   startClick(p, '房屋');                       // saved start 2026-01
   assert.ok(overlayOn(p), '(8) the start-month button opens the picker');
   assert.strictEqual(p.MONTHPICK.sel, '2026-01', '(8) on the saved start');
   assert.strictEqual(p.nodes['monthpick-cancel'].textContent, '取消', '(8) a plain 取消 when editing');
   p.closeMonthPicker(true);
   assert.strictEqual(writes(p).length, 0, '(8) confirming the same month makes no call');
-  assert.strictEqual(back, '[data-start-idx="' + idx(p, '房屋') + '"]', '(8) focus returns to the start-month button');
+  assert.strictEqual(t.last().sel, START, '(8) focus returns to the start-month button');
 
   startClick(p, '房屋');
   p.monthPickSelect('2026-05');
   p.nodes['monthpick-ok'].onclick();
   assert.deepStrictEqual(writes(p).map(c => Array.from(c.args)), [['房屋', '2026-05']], '(8) another month is saved once');
   writes(p)[0].success(PROJ.map(x => (x.name === '房屋' ? { name: '房屋', start: '2026-05' } : x)));
+  assert.ok(t.last().sel === START && t.last().renders === t.renders, '(8) and is back on it after the save\'s last re-render');
   const h = view(p, { scope: '2026-09' });
   assert.ok(h.indexOf('2026/05 起累計 $50,000') >= 0, '(8) the 總覽 running total follows the new start');
   assert.ok(h.indexOf('2026/01 起累計') < 0, '(8) and the old one is gone');
