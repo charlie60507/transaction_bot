@@ -439,12 +439,20 @@
   .settings-sheet .settings-add-form button[disabled] { opacity: .5; cursor: default; }
   .settings-sheet .settings-add-form .settings-add-cancel { background: transparent; color: var(--text-muted); padding: 7px 6px; }
   .settings-sheet .settings-foot { font-size: 12px; color: var(--text-muted); margin: var(--sp2) 2px 0; }
-  .settings-sheet .settings-kind { display: inline-flex; flex-shrink: 0; padding: 2px; gap: 2px; background: var(--bg-surface); border-radius: 7px; }
+  /* The row's right edge is two fixed columns, start month then switch, on every row (an empty
+     start column on a daily row), so the 日常 / 專案 switches line up down the list. */
+  .settings-sheet .settings-kind { display: grid; grid-template-columns: 1fr 1fr; flex-shrink: 0; width: 98px; padding: 2px; gap: 2px; background: var(--bg-surface); border-radius: 7px; }
   .settings-sheet .settings-kind button { min-width: 44px; min-height: 44px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
   .settings-sheet .settings-kind button[aria-pressed="true"] { background: var(--bg-raised); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,.4); }
   .settings-sheet .settings-kind button[data-kind="project"][aria-pressed="true"] { color: var(--accent); }
   .settings-sheet .settings-kind button[disabled] { opacity: .45; cursor: default; }
-  .settings-sheet .settings-start { flex-shrink: 0; width: 104px; min-height: 44px; padding: 4px 6px; font-size: 12px; }
+  .settings-sheet .settings-startcol { flex-shrink: 0; width: 62px; display: flex; }
+  .settings-sheet .settings-start { flex: 1; min-width: 0; min-height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 3px 2px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-surface); color: var(--text-primary); font: inherit; line-height: 1.1; cursor: pointer; }
+  .settings-sheet .settings-start:hover:not([disabled]) { border-color: var(--accent); }
+  .settings-sheet .settings-start:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .settings-sheet .settings-start[disabled] { opacity: .45; cursor: default; }
+  .settings-sheet .settings-start-ym { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .settings-sheet .settings-start-qi { font-size: 10px; color: var(--text-muted); }
   .settings-sheet .settings-baseline-h { margin-top: var(--sp4); }
   .settings-sheet .settings-baseline { padding: var(--sp2); }
   .settings-sheet .settings-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; background: var(--bg-surface); border-radius: 7px; }
@@ -489,6 +497,42 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .catpick, .catpick * { animation: none !important; transition: none !important; }
+  }
+
+  /* Project start-month picker. Opened from a Settings 類別 row, so it stacks above Settings the
+     way the category picker does: a centred dialog on desktop, a bottom sheet at <= 640px. */
+  #monthPickOverlay { z-index: 40; }
+  #monthPickOverlay .monthpick { display: flex; flex-direction: column; padding: 0; max-width: 400px; max-height: 92vh; overflow-y: auto; animation: settings-fade .16s ease-out; }
+  .monthpick .monthpick-grab { display: none; width: 36px; height: 4px; border-radius: 2px; background: var(--border); margin: 8px auto 0; flex-shrink: 0; }
+  .monthpick .monthpick-head { padding: var(--sp4) var(--sp4) var(--sp2); }
+  .monthpick .monthpick-head h3 { margin: 0; }
+  .monthpick .monthpick-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.5; }
+  .monthpick .monthpick-year { display: flex; align-items: center; justify-content: space-between; padding: 0 var(--sp3) var(--sp1); }
+  .monthpick .monthpick-year span { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .monthpick .monthpick-step { width: 44px; height: 44px; border: 0; border-radius: var(--r-ctl); background: none; color: var(--text-primary); font-size: 22px; line-height: 1; cursor: pointer; }
+  .monthpick .monthpick-step:hover:not([disabled]) { background: var(--bg-raised); }
+  .monthpick .monthpick-step[disabled] { opacity: .3; cursor: default; }
+  .monthpick .monthpick-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp2); padding: 0 var(--sp4); }
+  .monthpick .monthpick-cell { position: relative; min-height: 44px; border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--bg-raised); color: var(--text-primary); font: inherit; font-size: 14px; cursor: pointer; }
+  .monthpick .monthpick-cell:hover:not([disabled]) { border-color: var(--text-muted); }
+  .monthpick .monthpick-cell[aria-current="true"] { border-color: var(--accent); background: rgba(130,150,196,.18); color: var(--accent); font-weight: 600; }
+  .monthpick .monthpick-cell[disabled] { opacity: .3; cursor: default; }
+  .monthpick .monthpick-step:focus-visible, .monthpick .monthpick-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .monthpick .monthpick-dot { position: absolute; top: 5px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+  .monthpick .monthpick-legend { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); padding: var(--sp2) var(--sp4) 0; }
+  .monthpick .monthpick-legend[hidden] { display: none; }
+  .monthpick .monthpick-legend i { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+  .monthpick .macts { padding: 0 var(--sp4) var(--sp4); }
+  .monthpick .mbtn { min-height: 44px; }
+  @media (max-width: 640px) {
+    #monthPickOverlay { align-items: flex-end; padding: 0; overflow: hidden; }
+    #monthPickOverlay .monthpick { margin: 0; max-width: none; max-height: 90vh; border-bottom: 0; border-radius: 18px 18px 0 0; box-shadow: 0 -10px 40px rgba(0,0,0,.45); animation: settings-up .22s ease-out; }
+    .monthpick .monthpick-grab { display: block; }
+    .monthpick .macts { padding-bottom: calc(var(--sp4) + env(safe-area-inset-bottom)); }
+    .monthpick .macts .mbtn { flex: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .monthpick, .monthpick * { animation: none !important; transition: none !important; }
   }
 
   .empty { text-align: center; padding: var(--sp6) var(--sp4); color: var(--text-muted); }
@@ -609,6 +653,23 @@
     <div class="msub">會從明細移走，bot 也不會再記回來。</div>
     <div class="minfo"><b id="d-mer"></b><div class="dmeta"><span id="d-date"></span> · <span id="d-amt" class="num"></span></div></div>
     <div class="macts"><button type="button" class="mbtn" id="d-cancel">取消</button><button type="button" class="mbtn danger" id="d-ok">刪除</button></div>
+  </div>
+</div>
+<div class="overlay" id="monthPickOverlay">
+  <div class="modal monthpick" role="dialog" aria-modal="true" aria-labelledby="monthpick-title" aria-describedby="monthpick-sub">
+    <div class="monthpick-grab" aria-hidden="true"></div>
+    <div class="monthpick-head">
+      <h3 id="monthpick-title">專案從哪個月開始？</h3>
+      <p class="monthpick-sub" id="monthpick-sub"></p>
+    </div>
+    <div class="monthpick-year">
+      <button type="button" class="monthpick-step" id="monthpick-prev" aria-label="上一年">‹</button>
+      <span id="monthpick-year" aria-live="polite"></span>
+      <button type="button" class="monthpick-step" id="monthpick-next" aria-label="下一年">›</button>
+    </div>
+    <div class="monthpick-grid" id="monthpick-grid" role="group" aria-label="月份"></div>
+    <p class="monthpick-legend" id="monthpick-legend" hidden><i aria-hidden="true"></i>最早交易的月份</p>
+    <div class="macts"><button type="button" class="mbtn" id="monthpick-cancel">取消</button><button type="button" class="mbtn primary" id="monthpick-ok"></button></div>
   </div>
 </div>
 <script>
@@ -2158,55 +2219,64 @@
       : '<li class="settings-row settings-empty">尚無類別</li>';
     var n=document.getElementById('settings-category-count'); if(n) n.textContent=cats.length;
   }
-  /** The month a category's first row falls in ('YYYY-MM'), or the current month when it has none:
-   *  the start month a category gets when it is turned into a project. */
-  function earliestCatMonth(name){
+  /** The month a category's first consumption row falls in ('YYYY-MM'), or null when it has none
+   *  in the loaded rows. Only a hint in the start-month picker: never a default start month. */
+  function firstCatMonth(name){
     var first=null;
     TXNS.forEach(function(t){ if(t.cat===name&&isConsumption(t)){ var k=ymKey(t.y,t.m); if(first==null||k<first) first=k; } });
-    return first||ymKey(NOW.year,NOW.month);
+    return first;
   }
-  /** One category row's 日常 / 專案 switch and, for a project, its type="month" start input. The
-   *  專案 side waits for the whole history (its default start month is the category's earliest row),
-   *  and the whole row is inert while its own save is in flight. */
+  /** 'YYYY-MM' -> 'YYYY/MM', the way a start month reads everywhere in Settings. */
+  function startLabel(ym){ return String(ym||'').replace('-','/'); }
+  /** One category row's two fixed right-edge columns: the start month (a button for a project,
+   *  empty for a daily category) and the 日常 / 專案 switch. Both are inert while the category's
+   *  own save is in flight. */
   function categoryKind(name,i){
-    var start=projectStart(name), proj=start!=null, busy=!!PROJECT_SAVING[name];
-    var waitProj=!proj&&!HISTORY.complete;
-    var dis=busy?' disabled':'';
-    return '<span class="settings-kind" role="group" aria-label="'+esc(name)+' 的類型">'
+    var start=projectStart(name), proj=start!=null, dis=PROJECT_SAVING[name]?' disabled':'';
+    return '<span class="settings-startcol">'
+      +(proj?'<button type="button" class="settings-start" data-start-idx="'+i+'" aria-label="'+esc(name)+' 專案從 '+esc(startLabel(start))+' 起，點擊更改"'+dis+'>'
+        +'<span class="settings-start-ym">'+esc(startLabel(start))+'</span><span class="settings-start-qi">起</span></button>':'')
+      +'</span>'
+      +'<span class="settings-kind" role="group" aria-label="'+esc(name)+' 的類型">'
       +'<button type="button" data-kind="daily" data-kind-idx="'+i+'" aria-pressed="'+(!proj)+'"'+dis+'>日常</button>'
-      +'<button type="button" data-kind="project" data-kind-idx="'+i+'" aria-pressed="'+proj+'"'+((busy||waitProj)?' disabled':'')+(waitProj?' title="'+historyWaitText()+'"':'')+'>專案</button></span>'
-      +(proj?'<input type="month" class="settings-start" data-start-idx="'+i+'" value="'+esc(start)+'" max="'+ymKey(NOW.year,NOW.month)+'" aria-label="'+esc(name)+' 起始月"'+dis+'>':'');
+      +'<button type="button" data-kind="project" data-kind-idx="'+i+'" aria-pressed="'+proj+'"'+dis+'>專案</button></span>';
   }
   /** One setCategoryProject call. PROJECTS only takes the server's answer: on success the 總覽 / 趨勢
-   *  views re-render from it at once, on failure the row snaps back to it. */
-  function saveCategoryProject(name,start){
+   *  views re-render from it at once, on failure the row snaps back to it. `opener` ('kind' or
+   *  'start', from the month picker) is the control focus returns to once the save has settled:
+   *  every re-render replaces the row, so focus is restored after the last one, not before. */
+  function saveCategoryProject(name,start,opener){
     if(PROJECT_SAVING[name]) return;
     PROJECT_SAVING[name]=true; setSettingsStatus('saving'); renderSettingsCategories();
+    var settle=function(){ if(opener) refocusMonthPickOpener(name,opener); };
     google.script.run
       .withSuccessHandler(function(list){
         PROJECTS=list||[]; delete PROJECT_SAVING[name];
-        renderSettingsCategories(); render(); setSettingsStatus('ok');
+        renderSettingsCategories(); render(); setSettingsStatus('ok'); settle();
       })
       .withFailureHandler(function(err){
-        delete PROJECT_SAVING[name]; renderSettingsCategories(); setSettingsStatus('err');
+        delete PROJECT_SAVING[name]; renderSettingsCategories(); setSettingsStatus('err'); settle();
         toast((err&&err.message)?err.message:String(err),true);
       })
       .setCategoryProject(name,start);
   }
+  /** Clicks in the 類別 list: 專案 on a daily row and a project's start-month button open the
+   *  month picker (nothing is written until it is confirmed); 日常 on a project saves at once. */
   function categoryKindClick(e){
-    var b=e.target&&e.target.closest?e.target.closest('[data-kind]'):null;
+    var t=e.target&&e.target.closest?e.target:null; if(!t) return;
+    var sb=t.closest('[data-start-idx]');
+    if(sb){
+      if(sb.disabled) return;
+      var sname=settingsCategories()[Number(sb.getAttribute('data-start-idx'))];
+      if(sname!=null&&isProjectCat(sname)&&!PROJECT_SAVING[sname]) openMonthPicker(sname,'start');
+      return;
+    }
+    var b=t.closest('[data-kind]');
     if(!b||b.disabled) return;
-    var name=settingsCategories()[Number(b.getAttribute('data-kind-idx'))]; if(name==null) return;
+    var name=settingsCategories()[Number(b.getAttribute('data-kind-idx'))]; if(name==null||PROJECT_SAVING[name]) return;
     var kind=b.getAttribute('data-kind'), proj=isProjectCat(name);
-    if(kind==='project'&&!proj){ if(!HISTORY.complete) return; saveCategoryProject(name,earliestCatMonth(name)); }
+    if(kind==='project'&&!proj) openMonthPicker(name,'kind');
     else if(kind==='daily'&&proj) saveCategoryProject(name,null);
-  }
-  function categoryStartChange(e){
-    var inp=e.target; if(!inp||!inp.getAttribute||inp.getAttribute('data-start-idx')==null) return;
-    var name=settingsCategories()[Number(inp.getAttribute('data-start-idx'))]; if(name==null) return;
-    var v=String(inp.value||'');
-    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(v)){ inp.value=projectStart(name)||''; return; }
-    if(v!==projectStart(name)) saveCategoryProject(name,v);
   }
   /** 日常的比較對象: the median of the past 12 months (default) or a monthly budget. */
   function renderSettingsBaseline(){
@@ -2442,6 +2512,128 @@
         toast('新增帳戶失敗：'+((err&&err.message)?err.message:String(err)),true);
       })
       .addAccountSource(name);
+  }
+  // ---------------------------------------------------------------- Project start-month picker
+  /** The open month picker: { name, opener ('kind' = the 專案 switch, 'start' = the start-month
+   *  button), sel ('YYYY-MM'), year (the year on show) }, or null when closed. It holds no element:
+   *  render() may repaint the Settings list underneath it at any time. */
+  var MONTHPICK=null;
+  /**
+   * Everything the picker shows for category `name`, without a DOM. sel / year default to the
+   * project's saved start (or the current month for a daily category, or when the saved start is
+   * after it). The year range runs from the earliest consumption row's year (the current year when
+   * there is none; 2020 while the history is still loading) to the current year, widened to an
+   * existing start's year. The earliest month, its dot and the legend need the whole history.
+   */
+  function monthPickModel(name,sel,year){
+    var now=ymKey(NOW.year,NOW.month), start=projectStart(name), editing=start!=null;
+    var full=!!HISTORY.complete, earliest=full?firstCatMonth(name):null;
+    if(sel==null) sel=(editing&&start<=now)?start:now;
+    var lo=earliest?+earliest.slice(0,4):(full?NOW.year:2020), hi=NOW.year;
+    if(editing&&start<=now) lo=Math.min(lo,+start.slice(0,4));
+    if(year==null) year=+sel.slice(0,4);
+    year=Math.max(lo,Math.min(hi,year));
+    var months=[];
+    for(var m=1;m<=12;m++){
+      var k=ymKey(year,m);
+      months.push({ month:m, key:k, label:m+' 月', disabled:k>now, selected:k===sel, earliest:k===earliest });
+    }
+    return {
+      name:name, editing:editing, sel:sel, year:year, minYear:lo, maxYear:hi,
+      prevDisabled:year<=lo, nextDisabled:year>=hi, earliest:earliest, months:months,
+      title:name+' 的專案從哪個月開始？',
+      sub:'從這個月起的'+name+'支出都算進專案累計。'+(earliest?'最早一筆交易在 '+startLabel(earliest)+'。':''),
+      legend:earliest!=null, yearLabel:year+' 年',
+      cancelLabel:editing?'取消':'取消，維持日常', okLabel:'設為 '+startLabel(sel)+' 起'
+    };
+  }
+  /** The month grid's buttons for a model. */
+  function monthPickCells(md){
+    return md.months.map(function(c){
+      return '<button type="button" class="monthpick-cell" data-month="'+c.key+'"'
+        +(c.selected?' aria-current="true"':'')+(c.disabled?' disabled':'')
+        +' aria-label="'+md.year+' 年 '+c.label+(c.earliest?'，最早交易的月份':'')+'">'
+        +c.label+(c.earliest?'<i class="monthpick-dot" aria-hidden="true"></i>':'')+'</button>';
+    }).join('');
+  }
+  /** Paints the open picker from MONTHPICK; returns its model. */
+  function paintMonthPicker(){
+    var p=MONTHPICK; if(!p) return null;
+    var md=monthPickModel(p.name,p.sel,p.year); p.sel=md.sel; p.year=md.year;
+    var set=function(id,f){ var el=document.getElementById(id); if(el) f(el); };
+    set('monthpick-title',function(el){ el.textContent=md.title; });
+    set('monthpick-sub',function(el){ el.textContent=md.sub; });
+    set('monthpick-year',function(el){ el.textContent=md.yearLabel; });
+    set('monthpick-prev',function(el){ el.disabled=md.prevDisabled; });
+    set('monthpick-next',function(el){ el.disabled=md.nextDisabled; });
+    set('monthpick-grid',function(el){ el.innerHTML=monthPickCells(md); });
+    set('monthpick-legend',function(el){ el.hidden=!md.legend; });
+    set('monthpick-cancel',function(el){ el.textContent=md.cancelLabel; });
+    set('monthpick-ok',function(el){ el.textContent=md.okLabel; });
+    return md;
+  }
+  /** Focuses the selected month when it is on show, else the first enabled one. */
+  function focusMonthPick(){
+    var grid=document.getElementById('monthpick-grid'); if(!grid||!grid.querySelector) return;
+    var el=grid.querySelector('.monthpick-cell[aria-current="true"]')||grid.querySelector('.monthpick-cell:not([disabled])');
+    if(el&&el.focus) el.focus();
+  }
+  /** Opens the picker for a category: from the 專案 switch of a daily row, or from a project's
+   *  start-month button. Writes nothing. */
+  function openMonthPicker(name,opener){
+    var ov=document.getElementById('monthPickOverlay'); if(!ov) return;
+    MONTHPICK={ name:name, opener:opener, sel:null, year:null };
+    paintMonthPicker();
+    ov.classList.add('on');
+    focusMonthPick();
+  }
+  /** ‹ / ›: shows the previous or next year inside the range; the selection stays where it is. */
+  function monthPickStep(d){
+    if(!MONTHPICK) return;
+    MONTHPICK.year+=d;
+    var md=paintMonthPicker();
+    var btn=document.getElementById(d<0?'monthpick-prev':'monthpick-next');
+    if(btn&&!btn.disabled&&btn.focus) btn.focus(); else focusMonthPick();
+    return md;
+  }
+  /** Selects a month on show; a month after the current one cannot be selected. */
+  function monthPickSelect(key){
+    if(!MONTHPICK||!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(key))||key>ymKey(NOW.year,NOW.month)) return;
+    MONTHPICK.sel=key; MONTHPICK.year=+key.slice(0,4);
+    paintMonthPicker(); focusMonthPick();
+  }
+  /** Closes the picker. Confirming saves the selected month through saveCategoryProject, once, and
+   *  only when it differs from the saved start; cancelling (button, scrim, Esc) writes nothing, so a
+   *  daily category stays daily. Focus returns to the control that opened it, re-found by name; on a
+   *  save it returns again once the save has settled, because the save re-renders the row. */
+  function closeMonthPicker(confirm){
+    var p=MONTHPICK; if(!p) return;
+    MONTHPICK=null;
+    var ov=document.getElementById('monthPickOverlay'); if(ov) ov.classList.remove('on');
+    var back=monthPickOpener(p.name,p.opener);
+    if(back&&!back.disabled&&back.focus) back.focus();
+    if(confirm&&p.sel&&p.sel!==projectStart(p.name)) saveCategoryProject(p.name,p.sel,p.opener);
+  }
+  /** The control a picker was opened from, re-queried by category name: the 專案 switch ('kind')
+   *  or the start-month button ('start'). Never kept: every list render replaces it. */
+  function monthPickOpener(name,opener){
+    var i=settingsCategories().indexOf(name), list=document.getElementById('settings-category-list');
+    if(i<0||!list||!list.querySelector) return null;
+    return list.querySelector(opener==='start'?'[data-start-idx="'+i+'"]':'[data-kind="project"][data-kind-idx="'+i+'"]');
+  }
+  /** After a picker save settles: focus the re-rendered opener, unless focus has meanwhile moved to
+   *  another live element (the re-render itself only drops it to the body). */
+  function refocusMonthPickOpener(name,opener){
+    var a=document.activeElement;
+    if(a&&a!==document.body) return;
+    var back=monthPickOpener(name,opener);
+    if(back&&!back.disabled&&back.focus) back.focus();
+  }
+  /** Esc closes only the month picker: capture phase, stopped there, so Settings stays open. */
+  function monthPickEscape(e){
+    if(e.key!=='Escape'||!MONTHPICK) return;
+    e.preventDefault(); e.stopPropagation();
+    closeMonthPicker(false);
   }
   // ---------------------------------------------------------------- Category picker
   /** The open picker: { current, onPick, returnFocus }, or null when closed. */
@@ -3158,7 +3350,6 @@
   };
   document.getElementById('settings-category-list').onpointerdown=categoryPointerDown;
   document.getElementById('settings-category-list').onclick=categoryKindClick;
-  document.getElementById('settings-category-list').onchange=categoryStartChange;
   document.getElementById('settings-baseline-median').onclick=function(){ pickBaseline('median'); };
   document.getElementById('settings-baseline-budget').onclick=function(){ pickBaseline('budget'); };
   document.getElementById('settings-budget').onchange=commitBudget;
@@ -3177,6 +3368,16 @@
     if(c) closeCatPicker(c.getAttribute('data-catval'));
   };
   document.addEventListener('keydown',catPickEscape,true);
+  document.getElementById('monthPickOverlay').onclick=function(e){ if(e.target===this) closeMonthPicker(false); };
+  document.getElementById('monthpick-prev').onclick=function(){ monthPickStep(-1); };
+  document.getElementById('monthpick-next').onclick=function(){ monthPickStep(1); };
+  document.getElementById('monthpick-grid').onclick=function(e){
+    var c=e.target&&e.target.closest?e.target.closest('[data-month]'):null;
+    if(c&&!c.disabled) monthPickSelect(c.getAttribute('data-month'));
+  };
+  document.getElementById('monthpick-cancel').onclick=function(){ closeMonthPicker(false); };
+  document.getElementById('monthpick-ok').onclick=function(){ closeMonthPicker(true); };
+  document.addEventListener('keydown',monthPickEscape,true);
   document.getElementById('d-cancel').onclick=closeDelModal;
   document.getElementById('d-ok').onclick=confirmDelete;
   document.getElementById('delOverlay').onclick=function(e){ if(e.target===this) closeDelModal(); };
