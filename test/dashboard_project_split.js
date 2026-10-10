@@ -258,8 +258,9 @@ function testPayload() {
 
 // ---------------------------------------------------------------- client page
 /** The whole inline script of ToolPanel.html against a stub document, as dashboard_history_split
- *  does; google.script.run calls are recorded for the test to answer. */
-function page(now) {
+ *  does; google.script.run calls are recorded for the test to answer. `makeNode` replaces the inert
+ *  element stub (dashboard_month_picker passes one that tracks classes and handlers). */
+function page(now, makeNode) {
   const html = fs.readFileSync(PANEL, 'utf8');
   const script = extractInlineScript(html)
     .replace('<?= now.year ?>', String(now.year)).replace('<?= now.month ?>', String(now.month))
@@ -271,7 +272,7 @@ function page(now) {
   }
   const document = {
     activeElement: null, querySelectorAll: () => [], querySelector: () => null, addEventListener() {},
-    getElementById(id) { return nodes[id] || (nodes[id] = node()); }
+    getElementById(id) { return nodes[id] || (nodes[id] = (makeNode || node)(id)); }
   };
   const calls = [];
   let pending = {};
@@ -331,12 +332,12 @@ const PROJ = [{ name: '房屋', start: '2026-01' }, { name: '汽車', start: '20
 /** A page booted with `rows` and META settings; `partial` boots from 2025-10 on only (#58). */
 function booted(opts) {
   opts = opts || {};
-  const p = page(NOW);
+  const p = page(NOW, opts.makeNode);
   const all = rows();
   const list = opts.partial ? all.filter(t => t.y * 100 + t.m >= 202510) : all;
   const payload = Object.assign({ txns: list, olderFp: null, accounts: [] },
     opts.noSettings ? {} : { projects: opts.projects || PROJ, baseline: opts.baseline || { mode: 'median', amount: null } },
-    { categories: ['飲食', '購物', '家居', '汽車', '房屋', '旅遊'] },
+    { categories: opts.categories || ['飲食', '購物', '家居', '汽車', '房屋', '旅遊'] },
     opts.partial ? { complete: false, before: { y: 2025, m: 10 }, loadedFp: 'fp' } : {});
   const boot = p.calls.filter(c => c.fn === 'getDashboardData')[0];
   boot.success(JSON.stringify(payload));
@@ -460,18 +461,46 @@ function testHistory() {
   assert.ok(h.indexOf('2026/01 起累計 $80,000') >= 0, '(6) 房屋 started inside them: shown');
   assert.ok(h.indexOf('常態（11 個月中位數）$6,000') >= 0, '(6) the 2026-09 baseline needs only loaded months and is shown');
   assert.ok(view(p, { scope: 'all' }).indexOf('class="panel hero"') < 0, '(6) 全部期間 still waits');
-  // Settings: 日常 → 專案 needs the earliest row, so it waits for the whole history.
-  assert.ok(/data-kind="project" data-kind-idx="0" aria-pressed="false" disabled title="載入完整歷史中…"/.test(p.categoryKind('飲食', 0)),
-    '(6) the 專案 switch is disabled with the wait text until the history is complete');
+  // Settings (#82): 日常 → 專案 no longer waits for the whole history. The switch is usable and opens
+  // the start-month picker, which leaves out the earliest-month hint and reaches back to 2020.
+  const kind = p.categoryKind('飲食', 0);
+  assert.ok(/data-kind="project" data-kind-idx="0" aria-pressed="false">專案</.test(kind), '(6) the 專案 switch is enabled while the history loads');
+  assert.ok(kind.indexOf(WAIT) < 0, '(6) and carries no wait text');
+  p.categoryKindClick(clickOn({ 'data-kind-idx': '0', 'data-kind': 'project' }));
+  assert.strictEqual(p.MONTHPICK && p.MONTHPICK.name, '飲食', '(6) it opens the picker');
+  const md = p.monthPickModel('飲食');
+  assert.strictEqual(md.minYear, 2020, '(6) years back to 2020');
+  assert.strictEqual(md.earliest, null, '(6) no earliest month from a partial history');
+  assert.strictEqual(md.legend, false, '(6) no legend');
+  assert.strictEqual(md.sub, '從這個月起的飲食支出都算進專案累計。', '(6) no second subtitle sentence');
+  assert.strictEqual(p.calls.filter(x => x.fn === 'setCategoryProject').length, 0, '(6) opening writes nothing');
+}
+
+/** A click event on a button carrying `attrs`; closest() answers only the selectors it matches, as
+ *  the real Element.closest does for [data-kind] / [data-start-idx]. */
+function clickOn(attrs) {
+  const btn = { disabled: false, getAttribute: k => (k in attrs ? attrs[k] : null) };
+  return { target: { closest: sel => {
+    const m = /^\[([a-z-]+)\]$/.exec(sel);
+    return m && m[1] in attrs ? btn : null;
+  } } };
 }
 
 // ---------------------------------------------------------------- Settings saves
 function testSettingsSaves() {
   const p = booted();
-  p.categoryKindClick({ target: { closest: () => ({ disabled: false, getAttribute: k => ({ 'data-kind-idx': '0', 'data-kind': 'project' })[k] }) } });
-  const c = p.calls.filter(x => x.fn === 'setCategoryProject').pop();
-  assert.deepStrictEqual(Array.from(c.args), ['飲食', '2025-09'], 'turning 飲食 into a project defaults to its earliest row\'s month');
-  c.success(PROJ.concat([{ name: '飲食', start: '2025-09' }]));
+  // #82: 日常 → 專案 opens the start-month picker on the current month and writes nothing until the
+  // picker is confirmed; the earliest row's month (2025-09) is no longer a silent default.
+  p.categoryKindClick(clickOn({ 'data-kind-idx': '0', 'data-kind': 'project' }));
+  assert.strictEqual(p.calls.filter(x => x.fn === 'setCategoryProject').length, 0, 'turning 飲食 into a project writes nothing yet');
+  assert.strictEqual(p.MONTHPICK.sel, '2026-10', 'the picker opens on the current month');
+  p.monthPickSelect('2026-03');
+  p.closeMonthPicker(true);
+  const sets = p.calls.filter(x => x.fn === 'setCategoryProject');
+  assert.strictEqual(sets.length, 1, 'confirming saves once');
+  const c = sets[0];
+  assert.deepStrictEqual(Array.from(c.args), ['飲食', '2026-03'], 'with the chosen month');
+  c.success(PROJ.concat([{ name: '飲食', start: '2026-03' }]));
   assert.ok(p.isProjectCat('飲食'), 'the server\'s list is adopted');
   assert.ok(view(p, { scope: '2026-09' }).indexOf('class="panel hero"') >= 0, 'and the page re-renders from it');
   p.saveDailyBaseline('budget', 60000);
@@ -481,7 +510,7 @@ function testSettingsSaves() {
   assert.ok(view(p, { scope: '2026-09' }).indexOf('自訂預算 $60,000') >= 0, 'the budget becomes the comparison');
 }
 
-module.exports = { Sheet, loadServer, metaSheet };
+module.exports = { Sheet, loadServer, metaSheet, page, booted, view, rows, PROJ, NOW, WAIT, clickOn };
 
 const CASES = { testRead, testProjectWriter, testBaselineWriter, testPayload, testComputation, testRendering, testHistory, testSettingsSaves };
 
