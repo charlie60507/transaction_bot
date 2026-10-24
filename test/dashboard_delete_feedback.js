@@ -65,7 +65,7 @@ const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'ackTxns', 'spliceAt', 'history
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
   'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
-  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'resumeRowWrites', 'cancelRowWrites',
+  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'pumpRowWrites', 'resumeRowWrites', 'cancelRowWrites',
   'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
   'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
   'normalizedTextValue', 'issueTextSave', 'drainTextWrite',
@@ -87,7 +87,7 @@ function harness(initial) {
     TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_WRITE_QUEUES: {},
     TEXT_CANCEL_BLURS: {}, ROW_COMMIT_INTENTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
     COMPOSITION_FLUSH_SCHEDULED: false, TEXT_ROW_SERIAL: 0, TEXT_REMOVED_ROW_KEYS: {},
-    PENDING_ADD_ROWS: {}, ROW_ACTIVE_WRITES: {}, ROW_DELETE_INTENTS: {}, ROW_WRITE_FIFOS: {},
+    PENDING_ADD_ROWS: {}, ROW_ACTIVE_WRITES: {}, ROW_DELETE_INTENTS: {}, ROW_WRITE_QUEUE: { active: null, items: [] },
     pendingDelId: null, pendingDelRowKey: null, openSplit: null, openCategoryTxn: null,
     selOpts: function () { return ''; }, distinctCats: function () { return ['飲食']; },
     google: { script: { run: recordingRun(rec) } },
@@ -224,14 +224,16 @@ function run() {
   assert.strictEqual(cancel.pendingDelRowKey, cancel.textRowKey(A), 'the other row\'s modal is still armed');
   assert.strictEqual(cancel.doc.getElementById('delOverlay').ops.length, opsBefore, 'and still open');
 
-  // ---- two deletes in flight at once: the second is not dropped ----
+  // ---- two deletes confirmed at once: the second is not dropped ----
+  // Both join the page-wide write queue: the second is sent once the first is acknowledged.
   const two = harness(base);
   two.confirm(B);
   two.confirm(A);
-  assert.strictEqual(two.deletes.length, 2, 'both deletes are sent');
+  assert.strictEqual(two.deletes.length, 1, 'the first delete is sent; the second waits behind it');
   assert.ok(isDeletingMarkup(two.last(), A) && isDeletingMarkup(two.last(), B), 'both rows show the deleting state');
   two.deletes[0].success({ ok: true, txns: serverCopy([base[0]]) });
   assert.ok(isDeletingMarkup(two.last(), A), 'the first success leaves the second still deleting');
+  assert.strictEqual(two.deletes.length, 2, 'and then sends it, not drops it');
   two.deletes[1].success({ ok: true, txns: [] });
   assert.strictEqual(two.TXNS.length, 0, 'both complete');
 
@@ -243,6 +245,9 @@ function run() {
   bulk.bulkPost([A, B]);
   assert.strictEqual(bulk.textTxn(B).posted, false, 'the deleting row is not ticked optimistically');
   assert.strictEqual(bulk.textTxn(A).posted, true, 'the other row is');
+  // The bulk row waits in the page-wide write queue behind the category write in flight.
+  assert.strictEqual(bulk.calls.length, callsBefore, 'the bulk row waits behind the write in flight');
+  bulk.calls[callsBefore - 1].success({ ok: true });
   assert.strictEqual(bulk.calls.length, callsBefore + 1, 'only the other row is written');
   assert.strictEqual(bulk.calls[bulk.calls.length - 1].patch.posted, true);
 }

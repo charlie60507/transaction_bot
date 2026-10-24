@@ -294,7 +294,7 @@ const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'ackTxns', 'spliceAt', 'history
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
   'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
-  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'resumeRowWrites', 'cancelRowWrites',
+  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'pumpRowWrites', 'resumeRowWrites', 'cancelRowWrites',
   'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition', 'textWriteQueue',
   'textInputMatches', 'syncTextCopies', 'nextTextRequestToken', 'normalizedTextValue',
   'issueTextSave', 'drainTextWrite', 'saveTextDraft', 'trySendRowCommit', 'commitRow',
@@ -330,7 +330,7 @@ function client(payload) {
     TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_WRITE_QUEUES: {},
     TEXT_CANCEL_BLURS: {}, ROW_COMMIT_INTENTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
     COMPOSITION_FLUSH_SCHEDULED: false, TEXT_ROW_SERIAL: 0, TEXT_REMOVED_ROW_KEYS: {},
-    PENDING_ADD_ROWS: {}, ROW_ACTIVE_WRITES: {}, ROW_DELETE_INTENTS: {}, ROW_WRITE_FIFOS: {},
+    PENDING_ADD_ROWS: {}, ROW_ACTIVE_WRITES: {}, ROW_DELETE_INTENTS: {}, ROW_WRITE_QUEUE: { active: null, items: [] },
     pendingDelId: null, pendingDelRowKey: null, delBusy: false, openSplit: null,
     addHeatDate: null, state: {}, openHeatDay: null,
     google: { script: { run } },
@@ -511,14 +511,19 @@ function testOwnWritesStayIncremental() {
   // with it. The second was written after the first, so its pre-write sheet no longer matches the
   // fingerprint the page sent, and it gets the whole list.
   const fpBefore = page.OLDER_FP;
+  // Both join the page-wide write queue, so the second is sent only after the first's handler ran.
+  const callsBefore = page.rec.calls.length;
   page.applyEdit('old-1', 'cat', '飲食');
   page.applyEdit('w-1', 'posted', false);
-  const [a, b] = page.rec.calls.slice(-2);
+  assert.strictEqual(page.rec.calls.length, callsBefore + 1, 'overlap: the second edit waits for the first');
+  const a = page.rec.calls[page.rec.calls.length - 1];
   const resA = wire(server.updateTxn(a.id, a.patch, a.wantTxns, a.olderFp));
-  const resB = wire(server.updateTxn(b.id, b.patch, b.wantTxns, b.olderFp));
   assert.strictEqual(shape(resA), 'recent', 'overlap: the first edit alone is incremental');
   a.success(resA);
   assert.strictEqual(page.OLDER_FP, fpBefore, 'overlap: a superseded ack does not advance the fingerprint');
+  assert.strictEqual(page.rec.calls.length, callsBefore + 2, 'overlap: the second edit goes out from the first one\'s handler');
+  const b = page.rec.calls[page.rec.calls.length - 1];
+  const resB = wire(server.updateTxn(b.id, b.patch, b.wantTxns, b.olderFp));
   assert.strictEqual(shape(resB), 'full', 'overlap: the second edit sees the first one\'s older write and gets the whole list');
   b.success(resB);
   assert.strictEqual(page.rec.reads.length, 0, 'overlap: no extra read needed');
