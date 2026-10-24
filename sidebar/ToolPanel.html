@@ -1400,7 +1400,8 @@
   var TEXT_DRAFTS={}, TEXT_DRAFT_REVISIONS={}, TEXT_REQUEST_TOKENS={}, TEXT_WRITE_QUEUES={},
       TEXT_CANCEL_BLURS={}, ROW_COMMIT_INTENTS={}, ACTIVE_COMPOSITIONS={}, PENDING_REPAINT=false,
       COMPOSITION_FLUSH_SCHEDULED=false, TEXT_ROW_SERIAL=0, TEXT_REMOVED_ROW_KEYS={},
-      PENDING_ADD_ROWS={}, ROW_ACTIVE_WRITES={}, ROW_DELETE_INTENTS={}, ROW_WRITE_FIFOS={};
+      PENDING_ADD_ROWS={}, ROW_ACTIVE_WRITES={}, ROW_DELETE_INTENTS={},
+      ROW_WRITE_QUEUE={active:null,items:[]};
   function ensureTextRowKey(t){
     if(t&&!t._textKey) t._textKey='text-row-'+(++TEXT_ROW_SERIAL);
     return t?t._textKey:'';
@@ -1473,25 +1474,46 @@
     else delete ROW_ACTIVE_WRITES[rowKey];
     trySendDelete(rowKey);
   }
-  function enqueueRowWrite(ref,start){
-    var rowKey=textRowKey(ref), q=ROW_WRITE_FIFOS[rowKey]||(ROW_WRITE_FIFOS[rowKey]={active:false,items:[]});
-    q.items.push({start:start,cancel:arguments.length>2?arguments[2]:null});
-    function pump(){
-      if(q.active||!q.items.length) return;
-      var current=textTxn(rowKey); if(current&&current._pendingAdd) return;
-      q.active=true; beginRowWrite(rowKey);
-      q.items.shift().start(function(){ q.active=false; pump(); endRowWrite(rowKey); },rowKey);
-    }
-    q.pump=pump;
-    pump();
+  /**
+   * ONE page-wide write queue for every mutating server call that can adopt or supersede a list
+   * (updateTxn from every call site, and deleteTxn). Each call takes its sequence number when it
+   * is enqueued and is sent only after the previous call's handler has run, so send order IS
+   * sequence order and the server (which serialises on its script lock) processes the writes in
+   * that order too. That is what makes settle()'s rule true: the call holding MUTATION_SEQ is the
+   * last one sent, after every earlier call was acknowledged, so its snapshot already contains
+   * every earlier write and adopting it can never undo a write still out. Per-row queues could
+   * not promise that: two rows' writes raced for the server lock, and the latest sequence's
+   * snapshot could predate the other row's write and un-post it on screen.
+   *
+   * Items carry their row key, so ROW_ACTIVE_WRITES stays per row (trySendDelete reads it). The
+   * queue blocks while its HEAD item's row is still a pending add: skipping it would let a later
+   * write's snapshot be adopted while that row's earlier write is unsent. addTxn stays outside
+   * the queue; it adopts no list and preservePendingAddRows keeps its row.
+   */
+  function enqueueRowWrite(ref,start,cancel){
+    ROW_WRITE_QUEUE.items.push({rowKey:textRowKey(ref),start:start,cancel:cancel||null});
+    pumpRowWrites();
   }
-  function resumeRowWrites(ref){
-    var q=ROW_WRITE_FIFOS[textRowKey(ref)]; if(q&&q.pump) q.pump();
+  function pumpRowWrites(){
+    var q=ROW_WRITE_QUEUE; if(q.active||!q.items.length) return;
+    var item=q.items[0], current=textTxn(item.rowKey); if(current&&current._pendingAdd) return;
+    q.items.shift(); q.active=item; beginRowWrite(item.rowKey);
+    var finished=false;
+    item.start(function(){
+      if(finished) return; finished=true;
+      if(q.active===item) q.active=null;
+      pumpRowWrites(); endRowWrite(item.rowKey);
+    },item.rowKey);
   }
+  function resumeRowWrites(){ pumpRowWrites(); }
+  /** A failed add: drop only that row's not-yet-started writes (each cancel settles its
+   *  sequence), then let every other row's queued writes go out. */
   function cancelRowWrites(ref){
-    var rowKey=textRowKey(ref), q=ROW_WRITE_FIFOS[rowKey]; if(!q||q.active) return;
-    while(q.items.length){ var item=q.items.shift(); if(item.cancel) item.cancel(); }
-    delete ROW_WRITE_FIFOS[rowKey];
+    var rowKey=textRowKey(ref), kept=[], dropped=[];
+    ROW_WRITE_QUEUE.items.forEach(function(item){ (item.rowKey===rowKey?dropped:kept).push(item); });
+    ROW_WRITE_QUEUE.items=kept;
+    dropped.forEach(function(item){ if(item.cancel) item.cancel(); });
+    pumpRowWrites();
   }
   function textDraft(id,field){ return TEXT_DRAFTS[draftKey(id,field)]||null; }
   function draftValue(t,field){ var d=t&&textDraft(t._textKey||t.id,field); return d?d.value:((t&&t[field])||''); }
@@ -1584,6 +1606,12 @@
    *
    * Called from BOTH handlers of every call site that bumped the counter: a rejected write settles
    * too, or the in-flight count never reaches zero and the debt is never paid.
+   *
+   * Only the latest sequence is adopted, and adopting it clears the debt. Both are sound because
+   * every updateTxn and deleteTxn goes through the page-wide write queue (enqueueRowWrite): the
+   * latest sequence is the last call sent, after every earlier call was acknowledged, so its
+   * snapshot already holds every earlier write and no older write is left unacknowledged for it
+   * to predate. The one mutating call outside the queue, addTxn, adopts no list.
    */
   function settle(seq, txns, olderFp){
     if(INFLIGHT>0) INFLIGHT--;
@@ -1868,8 +1896,9 @@
         // days plus the edited row, merged by ackTxns into the list a reload would show), not the
         // whole history: a newly arrived bot row is always inside that window and DOES change the
         // signature, so ticking 已記帳 stays this page's de facto refresh. OLDER_FP rides along so
-        // the server can send the whole list instead when older rows changed. settle() owns the
-        // ordering: a snapshot a later mutation superseded is dropped AND booked for a refetch.
+        // the server can send the whole list instead when older rows changed. The page-wide write
+        // queue plus settle() own the ordering: this call went out only after every earlier write
+        // was acknowledged, and a snapshot a later mutation superseded is dropped AND booked.
         if(settle(seq, ackTxns(TXNS, res), res && res.olderFp)) repaint();
         done();
       })
@@ -2033,9 +2062,10 @@
   }
   /**
    * A row is "deleting" from confirmation until deleteTxn settles, including while the delete
-   * waits behind a write on the same row. The state is derived from the intent map at render
-   * time, keyed by the client row key, so it survives every repaint and list adoption without
-   * a second copy of the truth. Safe in the isolated render fixtures, which define neither.
+   * waits in the page-wide write queue behind earlier writes. The state is derived from the
+   * intent map at render time, keyed by the client row key, so it survives every repaint and
+   * list adoption without a second copy of the truth. Safe in the isolated render fixtures,
+   * which define neither.
    */
   function isRowDeleting(t){
     if(!t||typeof ROW_DELETE_INTENTS==='undefined'||typeof ensureTextRowKey!=='function') return false;
@@ -2085,24 +2115,38 @@
     // The row left the list before its delete was sent: nothing to delete, nothing on screen.
     if(!t){ delete ROW_DELETE_INTENTS[rowKey]; return; }
     if(t._pendingAdd||ROW_ACTIVE_WRITES[rowKey]||ROW_COMMIT_INTENTS[rowKey]) return;
-    intent.sent=true; var serverId=resolveTextRowId(rowKey);
+    // The delete joins the page-wide write queue, sequence taken now: it follows every write
+    // queued before it (this row's included, which may be waiting behind another row), and its
+    // list is adopted only when nothing older is still out.
+    intent.sent=true;
     var delSeq=nextMutation();
-    google.script.run
-      .withSuccessHandler(function(res){
-        delete ROW_DELETE_INTENTS[rowKey]; TEXT_REMOVED_ROW_KEYS[rowKey]=true;
-        settle(delSeq, res && res.txns, res && res.olderFp);
-        // settle drops a response a later mutation superseded and books a refetch; until that
-        // lands the row would still be in TXNS with no intent, i.e. back to normal on screen.
-        TXNS=TXNS.filter(function(x){ return x._textKey!==rowKey; });
-        repaint(); toast('已刪除');
-      })
-      .withFailureHandler(function(err){
-        delete ROW_DELETE_INTENTS[rowKey];
-        settle(delSeq, null);
-        repaint();
-        toast('刪除失敗:'+((err&&err.message)||err), true);
-      })
-      .deleteTxn({ id: serverId });
+    enqueueRowWrite(rowKey,function(done){
+      // A write queued ahead of it on this row failed and cancelled the intent: send nothing.
+      if(ROW_DELETE_INTENTS[rowKey]!==intent||!textTxn(rowKey)){
+        if(ROW_DELETE_INTENTS[rowKey]===intent) delete ROW_DELETE_INTENTS[rowKey];
+        settle(delSeq, null); done(); return;
+      }
+      var serverId=resolveTextRowId(rowKey);
+      google.script.run
+        .withSuccessHandler(function(res){
+          delete ROW_DELETE_INTENTS[rowKey]; TEXT_REMOVED_ROW_KEYS[rowKey]=true;
+          settle(delSeq, res && res.txns, res && res.olderFp);
+          // settle drops a response a later mutation superseded and books a refetch; until that
+          // lands the row would still be in TXNS with no intent, i.e. back to normal on screen.
+          TXNS=TXNS.filter(function(x){ return x._textKey!==rowKey; });
+          repaint(); toast('已刪除'); done();
+        })
+        .withFailureHandler(function(err){
+          delete ROW_DELETE_INTENTS[rowKey];
+          settle(delSeq, null);
+          repaint();
+          toast('刪除失敗:'+((err&&err.message)||err), true); done();
+        })
+        .deleteTxn({ id: serverId });
+    },function(){
+      if(ROW_DELETE_INTENTS[rowKey]===intent) delete ROW_DELETE_INTENTS[rowKey];
+      settle(delSeq, null);
+    });
   }
   function openAddModal(date){
     var ov=document.getElementById('addOverlay'); if(!ov) return;
@@ -2954,6 +2998,10 @@
 
   // Mark a whole day recorded. Writes are sequential, not parallel: Apps Script serializes
   // sheet writes anyway, and one at a time means a mid-way failure reverts exactly one row.
+  // Each row joins the page-wide write queue when its step runs, so a single tick issued
+  // mid-run lands behind the bulk row in flight: row i's handler sends that tick, then step(i+1)
+  // bumps the sequence, so the tick's snapshot (which still shows the unsent bulk rows pending)
+  // arrives stale, is dropped and booked, and one refetch after the last bulk row pays it.
   function bulkPost(ids){
     // A row being deleted is left out before the optimistic tick, not only at send time: ticking
     // it would flash 已記帳 on a row that is about to disappear.

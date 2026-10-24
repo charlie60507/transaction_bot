@@ -90,7 +90,7 @@ const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'ackTxns', 'spliceAt', 'history
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
   'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
-  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'resumeRowWrites', 'cancelRowWrites',
+  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'pumpRowWrites', 'resumeRowWrites', 'cancelRowWrites',
   'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
   'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
   'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
@@ -114,7 +114,7 @@ function harness(initial, opts) {
     TEXT_DRAFTS: {}, TEXT_DRAFT_REVISIONS: {}, TEXT_REQUEST_TOKENS: {}, TEXT_WRITE_QUEUES: {},
     TEXT_CANCEL_BLURS: {}, ROW_COMMIT_INTENTS: {}, ACTIVE_COMPOSITIONS: {}, PENDING_REPAINT: false,
     COMPOSITION_FLUSH_SCHEDULED: false, TEXT_ROW_SERIAL: 0, TEXT_REMOVED_ROW_KEYS: {},
-    PENDING_ADD_ROWS: {}, ROW_ACTIVE_WRITES: {}, ROW_DELETE_INTENTS: {}, ROW_WRITE_FIFOS: {},
+    PENDING_ADD_ROWS: {}, ROW_ACTIVE_WRITES: {}, ROW_DELETE_INTENTS: {}, ROW_WRITE_QUEUE: { active: null, items: [] },
     pendingDelId: null, pendingDelRowKey: null, delBusy: false, openSplit: null,
     google: { script: { run: recordingRun(rec) } },
     render: function () { renders.n++; if (opts.onRender) opts.onRender(); },
@@ -717,8 +717,9 @@ function run() {
   addQueuedEditFailure.adds[0].failure(new Error('add failed'));
   assert.strictEqual(addQueuedEditFailure.calls.length, 0, 'a failed add never dispatches its queued temp-id edit');
   assert.strictEqual(addQueuedEditFailure.INFLIGHT, 0, 'cancelling a queued edit settles its mutation accounting');
-  assert.strictEqual(addQueuedEditFailure.ROW_WRITE_FIFOS[failedEditKey], undefined,
-    'a failed add discards its dormant row-write queue');
+  assert.strictEqual(addQueuedEditFailure.ROW_WRITE_QUEUE.items.filter(function (item) {
+    return item.rowKey === failedEditKey;
+  }).length, 0, 'a failed add discards its dormant row writes from the page-wide queue');
 
   // Another write can adopt a snapshot containing the final manual row before addTxn's own
   // callback runs. The pending-add map keeps the temp logical identity and joins it to that row.
@@ -1062,14 +1063,22 @@ function run() {
     l[0].amount = 999; l[0].id = EDITED_ID;
     return l;
   }
+  // A row write (applySplit, bulkPost) joins the page-wide write queue, so it is sent and lands
+  // only after the amount edit's handler has run; addTxn stays outside the queue and can land
+  // first. `land.first` says which order the case drives. Either way the property is the same.
   function amountEditSupersededBy(name, issue) {
     const h = harness(base);
     h.applyEdit(base[0].id, 'amount', 999);
     assert.strictEqual(h.calls.length, 1, name + ': the amount edit is written');
-    issue(h)();                                            // the other mutation goes out and lands
+    const land = issue(h);                                 // the other mutation is issued
+    if (land.first) land();                                // ...and lands before the edit's ack
     assert.strictEqual(h.reads.length, 0, name + ': an ordinary run pays for no extra read');
     h.calls[0].success({ ok: true, txns: editedList() });   // superseded — must not be adopted
     assert.strictEqual(h.TXNS[0].id, base[0].id, name + ': the superseded snapshot is discarded');
+    if (!land.first) {
+      assert.strictEqual(h.reads.length, 0, name + ': the debt waits while the other write is out');
+      land();                                              // the queued write goes out and lands
+    }
     assert.strictEqual(h.reads.length, 1, name + ': and exactly one authoritative refetch is issued');
     h.reads[0].success(editedList());
     assert.strictEqual(h.TXNS[0].id, EDITED_ID,
@@ -1078,18 +1087,26 @@ function run() {
   }
   amountEditSupersededBy('applySplit', function (h) {
     h.applySplit(base[1].id, '50');
-    assert.strictEqual(h.calls.length, 2, 'applySplit writes the split');
-    return function () { h.calls[1].success({ ok: true }); };
+    assert.strictEqual(h.calls.length, 1, 'applySplit queues the split behind the edit');
+    return function () {
+      assert.strictEqual(h.calls.length, 2, 'applySplit writes the split once the edit is acknowledged');
+      h.calls[1].success({ ok: true });
+    };
   });
   amountEditSupersededBy('bulkPost', function (h) {
     h.bulkPost([base[1].id]);
-    assert.strictEqual(h.calls.length, 2, 'bulkPost writes its row');
-    return function () { h.calls[1].success({ ok: true }); };
+    assert.strictEqual(h.calls.length, 1, 'bulkPost queues its row behind the edit');
+    return function () {
+      assert.strictEqual(h.calls.length, 2, 'bulkPost writes its row once the edit is acknowledged');
+      h.calls[1].success({ ok: true });
+    };
   });
   amountEditSupersededBy('submitAdd', function (h) {
     h.submitAdd();
     assert.strictEqual(h.adds.length, 1, 'submitAdd writes the new row');
-    return function () { h.adds[0].success({ id: 'manual-9', hm: '' }); };
+    const land = function () { h.adds[0].success({ id: 'manual-9', hm: '' }); };
+    land.first = true;
+    return land;
   });
 
   // ---- a MULTI-ROW bulk post supersedes the very refetch it just armed ----
@@ -1112,9 +1129,10 @@ function run() {
   }
   const multi = harness(bulkBase());
   multi.applyEdit(base[0].id, 'amount', 999);                  // seq 1, still in flight
-  multi.bulkPost([base[1].id, third.id]);                      // seq 2 goes out; the third row waits
-  assert.strictEqual(multi.calls.length, 2, 'bulk post writes one row at a time');
+  multi.bulkPost([base[1].id, third.id]);                      // seq 2 queues behind the edit
+  assert.strictEqual(multi.calls.length, 1, 'the first bulk row waits behind the edit in flight');
   multi.calls[0].success({ ok: true, txns: preBulkList() });    // superseded amount edit — dropped
+  assert.strictEqual(multi.calls.length, 2, 'bulk post writes one row at a time');
   assert.strictEqual(multi.reads.length, 0, 'the debt waits while a bulk row is still in flight');
   multi.calls[1].success({ ok: true });                        // settles row 1 AND issues row 2
   assert.strictEqual(multi.reads.length, 1, 'the debt arms a refetch the moment INFLIGHT hits zero');
