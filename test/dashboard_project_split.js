@@ -17,7 +17,8 @@
  *      window; toggling a category to daily moves its amounts into daily and the baseline; the
  *      estimate uses only daily rows and daily-category subscriptions.
  *   5. Rendering: month scope shows the chip and deltas, year / all show neither; the current month
- *      shows the 預估 chip and no per-category delta; the heat day header has the add button and no
+ *      shows the 預估 chip and no ≈ / ▲ / ▼ per-category delta (#94 adds 已超出 and keeps 新, which
+ *      dashboard_running_month_norms covers); the heat day header has the add button and no
  *      cell carries .hadd; a category edit to a project category re-groups the row after the save.
  *   6. History (#58): with a partial load starting 2025-10, the 旅遊 running total shows the wait
  *      text while the 2026-09 baseline is shown.
@@ -428,7 +429,7 @@ function testRendering() {
   h = view(p, { scope: 'month' });
   assert.ok(/<span class="chip [a-z]+">預估 /.test(h), '(5) the current month\'s chip compares the estimate');
   assert.ok(h.indexOf('預估月底 $6,500') >= 0, '(5) and the legend shows it');
-  assert.ok(!/class="delta (up|down|flat|new)"/.test(h.split('日常類別')[1].split('class="panel projects"')[0]), '(5) no per-category delta in a running month');
+  assert.ok(!/class="delta (up|down|flat)"/.test(h.split('日常類別')[1].split('class="panel projects"')[0]), '(5) no ≈ / ▲ / ▼ per-category delta in a running month');
   ['year', 'all', '2025'].forEach(s => {
     const y = view(p, { scope: s });
     assert.ok(y.indexOf('class="chip') < 0, '(5) ' + s + ': no baseline chip');

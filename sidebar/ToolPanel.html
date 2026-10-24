@@ -214,6 +214,8 @@
   /* The category's normal month: a thin white line across the bar. */
   .rc-bar > i.rc-mark { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text-primary); }
   .delta.new { color: var(--accent); }
+  /* Running month: a category already past its normal month (#94). */
+  .delta.over { color: var(--up); border: 1px solid var(--up); background: rgba(196,106,88,.12); border-radius: var(--r-pill); padding: 1px 8px; font-size: 12px; }
   .rc-bar + .rc-meta { margin-top: 0; }
   .drill { margin-top: var(--sp3); border-top: 1px solid var(--border); padding-top: var(--sp2); display: none; }
   .row-card.open .drill { display: block; }
@@ -1089,33 +1091,38 @@
     return h+'</div>';
   }
   /** Daily categories as horizontal bars, largest first, each with a white marker at its normal
-   *  month and a vs-normal chip; tapping one lists its rows, tapping a row opens editRow. Deltas
-   *  only for a completed single month. */
+   *  month and a vs-normal chip; tapping one lists its rows, tapping a row opens editRow. A completed
+   *  single month gets the ≈ / ▲ / ▼ deltas; the running month (#94) gets the same marker, an 已超出
+   *  chip on a category past its normal and 常態還剩 on the others, never a forecast. */
   function dailyCard(r,selKey,mt,dly){
     var map={}; dly.list.forEach(function(t){ if(!map[t.cat]) map[t.cat]={total:0,count:0}; map[t.cat].total+=t.amount; map[t.cat].count++; });
     var items=Object.keys(map).map(function(k){ return {name:k,total:map[k].total,count:map[k].count}; }).sort(function(a,b){ return b.total-a.total; });
-    var norms=(selKey&&!isPartialCur(r))?catMedians(selKey,mt):null;
+    var partial=isPartialCur(r);
+    var norms=selKey?catMedians(selKey,mt):null;
     var scale=items.length?items[0].total:0;
     if(norms&&norms!=='wait') items.forEach(function(it){ var b=norms.byCat[it.name]; if(b&&b.ref>scale) scale=b.ref; });
-    var h='<div class="panel"><h3>日常類別 <span class="h3note">'+(norms&&norms!=='wait'?'白線 = 常態月':'')+'</span></h3>';
+    var h='<div class="panel"><h3>日常類別 <span class="h3note">'+(norms&&norms!=='wait'?(partial?'白線 = 常態月 · 只標已超出':'白線 = 常態月'):'')+'</span></h3>';
     if(!items.length) return h+'<div class="empty" style="padding:var(--sp4) 0">此範圍沒有日常支出</div></div>';
-    items.forEach(function(it){ h+=rowCard(it,scale,dly.list,norms); });
+    items.forEach(function(it){ h+=rowCard(it,scale,dly.list,norms,partial); });
     return h+'</div>';
   }
-  /** vs-normal chip for one daily category. `norms` null ⇒ nothing (year / 全部 / a running month);
+  /** vs-normal chip for one daily category. `norms` null ⇒ nothing (year / 全部);
    *  'wait' ⇒ the loading mark. No spend in any window month ⇒ 新; spend but a median of 0 (it shows
-   *  up in fewer than half the months) ⇒ no chip, since a percentage of 0 means nothing. */
-  function catDelta(name,cur,norms){
+   *  up in fewer than half the months) ⇒ no chip, since a percentage of 0 means nothing. In the
+   *  running month (`partial`, #94) only a category already past its normal gets a chip, 已超出 $x;
+   *  no ≈ / ▲ / ▼ and no percentage, because a month-to-date total is not a month. */
+  function catDelta(name,cur,norms,partial){
     if(!norms) return '';
     if(norms==='wait') return '<span class="delta flat" title="'+historyWaitText()+'">…</span>';
     var b=norms.byCat[name];
     if(!b||!b.any) return '<span class="delta new" title="常態月份沒有這一類">新</span>';
     if(!(b.ref>0)) return '';
+    if(partial) return cur>b.ref?'<span class="delta over" title="常態 $'+fmt(b.ref)+'（'+norms.months+' 個月中位數）">已超出 $'+fmt(cur-b.ref)+'</span>':'';
     var d=Math.round((cur-b.ref)/b.ref*100), tip='常態 $'+fmt(b.ref)+'（'+norms.months+' 個月中位數）';
     if(Math.abs(d)<=10) return '<span class="delta flat" title="'+tip+'">≈ 常態</span>';
     return '<span class="delta '+(d>0?'up':'down')+'" title="'+tip+'">'+(d>0?'▲':'▼')+Math.abs(d)+'%</span>';
   }
-  function rowCard(it,scale,exp,norms){
+  function rowCard(it,scale,exp,norms,partial){
     var color=catColor(it.name), isOpen=(openRow===it.name);
     var grand=exp.reduce(function(s,t){ return s+t.amount; },0);
     var pct=grand>0?Math.round(it.total/grand*100):0;
@@ -1124,9 +1131,10 @@
     var b=(norms&&norms!=='wait')?norms.byCat[it.name]:null;
     var mark=(b&&b.ref>0&&scale>0)?'<i class="rc-mark" style="left:'+(b.ref/scale*100).toFixed(1)+'%"></i>':'';
     var h='<div class="row-card'+(isOpen?' open':'')+'" data-row="'+esc(it.name)+'"><div class="rc-top"><span class="rc-name">'+(typeof catTile==='function'?catTile(it.name,color,28):'')+esc(it.name)+'</span>'
-      +'<span class="rc-end">'+catDelta(it.name,it.total,norms)+'<span class="rc-total num">$'+fmt(it.total)+'</span><span class="chev">▶</span></span></div>'
+      +'<span class="rc-end">'+catDelta(it.name,it.total,norms,partial)+'<span class="rc-total num">$'+fmt(it.total)+'</span><span class="chev">▶</span></span></div>'
       +'<div class="rc-bar"><i style="width:'+(scale>0?(it.total/scale*100).toFixed(1):0)+'%;background:'+color+'"></i>'+mark+'</div>'
       +'<div class="rc-meta num">'+it.count+' 筆 · 平均 $'+fmt(it.total/it.count)+' · 占 '+pct+'%'
+      +(partial&&b&&b.ref>0&&it.total<=b.ref?' · 常態還剩 $'+fmt(b.ref-it.total):'')
       +(advCat>0?' · <span class="adv">代墊 $'+fmt(advCat)+' 未計入</span>':'')+'</div>';
     var d='';
     if(isOpen){
