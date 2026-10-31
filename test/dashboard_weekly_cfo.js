@@ -149,6 +149,10 @@ function run() {
       'an explanation must name the selected observation merchant');
     assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '正常', explanations: ['3C 商店值得留意', '3C 商店再說一次'] }), false,
       'Gemini cannot add more explanations than selected observations');
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '本週'.repeat(31), explanations: ['3C 商店值得留意'] }), false,
+      'a model conclusion cannot exceed the fixed card budget');
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '正常', explanations: ['3C 商店' + '很長'.repeat(59)] }), false,
+      'a model explanation cannot exceed the fixed card budget');
   }
 
   // With no selected observation, arbitrary non-numeric advice is rejected too.

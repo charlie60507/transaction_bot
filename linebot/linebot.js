@@ -362,7 +362,7 @@ function lbWeeklyCfoFlex_(report) {
   };
   const body = [
     { type: 'text', text: '每週消費回顧', size: 'xs', color: '#8b91a1', weight: 'bold' },
-    { type: 'text', text: String(copy.conclusion), size: 'lg', weight: 'bold', color: facts.overspending ? '#f0a27a' : '#f3f5f7', wrap: true },
+    { type: 'text', text: String(copy.conclusion), size: 'lg', weight: 'bold', color: facts.overspending ? '#f0a27a' : '#f3f5f7', wrap: true, maxLines: 2 },
     { type: 'text', text: facts.week.start + ' ～ ' + facts.week.end, size: 'xs', color: '#717887' },
     { type: 'separator', margin: 'lg', color: '#303542' },
     { type: 'box', layout: 'horizontal', margin: 'lg', spacing: 'md', contents: [
@@ -379,7 +379,7 @@ function lbWeeklyCfoFlex_(report) {
     if (i === 0) body.push({ type: 'separator', margin: 'lg', color: '#303542' });
     body.push({ type: 'box', layout: 'horizontal', margin: 'md', spacing: 'sm', alignItems: 'flex-start', contents: [
       { type: 'text', text: String(i + 1), size: 'xs', color: '#8296c4', flex: 0 },
-      { type: 'text', text: String(text), size: 'sm', color: '#d9dde5', wrap: true, flex: 1 }
+      { type: 'text', text: String(text), size: 'sm', color: '#d9dde5', wrap: true, maxLines: 2, flex: 1 }
     ] });
   });
   if (facts.week.project !== 0) {

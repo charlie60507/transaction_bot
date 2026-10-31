@@ -265,10 +265,15 @@ function wcfoNumericTokens_(text) {
   });
 }
 
+const WCFO_CONCLUSION_MAX_CHARS = 60;
+const WCFO_EXPLANATION_MAX_CHARS = 120;
+
 /** All numeric tokens in Gemini output must occur in the serialized computed facts. */
 function weeklyCfoValidateGeminiCopy(facts, copy) {
   if (!copy || typeof copy.conclusion !== 'string' || !Array.isArray(copy.explanations)) return false;
   if (copy.explanations.some(function (s) { return typeof s !== 'string'; })) return false;
+  if (!copy.conclusion.trim() || copy.conclusion.length > WCFO_CONCLUSION_MAX_CHARS) return false;
+  if (copy.explanations.some(function (s) { return !s.trim() || s.length > WCFO_EXPLANATION_MAX_CHARS; })) return false;
   const observations = Array.isArray(facts && facts.observations) ? facts.observations : [];
   if (!observations.length && copy.conclusion !== weeklyCfoFallbackCopy(facts).conclusion) return false;
   if (copy.explanations.length > observations.length) return false;

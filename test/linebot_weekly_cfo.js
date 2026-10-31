@@ -5,6 +5,7 @@ const path = require('path');
 const vm = require('vm');
 
 const SOURCE = path.resolve(__dirname, '..', 'linebot', 'linebot.js');
+const MANIFEST = path.resolve(__dirname, '..', 'linebot', 'appsscript.json');
 const TOKEN = 'placeholder-channel-token';
 const OWNER = 'U-placeholder-owner';
 const PUSH_URL = 'https://api.line.me/v2/bot/message/push';
@@ -83,6 +84,16 @@ function allNodes(node, out) {
 }
 
 function run() {
+  // Explicit scopes must include the Script service whenever trigger management is present.
+  {
+    const source = fs.readFileSync(SOURCE, 'utf8');
+    const scopes = JSON.parse(fs.readFileSync(MANIFEST, 'utf8')).oauthScopes || [];
+    if (/\bScriptApp\.(?:getProjectTriggers|deleteTrigger|newTrigger)\s*\(/.test(source)) {
+      assert.ok(scopes.includes('https://www.googleapis.com/auth/script.scriptapp'),
+        'trigger management requires the script.scriptapp OAuth scope');
+    }
+  }
+
   // Scheduled send: owner-only push, key after success, and same-week retry is a no-op.
   {
     const h = load();
@@ -105,6 +116,8 @@ function run() {
     assert.ok(nodes.some(n => n.text && n.text.indexOf('月底推估') >= 0));
     assert.ok(nodes.some(n => n.text && n.text.indexOf('專案支出') >= 0));
     assert.ok(nodes.some(n => n.text && n.text.indexOf('很長但必須換行') >= 0 && n.wrap === true), 'merchant copy wraps');
+    assert.ok(nodes.filter(n => n.text === report().copy.conclusion || (n.text && n.text.indexOf('很長但必須換行') >= 0))
+      .every(n => n.maxLines === 2), 'dynamic copy has a fixed two-line render budget');
     assert.ok(!nodes.some(n => n.type === 'button'), 'approved card has no buttons or free-text invitation');
   }
 
