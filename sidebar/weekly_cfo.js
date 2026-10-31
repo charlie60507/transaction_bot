@@ -270,6 +270,7 @@ function weeklyCfoValidateGeminiCopy(facts, copy) {
   if (!copy || typeof copy.conclusion !== 'string' || !Array.isArray(copy.explanations)) return false;
   if (copy.explanations.some(function (s) { return typeof s !== 'string'; })) return false;
   const observations = Array.isArray(facts && facts.observations) ? facts.observations : [];
+  if (!observations.length && copy.conclusion !== weeklyCfoFallbackCopy(facts).conclusion) return false;
   if (copy.explanations.length > observations.length) return false;
   if (copy.explanations.some(function (text, i) {
     const merchant = String((observations[i] && observations[i].merchant) || '').trim();

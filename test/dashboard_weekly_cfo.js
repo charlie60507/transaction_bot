@@ -155,6 +155,10 @@ function run() {
   {
     const facts = w.weeklyCfoCalculate({ reportDate: '2026-10-12', transactions: [], baseline: { mode: 'budget', amount: 10000 } });
     assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '正常', explanations: ['請減少不必要消費'] }), false);
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '建議減少不必要消費', explanations: [] }), false,
+      'a generic conclusion cannot replace the deterministic no-observation verdict');
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: w.weeklyCfoFallbackCopy(facts).conclusion, explanations: [] }), true,
+      'the deterministic conclusion remains valid');
   }
 }
 
