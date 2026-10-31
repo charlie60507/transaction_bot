@@ -163,7 +163,7 @@ function wcfoCandidates_(txns, weekStart, weekEnd) {
       const named = rows.slice().sort(function (a, b) { return b.amount - a.amount || wcfoCandidateSort_(a, b); })[0];
       out.push({ type: 'category-anomaly', category: cat, amount: wcfoRound_(total), median: wcfoRound_(median),
         excess: wcfoRound_(excess), merchant: named.merchant, date: named.date, rowIdentity: named.rowIdentity,
-        merchantKeys: rows.map(function (r) { return r.merchantKey; }).filter(Boolean) });
+        merchantKeys: named.merchantKey ? [named.merchantKey] : [] });
     }
   });
 
@@ -226,8 +226,8 @@ function weeklyCfoCalculate(input) {
   const elapsedDays = weekEnd.getUTCDate();
   const monthDays = wcfoDaysInMonth_(weekEnd.getUTCFullYear(), weekEnd.getUTCMonth() + 1);
   const monthToDate = monthDailyGross - monthRefunds;
-  const hasMonthRecords = monthRows.some(function (t) { return (t.consumption && !t.project) || t.refund; });
-  const projection = elapsedDays > 0 && hasMonthRecords ? wcfoRound_(monthToDate / elapsedDays * monthDays) : null;
+  const hasRecordedDailyConsumption = monthRows.some(function (t) { return t.consumption && !t.project; });
+  const projection = elapsedDays > 0 && hasRecordedDailyConsumption ? wcfoRound_(monthToDate / elapsedDays * monthDays) : null;
   const monthly = wcfoMonthlyTotals_(txns);
   const baseline = wcfoBaseline_(monthKey, monthly, input.baseline);
   const observations = wcfoCandidates_(txns, weekStart, weekEnd);
@@ -269,6 +269,12 @@ function wcfoNumericTokens_(text) {
 function weeklyCfoValidateGeminiCopy(facts, copy) {
   if (!copy || typeof copy.conclusion !== 'string' || !Array.isArray(copy.explanations)) return false;
   if (copy.explanations.some(function (s) { return typeof s !== 'string'; })) return false;
+  const observations = Array.isArray(facts && facts.observations) ? facts.observations : [];
+  if (copy.explanations.length > observations.length) return false;
+  if (copy.explanations.some(function (text, i) {
+    const merchant = String((observations[i] && observations[i].merchant) || '').trim();
+    return !merchant || text.indexOf(merchant) < 0;
+  })) return false;
   const allowed = {};
   wcfoNumericTokens_(JSON.stringify(facts)).forEach(function (n) { allowed[n] = true; });
   return wcfoNumericTokens_(copy.conclusion + '\n' + copy.explanations.join('\n')).every(function (n) { return !!allowed[n]; });

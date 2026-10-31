@@ -46,14 +46,31 @@ function run() {
     assert.strictEqual(facts.week.project, 50000, 'project is separate');
     assert.strictEqual(facts.month.projection, Math.round(3000 / 11 * 31), 'projection uses recorded daily consumption only through Sunday');
 
-    const panel = loadFns(['isIncome', 'isRefund', 'isConsumption', 'daysInMonth', 'ymKey', 'addMonths', 'keyCovered', 'projectStart', 'isProjectCat',
-      'monthTotals', 'curPartialKey', 'baselineWindow', 'median_', 'sortNum', 'dailyBaseline'], {
+    const panel = loadFns(['isIncome', 'isRefund', 'isConsumption', 'sum', 'sumScope', 'daysInMonth', 'inScope', 'ymKey', 'addMonths', 'keyCovered',
+      'projectStart', 'isProjectCat', 'isDailyTxn', 'dailyOf', 'monthTotals', 'curPartialKey', 'baselineWindow', 'median_', 'sortNum', 'dailyBaseline',
+      'dailyEstimate'], {
       TXNS: rows, PROJECTS: projects, BASELINE: { mode: 'median', amount: null }, BASE_FLOOR: '2025-10',
-      NOW: { year: 2026, month: 10, day: 11 }, historyCovers: () => true
+      NOW: { year: 2026, month: 10, day: 11 }, historyCovers: () => true,
+      dailySubs: () => [{ name: '尚未入帳的訂閱', amt: 1200 }]
     });
-    const dashboardBaseline = panel.dailyBaseline('2026-10', panel.monthTotals());
+    const scope = { level: 'month', year: 2026, month: 10 };
+    const dashboardDaily = panel.dailyOf(scope);
+    const dashboardMonths = panel.monthTotals();
+    const dashboardBaseline = panel.dailyBaseline('2026-10', dashboardMonths);
+    rows.forEach(row => assert.strictEqual(w.wcfoIsConsumption_(row), panel.isConsumption(row), 'consumption classification matches dashboard'));
+    ['飲食', '個人', '旅遊'].forEach(cat => {
+      assert.strictEqual(!!projects.find(project => project.name === cat), panel.isProjectCat(cat), 'project classification matches dashboard');
+    });
+    assert.strictEqual(facts.month.daily, dashboardDaily.total, 'daily consumption and refunds match dashboard');
+    assert.strictEqual(facts.week.refunds, dashboardDaily.refunds, 'refund total matches dashboard at the Sunday cutoff');
+    assert.strictEqual(facts.week.project, dashboardMonths['2026-10'].proj['旅遊'], 'project split matches dashboard');
     assert.strictEqual(facts.baseline.amount, Math.round(dashboardBaseline.ref), 'baseline matches dashboard');
     assert.strictEqual(facts.baseline.months, dashboardBaseline.months);
+    const dashboardProjection = panel.dailyEstimate(scope, dashboardDaily);
+    assert.strictEqual(dashboardProjection, Math.round(dashboardDaily.gross / 11 * 31 + 1200 - dashboardDaily.refunds),
+      'extracted dashboard projection includes expected subscriptions');
+    assert.notStrictEqual(facts.month.projection, dashboardProjection,
+      'weekly report intentionally projects recorded spending only');
   }
 
   // A custom baseline wins, and any projection above it warns without another percentage gate.
@@ -96,6 +113,25 @@ function run() {
     assert.strictEqual(w.weeklyCfoFallbackCopy(facts).explanations.length, 0, 'no generic advice');
   }
 
+  // A refund without any recorded daily consumption is still insufficient for a projection.
+  {
+    const rows = [txn('2026-10-08', 500, '退款', '退款', { type: '收入' })];
+    const facts = w.weeklyCfoCalculate({ reportDate: '2026-10-12', transactions: rows, baseline: { mode: 'budget', amount: 10000 } });
+    assert.strictEqual(facts.month.daily, -500, 'the refund remains visible in the recorded total');
+    assert.strictEqual(facts.month.projection, null, 'refund-only months do not fabricate a negative projection');
+  }
+
+  // A category observation suppresses only the merchant it names, leaving another merchant eligible.
+  {
+    const rows = [
+      txn('2026-10-05', 4000, '商家 A', '飲食'),
+      txn('2026-10-06', 3000, '商家 B', '飲食')
+    ];
+    const facts = w.weeklyCfoCalculate({ reportDate: '2026-10-12', transactions: rows, baseline: { mode: 'budget', amount: 99999 } });
+    assert.strictEqual(facts.observations.length, 2, 'the two-slot observation budget remains usable');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(facts.observations.map(o => o.merchant).sort())), ['商家 A', '商家 B']);
+  }
+
   // ISO week-year remains deterministic at the boundary.
   {
     const facts = w.weeklyCfoCalculate({ reportDate: '2027-01-04', transactions: [], baseline: { mode: 'budget', amount: 10000 } });
@@ -109,6 +145,16 @@ function run() {
       'formatted fact numbers and merchant digits are allowed');
     assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '建議控制在 4,321 元', explanations: [] }), false);
     assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '正常', explanations: '不是陣列' }), false);
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '正常', explanations: ['請減少不必要消費'] }), false,
+      'an explanation must name the selected observation merchant');
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '正常', explanations: ['3C 商店值得留意', '3C 商店再說一次'] }), false,
+      'Gemini cannot add more explanations than selected observations');
+  }
+
+  // With no selected observation, arbitrary non-numeric advice is rejected too.
+  {
+    const facts = w.weeklyCfoCalculate({ reportDate: '2026-10-12', transactions: [], baseline: { mode: 'budget', amount: 10000 } });
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '正常', explanations: ['請減少不必要消費'] }), false);
   }
 }
 
