@@ -411,7 +411,6 @@ function lbPush_(token, owner, messages) {
 function installWeeklyCfoTrigger() {
   const triggers = ScriptApp.getProjectTriggers();
   const ours = triggers.filter(function (t) { return t.getHandlerFunction() === LB_WEEKLY_CFO_HANDLER; });
-  if (ours.length === 1) return { installed: false, count: 1 };
   ours.forEach(function (t) { ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger(LB_WEEKLY_CFO_HANDLER).timeBased()
     .onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(8).nearMinute(0).inTimezone(LB_TZ).create();

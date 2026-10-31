@@ -143,7 +143,7 @@ function run() {
     assert.strictEqual(h.store['weekly-cfo:last-sent-week'], before);
   }
 
-  // Installer is explicit and idempotent; duplicates are repaired without touching other triggers.
+  // Installer is explicit and idempotent; every run replaces stale/duplicate handlers canonically.
   {
     const h = load();
     const unrelated = { getHandlerFunction: () => 'otherHandler' };
@@ -153,7 +153,20 @@ function run() {
     assert.strictEqual(h.triggers[1].cfg.day, 'MONDAY');
     assert.strictEqual(h.triggers[1].cfg.hour, 8);
     assert.strictEqual(h.triggers[1].cfg.tz, 'Asia/Taipei');
-    assert.strictEqual(h.sandbox.installWeeklyCfoTrigger().installed, false);
+    const firstCanonical = h.triggers[1];
+    assert.strictEqual(h.sandbox.installWeeklyCfoTrigger().installed, true);
+    assert.ok(!h.triggers.includes(firstCanonical),
+      'the installer replaces even one existing handler because its schedule is not inspectable');
+    const staleSingle = h.triggers.find(t => t.getHandlerFunction() === 'sendWeeklyCfoReport');
+    delete staleSingle.cfg.day;
+    delete staleSingle.cfg.hour;
+    delete staleSingle.cfg.tz;
+    assert.strictEqual(h.sandbox.installWeeklyCfoTrigger().count, 1, 'a single stale handler is replaced');
+    const repaired = h.triggers.find(t => t.getHandlerFunction() === 'sendWeeklyCfoReport');
+    assert.ok(!h.triggers.includes(staleSingle));
+    assert.strictEqual(repaired.cfg.day, 'MONDAY');
+    assert.strictEqual(repaired.cfg.hour, 8);
+    assert.strictEqual(repaired.cfg.tz, 'Asia/Taipei');
     h.triggers.push({ getHandlerFunction: () => 'sendWeeklyCfoReport' });
     assert.strictEqual(h.sandbox.installWeeklyCfoTrigger().count, 1, 'duplicates collapse to exactly one');
     assert.ok(h.triggers.includes(unrelated), 'unrelated trigger remains');

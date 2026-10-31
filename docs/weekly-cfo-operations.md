@@ -14,8 +14,10 @@ it never adds expected subscriptions or missing entries.
    `sendWeeklyCfoReport`, runs weekly on Monday, and is configured for the 08:00 hour in
    `Asia/Taipei`.
 
-The installer is idempotent. Running it again keeps one correct weekly-CFO handler trigger and
-does not touch unrelated triggers. Ordinary report execution never installs or changes triggers.
+The installer is idempotent. Apps Script cannot expose enough schedule metadata to prove an
+existing trigger is correct, so every explicit installer run deletes all `sendWeeklyCfoReport`
+triggers and creates one canonical Monday 08:00 trigger. It does not touch unrelated triggers.
+Ordinary report execution never installs or changes triggers.
 
 ## Verification
 

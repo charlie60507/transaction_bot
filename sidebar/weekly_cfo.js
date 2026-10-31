@@ -276,7 +276,7 @@ function weeklyCfoValidateGeminiCopy(facts, copy) {
   if (copy.explanations.some(function (s) { return !s.trim() || s.length > WCFO_EXPLANATION_MAX_CHARS; })) return false;
   const observations = Array.isArray(facts && facts.observations) ? facts.observations : [];
   if (!observations.length && copy.conclusion !== weeklyCfoFallbackCopy(facts).conclusion) return false;
-  if (copy.explanations.length > observations.length) return false;
+  if (copy.explanations.length !== observations.length) return false;
   if (copy.explanations.some(function (text, i) {
     const merchant = String((observations[i] && observations[i].merchant) || '').trim();
     return !merchant || text.indexOf(merchant) < 0;

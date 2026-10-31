@@ -155,6 +155,35 @@ function run() {
       'a model explanation cannot exceed the fixed card budget');
   }
 
+  // Gemini must preserve every selected observation; omission falls back to deterministic copy.
+  {
+    const one = w.weeklyCfoCalculate({
+      reportDate: '2026-10-12',
+      transactions: [txn('2026-10-05', 5000, '單一商家', '個人')],
+      baseline: { mode: 'budget', amount: 10000 }
+    });
+    assert.strictEqual(one.observations.length, 1);
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(one, { conclusion: '本週有消費變化', explanations: [] }), false,
+      'one selected observation cannot be omitted');
+
+    const two = w.weeklyCfoCalculate({
+      reportDate: '2026-10-12',
+      transactions: [
+        txn('2026-10-05', 5000, '第一商家', '飲食'),
+        txn('2026-10-06', 4000, '第二商家', '個人')
+      ],
+      baseline: { mode: 'budget', amount: 99999 }
+    });
+    assert.strictEqual(two.observations.length, 2);
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(two, {
+      conclusion: '本週有兩筆消費變化', explanations: [two.observations[0].merchant + '值得留意']
+    }), false, 'two selected observations cannot be reduced to one explanation');
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(two, {
+      conclusion: '本週有兩筆消費變化',
+      explanations: two.observations.map(o => o.merchant + '值得留意')
+    }), true, 'one grounded explanation per selected observation is accepted');
+  }
+
   // With no selected observation, arbitrary non-numeric advice is rejected too.
   {
     const facts = w.weeklyCfoCalculate({ reportDate: '2026-10-12', transactions: [], baseline: { mode: 'budget', amount: 10000 } });
