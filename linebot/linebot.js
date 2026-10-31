@@ -18,9 +18,12 @@
 // that fails either check gets a write or a reply.
 
 var LB_REPLY_URL = 'https://api.line.me/v2/bot/message/reply';
+var LB_PUSH_URL = 'https://api.line.me/v2/bot/message/' + 'push';
 var LB_TZ = 'Asia/Taipei';
 var LB_EVENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 var LB_PENDING_TTL_MS = 24 * 60 * 60 * 1000;
+var LB_WEEKLY_CFO_SENT_KEY = 'weekly-cfo:last-sent-week';
+var LB_WEEKLY_CFO_HANDLER = 'sendWeeklyCfoReport';
 
 /** Webhook entry. Always answers 200: LINE retries on errors, and anything this code does not
  *  honour (bad secret, a stranger, an unknown event) must look identical to the caller. */
@@ -276,7 +279,7 @@ function lbWrittenFlex_(rows) {
   };
 }
 
-/** Reply API only. The push endpoint is never called: replies are free, pushes are metered. */
+/** Webhook replies remain separate from the metered weekly push. */
 function lbReply_(token, replyToken, messages) {
   const res = UrlFetchApp.fetch(LB_REPLY_URL, {
     method: 'post',
@@ -286,4 +289,132 @@ function lbReply_(token, replyToken, messages) {
     muteHttpExceptions: true
   });
   if (res.getResponseCode() !== 200) console.error('linebot: reply HTTP ' + res.getResponseCode());
+}
+
+// ---- weekly CFO push ----------------------------------------------------
+
+/** Monday trigger entry point. Holds the LINE-project lock across key check, push and key write. */
+function sendWeeklyCfoReport() {
+  const props = PropertiesService.getScriptProperties();
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30 * 1000);
+  try {
+    const reportDate = lbWeeklyReportMonday_(new Date());
+    const weekKey = lbWeeklyWeekKey_(reportDate);
+    if (props.getProperty(LB_WEEKLY_CFO_SENT_KEY) === weekKey) return { sent: false, weekKey: weekKey };
+    const report = Ledger.ledgerWeeklyCfo(reportDate);
+    if (String(report && report.facts && report.facts.weekKey || '') !== weekKey) throw new Error('weekly CFO week key mismatch');
+    lbWeeklyCfoDeliver_(props, report);
+    props.setProperty(LB_WEEKLY_CFO_SENT_KEY, weekKey);
+    return { sent: true, weekKey: weekKey };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Operator-only manual sender. It deliberately neither reads nor writes the scheduled key. */
+function sendWeeklyCfoReportManual() {
+  const props = PropertiesService.getScriptProperties();
+  const report = Ledger.ledgerWeeklyCfo(lbWeeklyReportMonday_(new Date()));
+  lbWeeklyCfoDeliver_(props, report);
+  return { sent: true, weekKey: String(report.facts.weekKey || '') };
+}
+
+function lbWeeklyCfoDeliver_(props, report) {
+  const token = props.getProperty('CHANNEL_ACCESS_TOKEN');
+  const owner = props.getProperty('OWNER_USER_ID');
+  if (!token || !owner) throw new Error('required Script Properties are not set');
+  lbPush_(token, owner, [lbWeeklyCfoFlex_(report)]);
+}
+
+/** Latest Monday whose preceding Sunday is complete, as an Asia/Taipei calendar date. */
+function lbWeeklyReportMonday_(now) {
+  const ymd = Utilities.formatDate(now, LB_TZ, 'yyyy-MM-dd');
+  const p = ymd.split('-').map(Number);
+  const d = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+  const dow = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() - (dow - 1));
+  return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + d.getUTCDate()).slice(-2);
+}
+
+function lbWeeklyWeekKey_(reportDate) {
+  const p = String(reportDate).split('-').map(Number);
+  const monday = new Date(Date.UTC(p[0], p[1] - 1, p[2] - 7));
+  const thursday = new Date(monday.getTime() + 3 * 86400000);
+  const year = thursday.getUTCFullYear();
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const jan4Dow = jan4.getUTCDay() || 7;
+  const firstMonday = new Date(jan4.getTime() + (1 - jan4Dow) * 86400000);
+  const week = Math.floor((monday.getTime() - firstMonday.getTime()) / (7 * 86400000)) + 1;
+  return year + '-W' + ('0' + week).slice(-2);
+}
+
+function lbMoney_(n) { return 'NT$' + Math.round(Number(n) || 0).toLocaleString('en-US'); }
+
+function lbWeeklyCfoFlex_(report) {
+  const facts = report.facts;
+  const copy = report.copy;
+  const stat = function (label, value, color) {
+    return { type: 'box', layout: 'vertical', flex: 1, spacing: 'xs', contents: [
+      { type: 'text', text: label, size: 'xxs', color: '#8b91a1' },
+      { type: 'text', text: value, size: 'sm', weight: 'bold', color: color || '#f3f5f7', wrap: true }
+    ] };
+  };
+  const body = [
+    { type: 'text', text: '每週消費回顧', size: 'xs', color: '#8b91a1', weight: 'bold' },
+    { type: 'text', text: String(copy.conclusion), size: 'lg', weight: 'bold', color: facts.overspending ? '#f0a27a' : '#f3f5f7', wrap: true, maxLines: 2 },
+    { type: 'text', text: facts.week.start + ' ～ ' + facts.week.end, size: 'xs', color: '#717887' },
+    { type: 'separator', margin: 'lg', color: '#303542' },
+    { type: 'box', layout: 'horizontal', margin: 'lg', spacing: 'md', contents: [
+      stat('本週日常', lbMoney_(facts.week.daily)),
+      stat('本月至今', lbMoney_(facts.month.daily))
+    ] },
+    { type: 'box', layout: 'horizontal', margin: 'md', spacing: 'md', contents: [
+      stat('月底推估', facts.month.projection == null ? '資料不足' : lbMoney_(facts.month.projection), facts.overspending ? '#f0a27a' : '#f3f5f7'),
+      stat('日常基準', facts.baseline ? lbMoney_(facts.baseline.amount) : '資料不足')
+    ] }
+  ];
+
+  (copy.explanations || []).slice(0, 2).forEach(function (text, i) {
+    if (i === 0) body.push({ type: 'separator', margin: 'lg', color: '#303542' });
+    body.push({ type: 'box', layout: 'horizontal', margin: 'md', spacing: 'sm', alignItems: 'flex-start', contents: [
+      { type: 'text', text: String(i + 1), size: 'xs', color: '#8296c4', flex: 0 },
+      { type: 'text', text: String(text), size: 'sm', color: '#d9dde5', wrap: true, maxLines: 2, flex: 1 }
+    ] });
+  });
+  if (facts.week.project !== 0) {
+    body.push({ type: 'separator', margin: 'lg', color: '#303542' });
+    body.push({ type: 'box', layout: 'horizontal', margin: 'md', contents: [
+      { type: 'text', text: '專案支出', size: 'sm', color: '#8b91a1', flex: 1 },
+      { type: 'text', text: lbMoney_(facts.week.project), size: 'sm', color: '#b9c8e8', weight: 'bold', align: 'end', flex: 1 }
+    ] });
+  }
+  return {
+    type: 'flex', altText: ('每週消費回顧｜' + copy.conclusion).slice(0, 400),
+    contents: { type: 'bubble', styles: { body: { backgroundColor: '#181b22' } },
+      body: { type: 'box', layout: 'vertical', paddingAll: '20px', spacing: 'sm', contents: body } }
+  };
+}
+
+function lbPush_(token, owner, messages) {
+  const res = UrlFetchApp.fetch(LB_PUSH_URL, {
+    method: 'post', contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + token },
+    payload: JSON.stringify({ to: owner, messages: messages.slice(0, 5) }),
+    muteHttpExceptions: true
+  });
+  const code = res.getResponseCode();
+  if (code !== 200) throw new Error('LINE push HTTP ' + code);
+}
+
+/** Explicit, idempotent operator action: leave every unrelated project trigger untouched. */
+function installWeeklyCfoTrigger() {
+  const triggers = ScriptApp.getProjectTriggers();
+  const ours = triggers.filter(function (t) { return t.getHandlerFunction() === LB_WEEKLY_CFO_HANDLER; });
+  ours.forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger(LB_WEEKLY_CFO_HANDLER).timeBased()
+    .onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(8).nearMinute(0).inTimezone(LB_TZ).create();
+  const count = ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === LB_WEEKLY_CFO_HANDLER; }).length;
+  if (count !== 1) throw new Error('weekly CFO trigger installation failed');
+  return { installed: true, count: count };
 }
