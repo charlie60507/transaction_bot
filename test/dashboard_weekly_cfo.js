@@ -81,15 +81,18 @@ function run() {
     assert.strictEqual(facts.overspending, true);
   }
 
-  // The first seven days still project. A Monday on day 1 correctly reports the preceding month.
+  // The first seven days still project. A Monday on day 1 starts a new month with zero completed days.
   {
     let facts = w.weeklyCfoCalculate({ reportDate: '2026-11-02', transactions: [txn('2026-11-01', 100, '早餐', '飲食')], baseline: { mode: 'budget', amount: 5000 } });
     assert.strictEqual(facts.month.elapsedDays, 1);
     assert.strictEqual(facts.month.projection, 3000);
     facts = w.weeklyCfoCalculate({ reportDate: '2026-06-01', transactions: [txn('2026-05-31', 3100, '月底採買', '超市')], baseline: { mode: 'budget', amount: 5000 } });
-    assert.strictEqual(facts.month.key, '2026-05');
-    assert.strictEqual(facts.month.elapsedDays, 31);
-    assert.strictEqual(facts.month.projection, 3100);
+    assert.strictEqual(facts.week.daily, 3100, 'the completed week still includes the preceding Sunday');
+    assert.strictEqual(facts.month.key, '2026-06');
+    assert.strictEqual(facts.month.elapsedDays, 0);
+    assert.strictEqual(facts.month.daysInMonth, 30);
+    assert.strictEqual(facts.month.daily, 0, 'preceding-month rows do not leak into the report month');
+    assert.strictEqual(facts.month.projection, null, 'zero completed report-month days are an explicit limitation');
   }
 
   // Twelve complete weekly buckets include zeros; overlapping large/new signals deduplicate.

@@ -214,7 +214,10 @@ function weeklyCfoCalculate(input) {
   const projects = input.projects || [];
   const txns = wcfoNormalizeTransactions_(input.transactions, projects);
   const ws = wcfoYmd_(weekStart), we = wcfoYmd_(weekEnd);
-  const monthKey = wcfoYm_(weekEnd);
+  // The pace block belongs to the report month, even when the report runs on the first day and
+  // the completed week ends in the preceding month. In that boundary case there are zero
+  // completed days in the report month, so no prior-month spending may leak into its projection.
+  const monthKey = wcfoYm_(reportDate);
   const monthStart = monthKey + '-01';
   const monthRows = txns.filter(function (t) { return wcfoIn_(t, monthStart, we); });
   const weekRows = txns.filter(function (t) { return wcfoIn_(t, ws, we); });
@@ -223,8 +226,8 @@ function weeklyCfoCalculate(input) {
   const monthDailyGross = wcfoSum_(monthRows.filter(function (t) { return t.consumption && !t.project; }));
   const monthRefunds = wcfoSum_(monthRows.filter(function (t) { return t.refund; }));
   const projectTotal = wcfoSum_(weekRows.filter(function (t) { return t.consumption && t.project; }));
-  const elapsedDays = weekEnd.getUTCDate();
-  const monthDays = wcfoDaysInMonth_(weekEnd.getUTCFullYear(), weekEnd.getUTCMonth() + 1);
+  const elapsedDays = wcfoYm_(weekEnd) === monthKey ? weekEnd.getUTCDate() : 0;
+  const monthDays = wcfoDaysInMonth_(reportDate.getUTCFullYear(), reportDate.getUTCMonth() + 1);
   const monthToDate = monthDailyGross - monthRefunds;
   const hasRecordedDailyConsumption = monthRows.some(function (t) { return t.consumption && !t.project; });
   const projection = elapsedDays > 0 && hasRecordedDailyConsumption ? wcfoRound_(monthToDate / elapsedDays * monthDays) : null;
