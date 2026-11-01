@@ -143,8 +143,10 @@ function run() {
 
   // Gemini is all-or-nothing: an invented number discards the whole copy.
   {
-    const facts = w.weeklyCfoCalculate({ reportDate: '2026-10-12', transactions: [txn('2026-10-05', 5000, '3C 商店', '個人')], baseline: { mode: 'budget', amount: 10000 } });
-    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '本週 5,000 元', explanations: ['3C 商店值得留意'] }), true,
+    const facts = w.weeklyCfoCalculate({ reportDate: '2026-10-12', transactions: [txn('2026-10-05', 5000, '3C 商店', '個人')], baseline: { mode: 'budget', amount: 99999 } });
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, {
+      conclusion: '本週有值得留意的消費變化', explanations: ['3C 商店單筆 5,000 元，值得留意']
+    }), true,
       'formatted fact numbers and merchant digits are allowed');
     assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '建議控制在 4,321 元', explanations: [] }), false);
     assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '正常', explanations: '不是陣列' }), false);
@@ -156,6 +158,12 @@ function run() {
       'a model conclusion cannot exceed the fixed card budget');
     assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, { conclusion: '正常', explanations: ['3C 商店' + '很長'.repeat(59)] }), false,
       'a model explanation cannot exceed the fixed card budget');
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, {
+      conclusion: '本週有值得留意的消費變化', explanations: ['3C 商店單筆一萬元，值得留意']
+    }), false, 'Chinese-numeral amounts cannot bypass the Arabic numeric-token guard');
+    assert.strictEqual(w.weeklyCfoValidateGeminiCopy(facts, {
+      conclusion: '建議減少不必要消費', explanations: ['3C 商店值得留意']
+    }), false, 'an observation does not make generic advice a grounded computed conclusion');
   }
 
   // Gemini must preserve every selected observation; omission falls back to deterministic copy.

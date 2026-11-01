@@ -268,6 +268,29 @@ function wcfoNumericTokens_(text) {
   });
 }
 
+/**
+ * Gemini must express numeric claims with Arabic digits so wcfoNumericTokens_ can validate them.
+ * Reject Chinese numeral expressions rather than trying to interpret their many colloquial forms.
+ * A lone numeral in a proper name (for example, `第一商家`) is not rejected; magnitude and
+ * currency/percentage forms such as `一萬` and `三百元` are numeric claims.
+ */
+function wcfoHasChineseNumericClaim_(text) {
+  const value = String(text || '');
+  return /[零〇一二兩三四五六七八九]*[十百千萬億兆][零〇一二兩三四五六七八九十百千萬億兆]*/.test(value) ||
+    /[零〇一二兩三四五六七八九]+(?:元|圓|塊|%|％)/.test(value);
+}
+
+function wcfoConclusionMatchesVerdict_(facts, conclusion) {
+  const text = String(conclusion || '').trim();
+  const fallback = weeklyCfoFallbackCopy(facts).conclusion;
+  if (text === fallback) return true;
+  if (facts && facts.overspending) {
+    return /本月/.test(text) && /(?:超過|超支)/.test(text) && /(?:基準|預算)/.test(text);
+  }
+  const observations = Array.isArray(facts && facts.observations) ? facts.observations : [];
+  return observations.length > 0 && /本週/.test(text) && /(?:消費|支出)/.test(text) && /(?:變化|異常)/.test(text);
+}
+
 const WCFO_CONCLUSION_MAX_CHARS = 60;
 const WCFO_EXPLANATION_MAX_CHARS = 120;
 
@@ -278,12 +301,13 @@ function weeklyCfoValidateGeminiCopy(facts, copy) {
   if (!copy.conclusion.trim() || copy.conclusion.length > WCFO_CONCLUSION_MAX_CHARS) return false;
   if (copy.explanations.some(function (s) { return !s.trim() || s.length > WCFO_EXPLANATION_MAX_CHARS; })) return false;
   const observations = Array.isArray(facts && facts.observations) ? facts.observations : [];
-  if (!observations.length && copy.conclusion !== weeklyCfoFallbackCopy(facts).conclusion) return false;
+  if (!wcfoConclusionMatchesVerdict_(facts, copy.conclusion)) return false;
   if (copy.explanations.length !== observations.length) return false;
   if (copy.explanations.some(function (text, i) {
     const merchant = String((observations[i] && observations[i].merchant) || '').trim();
     return !merchant || text.indexOf(merchant) < 0;
   })) return false;
+  if (wcfoHasChineseNumericClaim_(copy.conclusion + '\n' + copy.explanations.join('\n'))) return false;
   const allowed = {};
   wcfoNumericTokens_(JSON.stringify(facts)).forEach(function (n) { allowed[n] = true; });
   return wcfoNumericTokens_(copy.conclusion + '\n' + copy.explanations.join('\n')).every(function (n) { return !!allowed[n]; });
