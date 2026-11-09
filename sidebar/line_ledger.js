@@ -237,3 +237,76 @@ function ledgerUndo(rowId) {
     lock.releaseLock();
   }
 }
+
+/**
+ * Compute one Monday weekly review from the dashboard's authoritative row mapping and settings.
+ * The lock is required even though the report is conceptually read-only: readTxnsForLoad_ may
+ * backfill a missing immutable row id. Gemini may phrase the conclusion and selected observations,
+ * but any failure or number not present in the computed facts discards all model prose.
+ */
+function ledgerWeeklyCfo(reportDateYmd) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30 * 1000);
+  let facts;
+  try {
+    const ss = getSpreadsheet_();
+    const sh = ss.getSheetByName(CFG.DATA_SHEET);
+    const read = sh ? readTxnsForLoad_(sh) : { rows: [], mineIdx: -1, rowIdIdx: -1 };
+    const txns = read.rows.length ? txnsFromRows_(read.rows, read.mineIdx, read.rowIdIdx) : [];
+    const settings = readMetaSettings_(ss);
+    // The repository has no verified subscription-change detector yet. When one is added, only
+    // its explicit verified events belong here; absence must never be inferred as a missed charge.
+    const verifiedSubscriptions = [];
+    facts = weeklyCfoCalculate({
+      reportDate: String(reportDateYmd || ''), transactions: txns,
+      projects: settings.projects, baseline: settings.baseline,
+      verifiedSubscriptions: verifiedSubscriptions
+    });
+  } finally {
+    lock.releaseLock();
+  }
+
+  let copy = weeklyCfoFallbackCopy(facts);
+  try {
+    const gemini = ledgerWeeklyCfoGemini_(facts);
+    if (weeklyCfoValidateGeminiCopy(facts, gemini)) {
+      copy = { conclusion: gemini.conclusion, explanations: gemini.explanations.slice(0, 2), source: 'gemini' };
+    }
+  } catch (err) {
+    // Wording is optional. Do not log the request, response, API key or transaction facts.
+    console.error('weekly CFO wording failed');
+  }
+  return { facts: facts, copy: copy };
+}
+
+function ledgerWeeklyCfoGemini_(facts) {
+  const apiKey = CONFIG.geminiApiKey;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
+  const prompt = [
+    '你是台灣個人每週消費報告的文案編輯。只能使用下方已計算事實，不可計算或增加任何數字。',
+    '請用台灣繁體中文回覆 JSON：{"conclusion":"一句結論","explanations":["逐筆說明"]}。',
+    'explanations 最多兩句，順序與 observations 相同；沒有 observations 時必須是空陣列。',
+    '不要提出通用建議，不要邀請使用者輸入文字，不要提及未記錄或預期扣款。',
+    JSON.stringify(facts)
+  ].join('\n');
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + LEDGER_GEMINI_MODEL_ + ':generateContent';
+  let res;
+  try {
+    res = UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json', headers: { 'x-goog-api-key': apiKey },
+      payload: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0, responseMimeType: 'application/json' }
+      }),
+      muteHttpExceptions: true
+    });
+  } catch (err) { throw new Error('Gemini request failed'); }
+  if (res.getResponseCode() !== 200) throw new Error('Gemini HTTP ' + res.getResponseCode());
+  let body;
+  try { body = JSON.parse(res.getContentText()); } catch (err) { throw new Error('Gemini body is not JSON'); }
+  const part = (((((body || {}).candidates || [])[0] || {}).content || {}).parts || [])[0];
+  const raw = String((part && part.text) || '');
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('Gemini output has no JSON object');
+  try { return JSON.parse(match[0]); } catch (err) { throw new Error('Gemini output is not valid JSON'); }
+}
