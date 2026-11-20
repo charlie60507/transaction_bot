@@ -270,13 +270,13 @@ function body(p, v) {
 function assertSameViews(p, ref, what) {
   VIEWS.forEach(v => assert.strictEqual(show(p, v), show(ref, v), what + ': ' + label(v) + ' renders exactly as a full load'));
 }
-/** TXNS equals a full reload, field for field and in order, and so does the fingerprint. */
-function assertReload(p, server, what, viaRefresh) {
+/** TXNS equals a full reload, field for field and in order, and so does the fingerprint. Since #98
+ *  the refresh (getRecentTxns) carries the fingerprint too, so every path ends on a full load's. */
+function assertReload(p, server, what) {
   const ref = fullPage(server);
   assert.deepStrictEqual(wire(p.TXNS.map(t => t.rowId)), wire(ref.TXNS.map(t => t.rowId)), what + ': same rows in the same order as a full reload');
   assert.strictEqual(p.txnsSignature(p.TXNS), ref.txnsSignature(ref.TXNS), what + ': every field equals a full reload');
-  // refreshTxns' getAllTxns carries no fingerprint and always clears it (one whole list on the next edit, as before #58).
-  assert.strictEqual(p.OLDER_FP, viaRefresh ? null : ref.OLDER_FP, what + (viaRefresh ? ': a refresh leaves no fingerprint' : ': the page\'s fingerprint is a full load\'s'));
+  assert.strictEqual(p.OLDER_FP, ref.OLDER_FP, what + ': the page\'s fingerprint is a full load\'s');
   assert.strictEqual(p.HISTORY.complete, true, what + ': the history is marked complete');
   return ref;
 }
@@ -353,12 +353,22 @@ function testPartialViews() {
   });
 }
 
-/** One edit through the real applyEdit, answered by the real server. Returns the response. */
+/** The one post-drain read, answered by the real server. Returns its parsed response. */
+function answerRead(p, server) {
+  const r = take(p, 'getRecentTxns');
+  const raw = server.getRecentTxns.apply(null, r.args);
+  r.success(raw);
+  return { call: r, res: parsed(raw) };
+}
+/** One edit through the real applyEdit → updateTxns, answered by the real server; deliver()
+ *  hands the page the write's response and answers the read that follows it. */
 function edit(p, server, rowId, field, value) {
   p.applyEdit(rowId, field, value);
-  const c = take(p, 'updateTxn');
-  const res = wire(server.updateTxn.apply(null, c.args));
-  return { call: c, res, deliver() { c.success(res); } };
+  const c = take(p, 'updateTxns');
+  const res = wire(server.updateTxns.apply(null, wire(c.args)));
+  assert.ok(res.results.every(r => r.ok) && !res.txns && !res.recent, 'the write succeeds and carries no list');
+  const e = { call: c, res, deliver() { c.success(res); e.read = answerRead(p, server); return e; } };
+  return e;
 }
 const rid = (server, msg, i) => wire(server.getAllTxns()).filter(t => t.id.split('|')[0] === msg)[i || 0].rowId;
 
@@ -376,12 +386,10 @@ function testEditDuringPartial() {
     // Then an older row is deleted somewhere else: the early response still carries it.
     const goneId = rid(server, 'cathay-old', 0);
     sheet.rows.splice(sheet.rows.findIndex(r => r[12] === goneId), 1);
-    const e = edit(p, server, rid(server, 'cathay-win', 1), 'posted', true);
-    assert.strictEqual(e.call.args[2], 'recent', lateShape + ': the edit still asks for the recent acknowledgement');
-    assert.strictEqual(e.call.args[3], null, lateShape + ': but sends no fingerprint while history is partial');
-    assert.ok(e.res.txns && !e.res.recent, lateShape + ': so the server answers with the whole list');
-    e.deliver();
-    assertReload(p, server, lateShape + ': the edit\'s whole list completes the history');
+    const e = edit(p, server, rid(server, 'cathay-win', 1), 'posted', true).deliver();
+    assert.strictEqual(e.read.call.args[0], null, lateShape + ': the read after the edit sends no fingerprint while history is partial');
+    assert.ok(e.read.res.txns && !e.read.res.recent, lateShape + ': so the server answers with the whole list');
+    assertReload(p, server, lateShape + ': the read\'s whole list completes the history');
     const late = early || server.getTxnsBefore.apply(null, bg.args);
     assert.ok(lateShape === 'merge' ? parsed(late).older : parsed(late).txns, lateShape + ': precondition, the late response has the ' + lateShape + ' shape');
     const sig = p.txnsSignature(p.TXNS);
@@ -389,29 +397,28 @@ function testEditDuringPartial() {
     assert.strictEqual(p.txnsSignature(p.TXNS), sig, lateShape + ': a late background response changes nothing (no duplicate, no reorder)');
     assert.ok(!p.TXNS.some(t => t.rowId === goneId), lateShape + ': and does not bring back the row deleted elsewhere');
     assertReload(p, server, lateShape + ': after the late background response');
-    // And the next edit, now that the page holds a fingerprint, is incremental again.
-    const next = edit(p, server, rid(server, 'cathay-old', 0), 'cat', '交通');
-    assert.ok(next.res.recent, lateShape + ': the next edit is incremental');
-    next.deliver();
+    // And the next window edit, now that the page holds a fingerprint, is incremental again.
+    const next = edit(p, server, rid(server, 'cathay-win', 0), 'cat', '交通').deliver();
+    assert.ok(next.read.res.recent, lateShape + ': the read after the next edit is incremental');
     assertReload(p, server, lateShape + ': after the next edit');
   });
 
-  // Edits after the background merge: the merged fingerprint lets an older edit stay incremental,
-  // and the page still equals a reload.
+  // Edits after the background merge: the read after each sends the merged fingerprint, and the
+  // page still equals a reload (an older edit's read is the whole list, a window edit's is not).
   const server = loadServer(fixture('mixed'));
   const p = partialPage(server);
   answerHistory(p, server);
   [['cathay-old', 1, 'amount', 333], ['txt-old', 0, 'posted', true], ['cathay-win', 0, 'cat', '飲食']].forEach(([msg, i, field, value]) => {
-    const e = edit(p, server, rid(server, msg, i), field, value);
-    assert.ok(e.call.args[3] != null, 'after the merge the edit sends the merged fingerprint');
-    e.deliver();
+    const e = edit(p, server, rid(server, msg, i), field, value).deliver();
+    assert.ok(e.read.call.args[0] != null, 'after the merge the read sends the merged fingerprint');
     assertReload(p, server, 'edit ' + msg + ' ' + field + ' after the merge');
   });
   assert.ok(p.TXNS.find(t => t.merchant === '文字日期舊').posted, 'the older text-dated row is ticked 已記帳');
 }
 
 function testFullListAckDuringPartial() {
-  // A delete returns the whole list: the history is complete, and the late read is ignored.
+  // A delete returns no list; the read after it has no fingerprint to send while the history is
+  // partial, so it is the whole list: the history is complete, and the late read is ignored.
   const server = loadServer(fixture('asc'));
   const p = partialPage(server);
   const bg = take(p, 'getTxnsBefore');
@@ -419,7 +426,10 @@ function testFullListAckDuringPartial() {
   p.ROW_DELETE_INTENTS[victim] = { sent: false, button: null };
   p.trySendDelete(victim);
   const del = take(p, 'deleteTxn');
-  del.success(wire(server.deleteTxn.apply(null, del.args)));
+  const delRes = wire(server.deleteTxn.apply(null, del.args));
+  assert.deepStrictEqual(delRes, { ok: true }, 'the delete response carries no list');
+  del.success(delRes);
+  assert.ok(answerRead(p, server).res.txns, 'the read after it is the whole list');
   assertReload(p, server, 'a delete during the partial phase');
   assert.ok(p.TXNS.find(t => t.id.split('|')[0] === 'cathay-new').id.endsWith('|0'), 'its duplicate siblings are renumbered');
   const sig = p.txnsSignature(p.TXNS);
@@ -427,13 +437,13 @@ function testFullListAckDuringPartial() {
   assert.strictEqual(p.txnsSignature(p.TXNS), sig, 'the late background read after a delete changes nothing');
   assertSameViews(p, fullPage(server), 'after a delete during the partial phase');
 
-  // refreshTxns' getAllTxns is the whole list too.
+  // A refresh during the partial phase sends no fingerprint, so it is the whole list too.
   const server2 = loadServer(fixture('asc'));
   const p2 = partialPage(server2);
   p2.refreshTxns();
-  take(p2, 'getAllTxns').success(wire(server2.getAllTxns()));
+  answerRead(p2, server2);
   assert.strictEqual(p2.HISTORY.complete, true, 'a refresh during the partial phase completes the history');
-  assert.strictEqual(p2.OLDER_FP, null, 'with no fingerprint, exactly as a refresh always leaves it');
+  assert.strictEqual(p2.OLDER_FP, fullPage(server2).OLDER_FP, 'and leaves the full load\'s fingerprint');
   take(p2, 'getTxnsBefore').success(server2.getTxnsBefore(2025, 10, 'whatever'));
   assert.deepStrictEqual(wire(p2.TXNS.map(t => t.rowId)), wire(fullPage(server2).TXNS.map(t => t.rowId)), 'the late read changes nothing');
 }
@@ -458,32 +468,31 @@ function testLateAndRacingBackground() {
   const p2 = partialPage(server2);
   const target = rid(server2, 'm-40-0');
   p2.applySplit(target, '50');
-  const split = take(p2, 'updateTxn');
-  server2.updateTxn.apply(null, split.args);
+  const split = take(p2, 'updateTxns');
+  const splitRes = wire(server2.updateTxns.apply(null, wire(split.args)));
   answerHistory(p2, server2);
   assert.strictEqual(p2.HISTORY.complete, false, 'a whole list issued before an in-flight write is not adopted');
   assert.strictEqual(p2.TXNS.find(t => t.rowId === target).amount, 50, 'the optimistic split stays on screen');
-  noPending(p2, 'getAllTxns', 'no refetch while the write is still in flight');
-  split.success({ ok: true });
-  take(p2, 'getAllTxns').success(wire(server2.getAllTxns()));
-  assertReload(p2, server2, 'refetch after a dropped background list', true);
+  noPending(p2, 'getRecentTxns', 'no refetch while the write is still in flight');
+  split.success(splitRes);
+  answerRead(p2, server2);
+  assertReload(p2, server2, 'refetch after a dropped background list');
 
   // The same split written AFTER the background read: the merge lands while the split is in flight
-  // and keeps it, and the next edit sees the split in the sheet and gets the whole list.
+  // and keeps it, and the read after the split converges the page.
   const server3 = loadServer(fixture('asc'));
   const p3 = partialPage(server3);
   p3.applySplit(rid(server3, 'm-40-0'), '50');
-  const split3 = take(p3, 'updateTxn');
+  const split3 = take(p3, 'updateTxns');
   const res3 = answerHistory(p3, server3);
   assert.ok(res3.older, 'the read came first: the older-rows shape');
   assert.strictEqual(p3.HISTORY.complete, true, 'the merge adds only older rows, so it is adopted even with a write in flight');
   assert.strictEqual(p3.TXNS.find(t => t.rowId === rid(server3, 'm-40-0')).amount, 50, 'the optimistic split survives the merge');
-  server3.updateTxn.apply(null, split3.args);
-  split3.success({ ok: true });
-  noPending(p3, 'getAllTxns', 'nothing was dropped, so nothing is refetched');
-  const e = edit(p3, server3, rid(server3, 'cathay-old', 0), 'posted', true);
-  assert.ok(e.res.txns, 'the split changed a row the merged fingerprint covers: the next edit gets the whole list');
-  e.deliver();
+  split3.success(wire(server3.updateTxns.apply(null, wire(split3.args))));
+  answerRead(p3, server3);
+  assertReload(p3, server3, 'the read after a split that raced the merge');
+  const e = edit(p3, server3, rid(server3, 'cathay-old', 0), 'posted', true).deliver();
+  assert.ok(e.read.res.txns, 'an own older edit is followed by the whole list');
   assertReload(p3, server3, 'edit after a split that raced the merge');
 
   // A manual add dated before the loaded range, landed before the background read: the read
@@ -538,7 +547,7 @@ function testBackgroundFailureAndRetry() {
 
 // A retry clicked while a tick is still in flight, after a bot row has landed since boot: the
 // retried read comes back as the whole list, read BEFORE the tick's write. It must not overwrite
-// the tick on screen; it is dropped and the tick's own whole list completes the history.
+// the tick on screen; it is dropped, and the one read after the tick completes the history.
 function testRetryRacesInFlightEdit() {
   const sheet = fixture('asc');
   const server = loadServer(sheet);
@@ -547,7 +556,7 @@ function testRetryRacesInFlightEdit() {
   const target = p.TXNS.find(t => !t.posted && t.rowId);
   assert.ok(target, 'precondition: a loaded pending row to tick');
   p.applyEdit(target.rowId, 'posted', true);
-  const tick = take(p, 'updateTxn');
+  const tick = take(p, 'updateTxns');
   const at = sheet.rows.findIndex(r => r[2] === '2024-07-04T01:00:00Z');
   sheet.rows.splice(at, 0, txnRow('bot-new', new Date('2026-09-30T01:00:00Z'), 'z', 499, '9999', '新的機器人列', { 10: '' }));
   p.loadHistory();
@@ -559,10 +568,10 @@ function testRetryRacesInFlightEdit() {
   retry.success(raw);
   assert.strictEqual(p.TXNS.find(t => t.rowId === target.rowId).posted, true, 'the retried whole list does not overwrite the in-flight tick');
   assert.strictEqual(p.HISTORY.complete, false, 'and is not adopted as the history');
-  noPending(p, 'getAllTxns', 'no refetch while the tick is still in flight');
-  const tickRes = wire(server.updateTxn.apply(null, tick.args));
-  tick.success(tickRes);
-  noPending(p, 'getAllTxns', 'the tick\'s whole list settles the dropped read without another one');
+  noPending(p, 'getRecentTxns', 'no refetch while the tick is still in flight');
+  tick.success(wire(server.updateTxns.apply(null, wire(tick.args))));
+  assert.ok(answerRead(p, server).res.txns, 'the one read after the tick is the whole list');
+  noPending(p, 'getRecentTxns', 'and no other read follows');
   assertReload(p, server, 'tick after a dropped retry');
   assert.ok(p.TXNS.find(t => t.rowId === target.rowId).posted && p.TXNS.some(t => t.rowId === 'bot-new'), 'the tick and the bot row are both on the page');
 
@@ -573,7 +582,7 @@ function testRetryRacesInFlightEdit() {
   take(p2, 'getTxnsBefore').failure(new Error('逾時'));
   const target2 = p2.TXNS.find(t => !t.posted && t.rowId);
   p2.applyEdit(target2.rowId, 'posted', true);
-  const tick2 = take(p2, 'updateTxn');
+  const tick2 = take(p2, 'updateTxns');
   sheet2.rows.splice(sheet2.rows.findIndex(r => r[2] === '2024-07-04T01:00:00Z'), 0,
     txnRow('bot-new', new Date('2026-09-30T01:00:00Z'), 'z', 499, '9999', '新的機器人列', { 10: '' }));
   p2.loadHistory();
@@ -581,8 +590,8 @@ function testRetryRacesInFlightEdit() {
   retry2.success(server2.getTxnsBefore.apply(null, retry2.args));
   assert.strictEqual(p2.TXNS.find(t => t.rowId === target2.rowId).posted, true, 'failing tick: the retried list is still dropped while it is in flight');
   tick2.failure(new Error('寫入失敗'));
-  take(p2, 'getAllTxns').success(wire(server2.getAllTxns()));
-  assertReload(p2, server2, 'refetch after a failed tick and a dropped retry', true);
+  answerRead(p2, server2);
+  assertReload(p2, server2, 'refetch after a failed tick and a dropped retry');
   assert.strictEqual(p2.TXNS.find(t => t.rowId === target2.rowId).posted, false, 'the failed tick is not shown as written');
 }
 

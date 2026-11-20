@@ -1365,30 +1365,25 @@
     }).join('\u001e');
   }
 
-  // Monotonic count of local mutations ISSUED, plus how many of them are still in flight. Every
-  // response carries the value captured when its own request went out; if the count has moved on
-  // since, a later mutation already changed local state and that response describes a sheet older
-  // than what is on screen. Adopting it would resurrect the value the owner just replaced, so it
-  // is discarded instead.
-  //
-  // Discarding it also discards the authoritative list it carried, and THAT does not correct
-  // itself. applySplit, bulkPost and submitAdd bump this counter without ever adopting a list, so
-  // a superseded applyEdit response can be the last word the server would have got in. 金額 is the
-  // third segment of the composite row key (txnKey_ in 程式碼.js), so a dropped post-amount-edit
-  // list leaves the page holding the row's OLD id; findRowByKey_ matches on the full five-part
-  // key, so the NEXT write to that row throws 找不到該筆交易, and this page has no polling and no
-  // refresh control to recover with. A drop is therefore REMEMBERED: settle() records the debt and
-  // refreshTxns() pays it with one read once the last in-flight mutation has landed — and that read
-  // re-books itself if a mutation supersedes it too, so the debt survives an arbitrarily long run
-  // of writes. Convergence is that refetch, not the guard.
+  // Monotonic count of local mutations ISSUED, plus how many of them are still in flight (every
+  // queued write and delete and every addTxn counts from issue to settle). A write's response
+  // carries no list (#98): the page reads the list once, through refreshTxns (getRecentTxns),
+  // when nothing is in flight. STALE_DROPPED is that owed read: settle() books it after every
+  // answered write or delete, and it stays booked until a read is ADOPTED. A read captures the
+  // count when it goes out; if the count has moved on by the time it lands, a later mutation
+  // already changed local state, the read may predate it, and adopting it would resurrect the
+  // value the owner just replaced — so it is discarded and the debt re-booked. The read is also
+  // how a legacy composite row key (金額 is its third segment) catches up after an amount edit,
+  // so the debt survives an arbitrarily long run of writes. Convergence is that read.
   var MUTATION_SEQ=0, INFLIGHT=0, STALE_DROPPED=false, REFRESHING=false;
-  // The server's fingerprint (olderFingerprint_ in 程式碼.js) of the rows older than the edit
-  // window, for the list adoptTxns last adopted — or null when that list came without one. Each
-  // incremental edit sends it back; the server compares it with the sheet BEFORE writing and
-  // returns the whole list instead of the recent rows when they differ. That is what keeps an edit
-  // equal to a reload when older rows changed elsewhere (another tab, the sheet itself) or through
-  // a backdated manual add here (addTxn adopts no list, so it leaves this stale on purpose). Only
-  // adoptTxns writes it, so a response settle() discards can never advance it.
+  // The server's fingerprint (olderFingerprint_ in 程式碼.js) of the rows older than the recent
+  // window, for the list adoptTxns last adopted — or null when that list came without one.
+  // refreshTxns sends it to getRecentTxns, which compares it with the sheet as it stands and
+  // returns the whole list instead of the recent rows when they differ. That is what keeps a
+  // refresh equal to a reload when older rows changed elsewhere (another tab, the sheet itself),
+  // through this page's own edit of an older row, or through a backdated manual add here (addTxn
+  // adopts no list, so it leaves this stale on purpose). Only adoptTxns writes it, so a read that
+  // is discarded can never advance it.
   var OLDER_FP=null;
   // How much of the history TXNS holds (#58). boot asks for the recent 13 months first and
   // fetches the rest in the background; until that lands `complete` is false and `before` is the
@@ -1396,11 +1391,11 @@
   // partial number. `loadedFp` is the server's fingerprint of the rows boot sent (getTxnsBefore
   // checks it); `loading` is true while the background read is out; `failed` holds the error
   // message after a failed read, which swaps the loading state for a retry control.
-  // A whole list from ANY source — an edit or delete acknowledgement, refreshTxns, or a
-  // getTxnsBefore that found the page's rows out of date — IS the complete history, and marks it
-  // so; a background response arriving after that is ignored. OLDER_FP stays null while the
-  // history is incomplete, so no edit can claim older rows the page has not loaded: the server
-  // answers every edit in that window with the whole list.
+  // A whole list from ANY source — refreshTxns, or a getTxnsBefore that found the page's rows
+  // out of date — IS the complete history, and marks it so; a background response arriving after
+  // that is ignored. OLDER_FP stays null while the history is incomplete, so no refresh can claim
+  // older rows the page has not loaded: the server answers every refresh in that window with the
+  // whole list.
   var HISTORY={ complete:true, before:null, loadedFp:null, loading:false, failed:null };
   // Merchant is a logical row field, even when editRow() mounts the same transaction
   // more than once. Keep its unsaved value outside the DOM so a whole-panel rebuild cannot
@@ -1483,35 +1478,95 @@
     trySendDelete(rowKey);
   }
   /**
-   * ONE page-wide write queue for every mutating server call that can adopt or supersede a list
-   * (updateTxn from every call site, and deleteTxn). Each call takes its sequence number when it
-   * is enqueued and is sent only after the previous call's handler has run, so send order IS
-   * sequence order and the server (which serialises on its script lock) processes the writes in
-   * that order too. That is what makes settle()'s rule true: the call holding MUTATION_SEQ is the
-   * last one sent, after every earlier call was acknowledged, so its snapshot already contains
-   * every earlier write and adopting it can never undo a write still out. Per-row queues could
-   * not promise that: two rows' writes raced for the server lock, and the latest sequence's
-   * snapshot could predate the other row's write and un-post it on screen.
+   * ONE page-wide write queue for every row write (updateTxns) and every delete (deleteTxn). Each
+   * mutation takes its sequence number when it is enqueued; items leave strictly in queue order,
+   * and nothing is sent while an earlier call is still out, so the server (which serialises on its
+   * script lock) applies the writes in that order too.
    *
-   * Items carry their row key, so ROW_ACTIVE_WRITES stays per row (trySendDelete reads it). The
-   * queue blocks while its HEAD item's row is still a pending add: skipping it would let a later
-   * write's snapshot be adopted while that row's earlier write is unsent. addTxn stays outside
-   * the queue; it adopts no list and preservePendingAddRows keeps its row.
+   * Items are data, not closures. A patch item is
+   *   { kind:'patch', rowKey, patch, onOk(), onFail(err), cancel() }
+   * and a delete item is { kind:'delete', rowKey, start(done), cancel() }.
+   *
+   * Coalescing. While one call is out, every patch queued behind it waits; when the call's handler
+   * has run, ALL consecutive patch items at the head leave together as ONE updateTxns call, up to
+   * the first delete or the first row still waiting on its add. Patches to the same row are
+   * merged in queue order, later fields winning, and the row's id is resolved at send time
+   * (resolveTextRowId), so a row whose add has just landed goes out under its server id. Six rapid
+   * ticks therefore cost two calls: the first tick, then the other five.
+   *
+   * A delete is a barrier: it shifts row numbers on the server, so it goes alone, after every
+   * patch queued before it and before every patch queued after it.
+   *
+   * Results dispatch per row to every original mutation merged into that row's item: onOk on
+   * success, onFail on that item's own error, and onFail for every item when the whole call fails.
+   * A write response carries no list. A refresh is booked instead (settle) and goes out once the
+   * queue is idle and nothing is in flight (maybeRefresh), so no adopted list can predate a write
+   * the screen already shows.
+   *
+   * ROW_ACTIVE_WRITES counts every row in the call that is out, so trySendDelete still waits for
+   * its own row. The queue blocks while its HEAD item's row is still a pending add: skipping it
+   * would let a later write overtake that row's earlier one. addTxn stays outside the queue; it
+   * adopts no list and preservePendingAddRows keeps its row.
    */
-  function enqueueRowWrite(ref,start,cancel){
-    ROW_WRITE_QUEUE.items.push({rowKey:textRowKey(ref),start:start,cancel:cancel||null});
+  function enqueueRowWrite(item){ enqueueRowWrites([item]); }
+  function enqueueRowWrites(items){
+    items.forEach(function(item){ item.rowKey=textRowKey(item.rowKey); ROW_WRITE_QUEUE.items.push(item); });
     pumpRowWrites();
   }
+  function rowWriteBlocked(item){ var t=textTxn(item.rowKey); return !!(t&&t._pendingAdd); }
   function pumpRowWrites(){
     var q=ROW_WRITE_QUEUE; if(q.active||!q.items.length) return;
-    var item=q.items[0], current=textTxn(item.rowKey); if(current&&current._pendingAdd) return;
-    q.items.shift(); q.active=item; beginRowWrite(item.rowKey);
-    var finished=false;
-    item.start(function(){
-      if(finished) return; finished=true;
-      if(q.active===item) q.active=null;
-      pumpRowWrites(); endRowWrite(item.rowKey);
-    },item.rowKey);
+    if(rowWriteBlocked(q.items[0])) return;
+    if(q.items[0].kind==='delete'){ sendRowDelete(q.items.shift()); return; }
+    var batch=[];
+    while(q.items.length&&q.items[0].kind==='patch'&&!rowWriteBlocked(q.items[0])) batch.push(q.items.shift());
+    sendRowPatches(batch);
+  }
+  /** End the call that is out: run its callbacks, free the queue, send what is next, release the
+   *  rows (which may send a delete waiting on them), then refresh if the page is now quiet. */
+  function finishRowWrite(active,rowKeys,callbacks){
+    var q=ROW_WRITE_QUEUE;
+    if(active.finished) return; active.finished=true;
+    callbacks();
+    if(q.active===active) q.active=null;
+    pumpRowWrites();
+    rowKeys.forEach(function(rowKey){ endRowWrite(rowKey); });
+    maybeRefresh();
+  }
+  function sendRowDelete(item){
+    var active={items:[item],finished:false};
+    ROW_WRITE_QUEUE.active=active; beginRowWrite(item.rowKey);
+    item.start(function(){ finishRowWrite(active,[item.rowKey],function(){}); });
+  }
+  function sendRowPatches(batch){
+    var entries=[], byRow={};
+    batch.forEach(function(item){
+      var e=byRow[item.rowKey];
+      if(!e){ e=byRow[item.rowKey]={rowKey:item.rowKey,patch:{},members:[]}; entries.push(e); }
+      for(var k in item.patch){ if(Object.prototype.hasOwnProperty.call(item.patch,k)) e.patch[k]=item.patch[k]; }
+      e.members.push(item);
+    });
+    var active={items:batch,finished:false}, rowKeys=entries.map(function(e){ return e.rowKey; });
+    ROW_WRITE_QUEUE.active=active;
+    rowKeys.forEach(function(rowKey){ beginRowWrite(rowKey); });
+    var payload=entries.map(function(e){ return { id:resolveTextRowId(e.rowKey), patch:e.patch }; });
+    google.script.run
+      .withSuccessHandler(function(res){
+        finishRowWrite(active,rowKeys,function(){
+          var results=(res&&res.results)||[];
+          entries.forEach(function(e,i){
+            var r=results[i], ok=!!(r&&r.ok&&String(r.id)===String(payload[i].id));
+            var err=ok?null:new Error((r&&r.error)?r.error:'沒有收到寫入結果');
+            e.members.forEach(function(m){ if(ok) m.onOk(); else m.onFail(err); });
+          });
+        });
+      })
+      .withFailureHandler(function(err){
+        finishRowWrite(active,rowKeys,function(){
+          entries.forEach(function(e){ e.members.forEach(function(m){ m.onFail(err); }); });
+        });
+      })
+      .updateTxns(payload);
   }
   function resumeRowWrites(){ pumpRowWrites(); }
   /** A failed add: drop only that row's not-yet-started writes (each cancel settles its
@@ -1607,32 +1662,23 @@
   function isStale(seq){ return seq!==MUTATION_SEQ; }
 
   /**
-   * Book the end of one mutation. `txns` is the authoritative list its response carried, or null
-   * for the call sites that deliberately do not ask for one; `olderFp` is the fingerprint that
-   * came with it (see OLDER_FP). Returns true when adopting that list changed something the page
-   * renders, so the caller repaints — and false otherwise, including every discarded response.
-   *
-   * Called from BOTH handlers of every call site that bumped the counter: a rejected write settles
-   * too, or the in-flight count never reaches zero and the debt is never paid.
-   *
-   * Only the latest sequence is adopted, and adopting it clears the debt. Both are sound because
-   * every updateTxn and deleteTxn goes through the page-wide write queue (enqueueRowWrite): the
-   * latest sequence is the last call sent, after every earlier call was acknowledged, so its
-   * snapshot already holds every earlier write and no older write is left unacknowledged for it
-   * to predate. The one mutating call outside the queue, addTxn, adopts no list.
+   * Book the end of one mutation, from BOTH handlers of every call site that bumped the counter: a
+   * rejected or cancelled write settles too, or the in-flight count never reaches zero and the
+   * refresh never goes out. `refresh` is true for a write or delete the server has answered: its
+   * response carries no list, so the page now owes itself one read of the current list (rows the
+   * bot appended since load, ids a legacy amount edit renumbered). A cancelled write that was never
+   * sent and an add (which adopts no list and whose row the page already holds) book nothing.
    */
-  function settle(seq, txns, olderFp){
+  function settle(seq, refresh){
     if(INFLIGHT>0) INFLIGHT--;
-    var changed=false;
-    if(isStale(seq)) STALE_DROPPED=true;
-    else if(txns){
-      STALE_DROPPED=false; changed=adoptTxns(txns, olderFp);
-      // While the history is incomplete OLDER_FP is null, so the server could only answer with
-      // the whole list: adopting it completes the history, and the views waiting on it repaint.
-      if(!HISTORY.complete){ historyComplete(); changed=true; }
-    }
-    if(STALE_DROPPED && INFLIGHT===0) refreshTxns();
-    return changed;
+    if(refresh) STALE_DROPPED=true;
+    maybeRefresh();
+  }
+  /** Send the owed refresh only when the page is quiet: nothing in flight (INFLIGHT also counts an
+   *  addTxn and every queued item) and no write call still running its handler. */
+  function maybeRefresh(){
+    var q=ROW_WRITE_QUEUE;
+    if(STALE_DROPPED&&INFLIGHT===0&&!q.active&&!q.items.length) refreshTxns();
   }
 
   /** Mark TXNS as holding the whole history; any background read still out is ignored on arrival. */
@@ -1647,7 +1693,7 @@
    * optimistic delete) or holds one it does not (an add that landed after the read), an insert
    * lands one slot off. Only display order on a DESC or unsorted sheet can shift; the bot keeps
    * the sheet ASC, where every older row sits in front of the recent ones anyway. Both merges that
-   * rebuild the full list's order use it: an edit acknowledgement's window rows among the older
+   * rebuild the full list's order use it: a refresh's window rows among the older
    * rows (ackTxns), and the background history among the recent rows (mergeOlderTxns).
    */
   function spliceAt(base,inserts,at){
@@ -1715,9 +1761,10 @@
   }
 
   /**
-   * The list an edit acknowledgement stands for, ready for settle(): the whole list when the
-   * server sent one (`txns`), or the recent acknowledgement (updateTxn's 'recent' mode) merged
-   * into `list`. Null when the response carries neither.
+   * The list a refresh response stands for, ready for adoptTxns: the whole list when the server
+   * sent one (`txns`), or the recent shape (getRecentTxns, built like updateTxn's 'recent' ack)
+   * merged into `list`. Null when the response carries neither. `changed` (the edited row of an
+   * updateTxn ack) is honoured when present; getRecentTxns sends none.
    *
    * The merge rebuilds what the full list would be. Every row dated on or after `since` is
    * dropped and replaced by the server's window rows; this is what still brings in rows the bot
@@ -1746,29 +1793,32 @@
   }
 
   /**
-   * Pay the debt a discarded response left behind: ONE read of the authoritative list, adopted
-   * only while it is still current, repainting only when it differs from what is on screen.
+   * The one read of the current list the page owes itself after its writes (see settle): ONE
+   * getRecentTxns call, adopted only while it is still current, repainting only when it differs
+   * from what is on screen. It sends OLDER_FP, so the answer is the recent window merged by
+   * ackTxns while the page's older rows still match the sheet, and the whole list otherwise (which
+   * also completes a partial history: OLDER_FP is null until the history is complete).
    *
-   * A read the page superseded while it was in flight cannot be adopted — but the debt it went
-   * out to pay is still outstanding, so it RE-BOOKS ITSELF and, when nothing is in flight, goes
-   * straight back out. Waiting for the next settle() is not enough: INFLIGHT===0 is not proof the
-   * page is quiescent, because bulkPost settles row i and issues row i+1 synchronously in the same
-   * handler. The refetch armed there is stale before its response can return, and no settle
-   * follows the last row — so a read that only re-books would leave the page on the pre-edit row
-   * key for good. A read that FAILS re-books without retrying on the spot: an unreachable server
-   * would otherwise be asked again immediately, and the next mutation to settle tries anyway.
+   * It goes out only with nothing in flight (maybeRefresh). A read that a later mutation
+   * superseded while it was out cannot be adopted — it may predate that write — but the debt it
+   * went out to pay is still outstanding, so it RE-BOOKS ITSELF and goes straight back out once
+   * nothing is in flight again. A read that FAILS re-books without retrying on the spot: an
+   * unreachable server would otherwise be asked again immediately, and the next write to settle
+   * tries anyway.
    */
   function refreshTxns(){
     if(REFRESHING) return;
     STALE_DROPPED=false; REFRESHING=true;
     var seq=MUTATION_SEQ;
     google.script.run
-      .withSuccessHandler(function(data){
+      .withSuccessHandler(function(raw){
         REFRESHING=false;
         if(isStale(seq)){ STALE_DROPPED=true; if(INFLIGHT===0) refreshTxns(); return; }
-        var changed=adoptTxns(data);
-        // getAllTxns is the whole list, so it completes a partial history too.
-        if(!HISTORY.complete){ historyComplete(); changed=true; }
+        var res=(typeof raw==='string')?JSON.parse(raw):raw;   // getRecentTxns returns a JSON string
+        var list=ackTxns(TXNS,res); if(!list) return;
+        var changed=adoptTxns(list, res&&res.olderFp);
+        // A whole list completes a partial history too.
+        if(res.txns&&!HISTORY.complete){ historyComplete(); changed=true; }
         if(changed) repaint();
       })
       .withFailureHandler(function(err){
@@ -1777,7 +1827,7 @@
         // meant to complete it: show the retry control rather than an endless loading state.
         if(!HISTORY.complete&&!HISTORY.loading){ HISTORY.failed=(err&&err.message)?err.message:String(err); repaint(); }
       })
-      .getAllTxns();
+      .getRecentTxns(OLDER_FP);
   }
 
   /** A selector naming the focused control across a rebuild — its id, or the data-* attributes
@@ -1892,32 +1942,18 @@
     var patch={}; patch[field]=(field==='cat'&&value==='未分類')?'':value;
     var undo={}; undo[field]=prev, applied=t[field];
     var seq=nextMutation();
-    enqueueRowWrite(rowKey,function(done){
-    var serverId=resolveTextRowId(rowKey);
-    google.script.run
-      .withSuccessHandler(function(res){
-        // ONE round trip: the ack and the authoritative data arrive together, so the old
-        // succeeded-write-then-failed-refetch state — sheet written, screen reverted, nothing
-        // left to correct it — cannot happen. Amount is part of the composite row key, so the
-        // result is still adopted after every write; it simply no longer repaints when the server
-        // agrees with what the screen already shows. The ack is the 'recent' one (the last 14
-        // days plus the edited row, merged by ackTxns into the list a reload would show), not the
-        // whole history: a newly arrived bot row is always inside that window and DOES change the
-        // signature, so ticking 已記帳 stays this page's de facto refresh. OLDER_FP rides along so
-        // the server can send the whole list instead when older rows changed. The page-wide write
-        // queue plus settle() own the ordering: this call went out only after every earlier write
-        // was acknowledged, and a snapshot a later mutation superseded is dropped AND booked.
-        if(settle(seq, ackTxns(TXNS, res), res && res.olderFp)) repaint();
-        done();
-      })
-      .withFailureHandler(function(err){
-        settle(seq, null); var current=textTxn(rowKey);
+    // The write carries no list back. A newly arrived bot row still appears without a reload: every
+    // settled write books one getRecentTxns read, sent once the queue is idle (settle/maybeRefresh),
+    // so ticking 已記帳 stays this page's de facto refresh, about a second after the last write.
+    enqueueRowWrite({ kind:'patch', rowKey:rowKey, patch:patch,
+      onOk:function(){ settle(seq, true); },
+      onFail:function(err){
+        settle(seq, true); var current=textTxn(rowKey);
         if(current&&current[field]===applied) revertTxn(current.id, undo); else repaint();
         if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey);
-        toast('寫入失敗:'+((err&&err.message)||err), true); done();
-      })
-      .updateTxn(serverId, patch, 'recent', OLDER_FP);
-    },function(){ settle(seq,null); });
+        toast('寫入失敗:'+((err&&err.message)||err), true);
+      },
+      cancel:function(){ settle(seq, false); } });
   }
 
   function normalizedTextValue(value){ return String(value==null?'':value).trim(); }
@@ -1932,9 +1968,8 @@
     t[field]=value;
     var patch={}; patch[field]=value;
     var seq=nextMutation();
-    enqueueRowWrite(rowKey,function(done){
-    google.script.run
-      .withSuccessHandler(function(res){
+    enqueueRowWrite({ kind:'patch', rowKey:rowKey, patch:patch,
+      onOk:function(){
         var active=q.active, current=textDraft(rowKey,field), rowIntent=ROW_COMMIT_INTENTS[rowKey];
         if(active&&active.token===token) q.active=null;
         if(!rowIntent){
@@ -1942,14 +1977,13 @@
             delete TEXT_DRAFTS[draftKey(rowKey,field)]; syncTextCopies(rowKey,field,value,true,false);
           } else if(!q.pending) syncTextCopies(id,field,value,true,true);
         }
-        if(settle(seq,ackTxns(TXNS,res),res&&res.olderFp)) repaint();
+        settle(seq, true);
         drainTextWrite(rowKey,field);
-        done();
-      })
-      .withFailureHandler(function(err){
+      },
+      onFail:function(err){
         var active=q.active, current=textDraft(rowKey,field), rowIntent=ROW_COMMIT_INTENTS[rowKey];
         if(active&&active.token===token) q.active=null;
-        settle(seq,null);
+        settle(seq, true);
         if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey);
         if(!rowIntent&&!q.pending){
           if((current&&current.revision===revision)||isCancel){
@@ -1959,10 +1993,8 @@
           toast('寫入失敗:'+((err&&err.message)||err),true);
         }
         drainTextWrite(rowKey,field);
-        done();
-      })
-      .updateTxn(resolveTextRowId(rowKey),patch,'recent',OLDER_FP);
-    });
+      },
+      cancel:function(){ if(q.active&&q.active.token===token) q.active=null; settle(seq, false); } });
   }
 
   function drainTextWrite(id,field){
@@ -2002,7 +2034,7 @@
   /** Send a queued Record only after older per-field writes have completed on the server. */
   function trySendRowCommit(id){
     id=textRowKey(id);
-    var intent=ROW_COMMIT_INTENTS[id]; if(!intent||intent.sent||intent.queued) return;
+    var intent=ROW_COMMIT_INTENTS[id]; if(!intent||intent.queued) return;
     var t=textTxn(id); if(t&&t._pendingAdd) return;
     for(var i=0;i<intent.saved.length;i++){
       if(textWriteQueue(id,intent.saved[i].field).active) return;
@@ -2014,10 +2046,8 @@
       q.active={token:s.token,revision:s.revision,rawValue:s.rawValue,value:s.value,record:true};
     });
     var seq=nextMutation();
-    enqueueRowWrite(id,function(done){
-    intent.sent=true;
-    google.script.run
-      .withSuccessHandler(function(res){
+    enqueueRowWrite({ kind:'patch', rowKey:id, patch:intent.patch,
+      onOk:function(){
         intent.saved.forEach(function(s){
           var q=textWriteQueue(id,s.field), current=textDraft(id,s.field);
           if(q.active&&q.active.token===s.token) q.active=null;
@@ -2026,31 +2056,28 @@
           }
         });
         delete ROW_COMMIT_INTENTS[id];
-        if(settle(seq,ackTxns(TXNS,res),res&&res.olderFp)) repaint();
+        settle(seq, true);
         ['merchant'].forEach(function(field){ drainTextWrite(id,field); });
-        done();
-      })
-      .withFailureHandler(function(err){
+      },
+      onFail:function(err){
         intent.saved.forEach(function(s){
           var q=textWriteQueue(id,s.field); if(q.active&&q.active.token===s.token) q.active=null;
         });
         delete ROW_COMMIT_INTENTS[id];
-        settle(seq,null);
+        settle(seq, true);
         if(ROW_DELETE_INTENTS[id]) cancelDeleteIntent(id);
         var currentTxn=textTxn(id); if(currentTxn) revertTxn(currentTxn.id,intent.undo); else repaint();
         toast('寫入失敗:'+((err&&err.message)||err),true);
         ['merchant'].forEach(function(field){ drainTextWrite(id,field); });
-        done();
-      })
-      .updateTxn(resolveTextRowId(id),intent.patch,'recent',OLDER_FP);
-    });
+      },
+      cancel:function(){ settle(seq, false); } });
   }
 
   /** Record a row and any dirty text as one authoritative patch. */
   function commitRow(id,posted){
     var t=textTxn(id); if(!t) return;
     id=ensureTextRowKey(t); if(ROW_COMMIT_INTENTS[id]||ROW_DELETE_INTENTS[id]) return;
-    var intent={patch:{posted:posted},undo:{posted:t.posted},saved:[],sent:false};
+    var intent={patch:{posted:posted},undo:{posted:t.posted},saved:[],queued:false};
     ['merchant'].forEach(function(field){
       var d=textDraft(id,field); if(!d||!d.dirty) return;
       var value=normalizedTextValue(d.value), q=textWriteQueue(id,field);
@@ -2124,37 +2151,38 @@
     if(!t){ delete ROW_DELETE_INTENTS[rowKey]; return; }
     if(t._pendingAdd||ROW_ACTIVE_WRITES[rowKey]||ROW_COMMIT_INTENTS[rowKey]) return;
     // The delete joins the page-wide write queue, sequence taken now: it follows every write
-    // queued before it (this row's included, which may be waiting behind another row), and its
-    // list is adopted only when nothing older is still out.
+    // queued before it (this row's included, which may be waiting behind another row) and goes
+    // out alone, as a barrier no later patch is merged across.
     intent.sent=true;
     var delSeq=nextMutation();
-    enqueueRowWrite(rowKey,function(done){
+    enqueueRowWrite({ kind:'delete', rowKey:rowKey, start:function(done){
       // A write queued ahead of it on this row failed and cancelled the intent: send nothing.
       if(ROW_DELETE_INTENTS[rowKey]!==intent||!textTxn(rowKey)){
         if(ROW_DELETE_INTENTS[rowKey]===intent) delete ROW_DELETE_INTENTS[rowKey];
-        settle(delSeq, null); done(); return;
+        settle(delSeq, false); done(); return;
       }
       var serverId=resolveTextRowId(rowKey);
       google.script.run
-        .withSuccessHandler(function(res){
+        .withSuccessHandler(function(){
+          // The response carries no list: the row leaves the page here, and the refresh booked by
+          // settle() brings in whatever else changed once the queue is idle.
           delete ROW_DELETE_INTENTS[rowKey]; TEXT_REMOVED_ROW_KEYS[rowKey]=true;
-          settle(delSeq, res && res.txns, res && res.olderFp);
-          // settle drops a response a later mutation superseded and books a refetch; until that
-          // lands the row would still be in TXNS with no intent, i.e. back to normal on screen.
+          settle(delSeq, true);
           TXNS=TXNS.filter(function(x){ return x._textKey!==rowKey; });
           repaint(); toast('已刪除'); done();
         })
         .withFailureHandler(function(err){
           delete ROW_DELETE_INTENTS[rowKey];
-          settle(delSeq, null);
+          settle(delSeq, true);
           repaint();
           toast('刪除失敗:'+((err&&err.message)||err), true); done();
         })
         .deleteTxn({ id: serverId });
-    },function(){
+    },
+    cancel:function(){
       if(ROW_DELETE_INTENTS[rowKey]===intent) delete ROW_DELETE_INTENTS[rowKey];
-      settle(delSeq, null);
-    });
+      settle(delSeq, false);
+    } });
   }
   function openAddModal(date){
     var ov=document.getElementById('addOverlay'); if(!ov) return;
@@ -2866,28 +2894,23 @@
     if(v!==null && v===chg) v=null;
     t.mine=v; t.amount=(v==null)?chg:v;
     openSplit=null; render();
-    // A split is a local mutation too: bumping the counter stops an edit response already in
-    // flight from adopting a list that predates it, and settling through settle() is what makes
-    // that dropped list come back as a refetch instead of stranding the page on a stale row id.
+    // A split is a row write like any other: it joins the page-wide queue (merged into the next
+    // updateTxns call with whatever else is waiting) and books the post-drain refresh.
     var seq=nextMutation();
-    enqueueRowWrite(rowKey,function(done){
-    var serverId=resolveTextRowId(rowKey);
-    google.script.run
-      .withSuccessHandler(function(){
-        settle(seq, null);
+    enqueueRowWrite({ kind:'patch', rowKey:rowKey, patch:{ mine: (v==null?'':v) },
+      onOk:function(){
+        settle(seq, true);
         if(v==null) toast('整筆都是你的 · $'+fmt(chg));
         else if(v>chg) toast('這筆你消費 $'+fmt(v)+'，比刷卡 $'+fmt(chg)+' 多 — 有人先幫你墊了 $'+fmt(v-chg));
         else toast('這筆算你 $'+fmt(v)+'，代墊 $'+fmt(chg-v)+' 不計入統計');
-        done();
-      })
-      .withFailureHandler(function(err){
-        settle(seq, null); var current=textTxn(rowKey);
+      },
+      onFail:function(err){
+        settle(seq, true); var current=textTxn(rowKey);
         if(current) revertTxn(current.id, { mine:prevMine, amount:prevAmt }); else repaint();
         if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey);
-        toast('寫入失敗:'+((err&&err.message)||err), true); done();
-      })
-      .updateTxn(serverId, { mine: (v==null?'':v) });
-    },function(){ settle(seq,null); });
+        toast('寫入失敗:'+((err&&err.message)||err), true);
+      },
+      cancel:function(){ settle(seq, false); } });
   }
 
   // Gmail permalink for auto-recorded rows. Empty link (manual rows) returns nothing — no
@@ -3004,12 +3027,11 @@
   function daysAgo(t){ return Math.round((Date.UTC(NOW.year,NOW.month-1,NOW.day)-Date.UTC(t.y,t.m-1,t.d))/86400000); }
   function ageLabel(n){ return n<=0?'今天':(n===1?'昨天':n+' 天前'); }
 
-  // Mark a whole day recorded. Writes are sequential, not parallel: Apps Script serializes
-  // sheet writes anyway, and one at a time means a mid-way failure reverts exactly one row.
-  // Each row joins the page-wide write queue when its step runs, so a single tick issued
-  // mid-run lands behind the bulk row in flight: row i's handler sends that tick, then step(i+1)
-  // bumps the sequence, so the tick's snapshot (which still shows the unsent bulk rows pending)
-  // arrives stale, is dropped and booked, and one refetch after the last bulk row pays it.
+  // Mark a whole day recorded: every row is enqueued in the same tick, so they leave together as
+  // ONE updateTxns call (behind a call already out, if any), and the per-item results decide the
+  // summary. A failed row reverts on its own; the others stay recorded. A single tick issued while
+  // the bulk call is out waits in the queue and goes out in the next call, and the one refresh
+  // after the queue drains is read only once both have landed.
   function bulkPost(ids){
     // A row being deleted is left out before the optimistic tick, not only at send time: ticking
     // it would flash 已記帳 on a row that is about to disappear.
@@ -3018,29 +3040,19 @@
     if(!todo.length) return;
     todo.forEach(function(rowKey){ var t=textTxn(rowKey); t.posted=true; });
     render();
-    var failed = 0;
-    (function step(i){
-      if(i >= todo.length){
-        if(failed) { repaint(); toast('完成 '+(todo.length-failed)+'/'+todo.length+' · '+failed+' 筆寫入失敗', true); }
-        else toast('已記帳 '+todo.length+' 筆');
-        return;
-      }
-      // Two arguments on purpose: bulk post ignores the return value, so it must not pay for a
-      // full list per row. The counter still moves, so an edit response issued before this run
-      // cannot be adopted on top of the rows it just marked — and settling each row through
-      // settle() is what turns that dropped list into one refetch rather than a stale row id.
-      // Nothing is refetched on the ordinary run: the debt only exists after a real drop.
-      var rowKey=todo[i], current=textTxn(rowKey);
-      if(!current||ROW_DELETE_INTENTS[rowKey]){ step(i+1); return; }
+    var failed=0, left=todo.length;
+    function one(){
+      if(--left>0) return;
+      if(failed) { repaint(); toast('完成 '+(todo.length-failed)+'/'+todo.length+' · '+failed+' 筆寫入失敗', true); }
+      else toast('已記帳 '+todo.length+' 筆');
+    }
+    enqueueRowWrites(todo.map(function(rowKey){
       var seq=nextMutation();
-      enqueueRowWrite(rowKey,function(done){
-      var serverId=resolveTextRowId(rowKey);
-      google.script.run
-        .withSuccessHandler(function(){ settle(seq, null); done(); step(i+1); })
-        .withFailureHandler(function(){ settle(seq, null); var t=textTxn(rowKey); if(t) t.posted=false; if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey); failed++; done(); step(i+1); })
-        .updateTxn(serverId, { posted:true });
-      });
-    })(0);
+      return { kind:'patch', rowKey:rowKey, patch:{ posted:true },
+        onOk:function(){ settle(seq, true); one(); },
+        onFail:function(){ settle(seq, true); var t=textTxn(rowKey); if(t) t.posted=false; if(ROW_DELETE_INTENTS[rowKey]) cancelDeleteIntent(rowKey); failed++; one(); },
+        cancel:function(){ settle(seq, false); var t=textTxn(rowKey); if(t) t.posted=false; failed++; one(); } };
+    }));
   }
 
   // How far back the 已記帳 rows are shown. The pending list is deliberately UNBOUNDED — it is
@@ -3340,9 +3352,9 @@
 
   // ---------- boot: fetch real data, then render ----------
   /** Adopt a server list and report whether anything the page renders actually changed, so a
-   *  write whose result matches the optimistic prediction repaints nothing. `olderFp` is the
-   *  fingerprint that came with the list; a list without one (refreshTxns' getAllTxns) clears
-   *  OLDER_FP, which costs the next edit one whole list and never a wrong one. */
+   *  refresh that matches the optimistic prediction repaints nothing. `olderFp` is the
+   *  fingerprint that came with the list; a list without one clears OLDER_FP, which costs the
+   *  next refresh one whole list and never a wrong one. */
   function adoptTxns(data, olderFp){
     var before=txnsSignature(TXNS);
     var next = (data||[]).map(function(t){ t.y=+t.y; t.m=+t.m; t.d=+t.d; t.amount=+t.amount;

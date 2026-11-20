@@ -443,9 +443,12 @@ function testRendering() {
   h = view(p, { scope: '2026-09' }, { openRow: '飲食' });
   assert.ok(h.indexOf('data-category-txn="' + moved.id + '"') >= 0, '(5) precondition: the row is listed under 飲食');
   p.applyEdit(moved.rowId, 'cat', '房屋');
-  const c = p.calls.filter(x => x.fn === 'updateTxn').pop();
+  // The write (updateTxns) carries no list; the read that follows it (getRecentTxns) does.
+  const c = p.calls.filter(x => x.fn === 'updateTxns').pop();
   const after = p.TXNS.map(t => Object.assign({}, t, t.rowId === moved.rowId ? { cat: '房屋' } : {}));
-  c.success({ ok: true, txns: after, olderFp: null });
+  c.success({ ok: true, results: c.args[0].map(i => ({ id: i.id, ok: true })) });
+  const r = p.calls.filter(x => x.fn === 'getRecentTxns').pop();
+  r.success(JSON.stringify({ ok: true, txns: after, olderFp: null }));
   h = view(p, { scope: '2026-09' }, { openProject: '房屋' });
   const proj = h.split('class="panel projects"')[1];
   assert.ok(proj.indexOf('data-category-txn="' + moved.id + '"') >= 0, '(5) after the save the row is in the 房屋 project');

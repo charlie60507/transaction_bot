@@ -195,7 +195,8 @@ function readTxnSheet_(sh) {
  *   and backfills the column, and is then read again: the first read's rows are one cell narrower.
  * - Without Utilities.getUuid (offline fixtures) nothing is written and `rowIdIdx` still comes
  *   from the header, exactly as the separate ensureRowIdColIndex_ call left it.
- * The bot and the mutation paths keep calling ensureRowIdColIndex_.
+ * The bot, addTxn, updateTxn and the LINE delete keep calling ensureRowIdColIndex_; the dashboard's
+ * own writes (updateTxns, deleteTxn without `held`) rely on this backfill and call neither.
  */
 function readTxnsForLoad_(sh) {
   let read = readTxnSheet_(sh);
@@ -583,19 +584,9 @@ function recentAck_(sh, rows, rowNum, clientFp, now) {
   if (clientFp == null || String(clientFp) !== preFp || renumbersOlderSiblings_(rows, days, editedIdx, before)) {
     return { ok: true, txns: txnsFromRows_(rows, mineIdx, rowIdIdx, fmt), olderFp: olderFp };
   }
-  const txns = [];
-  const olderBefore = [];
-  const seenKey = {};
-  let older = 0;
-  let changed = null;
-  for (let i = 0; i < rows.length; i++) {
-    if (days[i] === null) continue;              // same skip as getAllTxns
-    if (days[i] === false) { older++; continue; }
-    const t = txnFromRow_(rows[i], days[i], nextOccurrence_(seenKey, rows[i]), mineIdx, rowIdIdx);
-    txns.push(t);
-    olderBefore.push(older);
-    if (i === editedIdx) changed = t;
-  }
+  const win = recentWindow_(rows, days, mineIdx, rowIdIdx);
+  const at = win.rowIdx.indexOf(editedIdx);
+  let changed = at === -1 ? null : win.txns[at];
   if (days[editedIdx] === false) {
     // Older than the window: number it among the earlier rows sharing its base key, all of
     // which carry its exact date (see above).
@@ -606,7 +597,72 @@ function recentAck_(sh, rows, rowNum, clientFp, now) {
     changed = txnFromRow_(row, fmt(raw instanceof Date ? raw : new Date(raw)),
       nextOccurrence_(seen, row), mineIdx, rowIdIdx);
   }
-  return { ok: true, recent: { since: since, txns: txns, olderBefore: olderBefore }, changed: changed, olderFp: olderFp };
+  return { ok: true, recent: { since: since, txns: win.txns, olderBefore: win.olderBefore }, changed: changed, olderFp: olderFp };
+}
+
+/**
+ * The recent shape's rows, the one implementation recentAck_ and getRecentTxns share: every
+ * displayed row inside the window (`days[i]` holds its rowYmdt_ parts) as a transaction object,
+ * numbered among the window rows only (see recentAck_ for why that reproduces the full list's
+ * composite ids), with `olderBefore[k]` = how many displayed rows dated before the window precede
+ * window row k in the sheet, and `rowIdx[k]` = its index in `rows`.
+ */
+function recentWindow_(rows, days, mineIdx, rowIdIdx) {
+  const txns = [];
+  const olderBefore = [];
+  const rowIdx = [];
+  const seenKey = {};
+  let older = 0;
+  for (let i = 0; i < rows.length; i++) {
+    if (days[i] === null) continue;              // same skip as getAllTxns
+    if (days[i] === false) { older++; continue; }
+    txns.push(txnFromRow_(rows[i], days[i], nextOccurrence_(seenKey, rows[i]), mineIdx, rowIdIdx));
+    olderBefore.push(older);
+    rowIdx.push(i);
+  }
+  return { txns: txns, olderBefore: olderBefore, rowIdx: rowIdx };
+}
+
+/**
+ * The dashboard's read-only refresh, issued once its write queue has drained (nothing queued,
+ * nothing in flight). This is what keeps ticking 已記帳 the page's de facto refresh now that a
+ * write's response carries no list: rows the Gmail bot appended since the page loaded arrive
+ * here. `olderFp` is the fingerprint the page holds for its rows older than the window (see
+ * olderFingerprint_):
+ *
+ *   it matches the sheet  → { ok, recent: { since, txns, olderBefore }, olderFp }
+ *   anything else         → { ok, txns, olderFp }, the whole list (also when the page sends none)
+ *
+ * The recent shape is recentAck_'s without an edited row, built by the same pieces
+ * (recentWindow_), and the page merges it exactly as it merged an edit acknowledgement (ackTxns).
+ *
+ * Returned as a JSON STRING, like getDashboardData: a whole list crosses google.script.run much
+ * faster as one string. Nothing in it is a Date.
+ *
+ * Read-only on purpose: no backfillRowIds_, no ensureRowIdColIndex_, no flush, and no script
+ * lock. Whether a read may be adopted is decided on the page (only a read that went out with
+ * nothing in flight and was not superseded by a later mutation), and taking the lock would make
+ * a tick issued during the read wait behind it on the server. Without the lock the read can
+ * observe a bot import mid-append; a partial window corrects itself on the next refresh, and the
+ * older fingerprint does not cover window rows.
+ */
+function getRecentTxns(olderFp) {
+  const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
+  if (!sh) throw new Error('找不到 Transactions 工作表');
+  const read = readTxnSheet_(sh);
+  const rows = read.rows;
+  const mineIdx = mineColIndexIn_(read.header);
+  const rowIdIdx = rowIdColIndexIn_(read.header);
+  const now = new Date();
+  const since = recentSince_(now);
+  const fmt = ymdtFormatter_(rows, now);
+  const days = rowDays_(rows, since, fmt);
+  const fp = olderFingerprint_(rows, days, since, mineIdx, rowIdIdx);
+  if (olderFp == null || String(olderFp) !== fp) {
+    return JSON.stringify({ ok: true, txns: txnsFromRows_(rows, mineIdx, rowIdIdx, fmt), olderFp: fp });
+  }
+  const win = recentWindow_(rows, days, mineIdx, rowIdIdx);
+  return JSON.stringify({ ok: true, recent: { since: since, txns: win.txns, olderBefore: win.olderBefore }, olderFp: fp });
 }
 
 /**
@@ -1170,9 +1226,15 @@ function isAmountCorrectionType_(type) {
  *              exists at all, without shipping the whole history on every edit. `olderFp` is
  *              the fingerprint the page holds for its rows older than the window; when the sheet
  *              no longer matches it, the ack is `{ ok, txns, olderFp }`, the whole list.
- * `SpreadsheetApp.flush()` first, exactly as `deleteTxn` does: without it the read can return
- * a snapshot taken before this call's own setValue landed, and the page would then correctly
- * conclude "nothing changed" about a value the server disagrees with.
+ * `SpreadsheetApp.flush()` first: without it the read can return a snapshot taken before this
+ * call's own setValue landed, and the page would then correctly conclude "nothing changed" about
+ * a value the server disagrees with.
+ *
+ * No current page call site uses this function: the dashboard writes through updateTxns and
+ * refreshes through getRecentTxns. Its signature and all three modes stay because a dashboard tab
+ * opened before a deploy keeps running the old page code, which calls
+ * `updateTxn(id, patch, 'recent', olderFp)` until it is reloaded. Validation and destination
+ * cells come from writeTxnPatch_, the same writer updateTxns uses, so the two cannot disagree.
  */
 function updateTxn(messageId, patch, wantTxns, olderFp) {
   messageId = asTxnKey_(messageId);
@@ -1193,6 +1255,35 @@ function updateTxn(messageId, patch, wantTxns, olderFp) {
   const rowNum = findRowByKey_(sh, messageId, rows);
   if (rowNum === -1) throw new Error('找不到該筆交易 (key=' + messageId + ')');
 
+  writeTxnPatch_(sh, rowNum, patch, { mineIdx: getMineColIndex_(sh) });
+  if (wantTxns) {
+    SpreadsheetApp.flush();
+    if (wantTxns === 'recent') return recentAck_(sh, rows, rowNum, olderFp, new Date());
+    return { ok: true, txns: getAllTxns() };
+  }
+  return { ok: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Apply one `patch` (the fields updateTxn documents) to sheet row `rowNum`. The one writer behind
+ * updateTxn and updateTxns, so the two can never disagree about validation, error messages or
+ * destination cells. Caller holds the script lock.
+ *
+ * `ctx.mineIdx` is the 0-based 我的消費 column from a header the caller already read (-1 when
+ * absent). When a `mine` edit has to create that column, ctx.mineIdx is updated in place, so
+ * later items of the same batch write to it too.
+ *
+ * Every field is validated BEFORE any cell is written, so a rejected patch leaves the row exactly
+ * as it was (the earlier inline updateTxn wrote 商店 and 種類 before it rejected a bad 收支別).
+ * The checks run in the order the inline code raised them, so the first message a bad patch gets
+ * is unchanged. The row's 收支別 and current 我的消費 are read only when `amount` or `mine` is
+ * edited, as before.
+ */
+function writeTxnPatch_(sh, rowNum, patch, ctx) {
+  patch = patch || {};
   const editsAmount = 'amount' in patch;
   const editsMine = 'mine' in patch;
   const rowType = (editsAmount || editsMine)
@@ -1205,6 +1296,21 @@ function updateTxn(messageId, patch, wantTxns, olderFp) {
     if (!isAmountCorrectionType_(rowType)) throw new Error('只有支出或轉帳交易可以修正金額');
   }
   if (editsMine && rowType === '轉帳') throw new Error('轉帳交易不能設定我的消費');
+  let type = null;
+  if ('type' in patch) {
+    type = String(patch.type || '');
+    if (['支出', '收入', '轉帳'].indexOf(type) === -1) throw new Error('收支別不合法: ' + type);
+  }
+  let mine = '';
+  if (editsMine) {
+    const raw = patch.mine;
+    if (!(raw === '' || raw === null || raw === undefined)) {
+      mine = Number(raw);
+      // Deliberately NOT capped at the charge: someone else fronting part of my share
+      // makes my consumption legitimately larger than what my card was charged.
+      if (isNaN(mine) || mine < 0) throw new Error('我的消費需為 0 以上的數字');
+    }
+  }
 
   if ('merchant' in patch) {
     sh.getRange(rowNum, CFG.IDX_MERCHANT + 1).setValue(String(patch.merchant || ''));
@@ -1212,43 +1318,86 @@ function updateTxn(messageId, patch, wantTxns, olderFp) {
   if ('cat' in patch) {
     sh.getRange(rowNum, CFG.IDX_CATEGORY_MANUAL + 1).setValue(String(patch.cat || ''));
   }
-  if ('type' in patch) {
-    const t = String(patch.type || '');
-    if (['支出', '收入', '轉帳'].indexOf(t) === -1) throw new Error('收支別不合法: ' + t);
-    sh.getRange(rowNum, CFG.IDX_INOUT + 1).setValue(t);
-  }
+  if (type !== null) sh.getRange(rowNum, CFG.IDX_INOUT + 1).setValue(type);
   if (editsAmount) {
     // A transfer always corrects raw 金額 without consulting 我的消費. For expenses, the
     // displayed amount is 我的消費 on split rows and raw 金額 on ordinary rows, preserving
     // the existing destination and leaving a split row's charged amount untouched.
-    const mineIdx = rowType === '支出' ? getMineColIndex_(sh) : -1;
+    const mineIdx = rowType === '支出' ? ctx.mineIdx : -1;
     const currentMine = mineIdx === -1 ? '' : sh.getRange(rowNum, mineIdx + 1).getValue();
     const amountIdx = rowType === '支出' && mineIdx !== -1 && currentMine !== '' && currentMine !== null && currentMine !== undefined
       ? mineIdx : CFG.IDX_AMOUNT;
     sh.getRange(rowNum, amountIdx + 1).setValue(Number(patch.amount));
   }
   if (editsMine) {
-    const mineIdx = ensureMineColIndex_(sh);
-    const raw = patch.mine;
-    if (raw === '' || raw === null || raw === undefined) {
-      sh.getRange(rowNum, mineIdx + 1).setValue('');   // clears the split
-    } else {
-      const v = Number(raw);
-      if (isNaN(v) || v < 0) throw new Error('我的消費需為 0 以上的數字');
-      // Deliberately NOT capped at the charge: someone else fronting part of my share
-      // makes my consumption legitimately larger than what my card was charged.
-      sh.getRange(rowNum, mineIdx + 1).setValue(v);
-    }
+    if (ctx.mineIdx === -1) ctx.mineIdx = ensureMineColIndex_(sh);
+    sh.getRange(rowNum, ctx.mineIdx + 1).setValue(mine);   // '' clears the split
   }
   if ('posted' in patch) {
     sh.getRange(rowNum, CFG.IDX_POSTED + 1).setValue(!!patch.posted);
   }
-  if (wantTxns) {
-    SpreadsheetApp.flush();
-    if (wantTxns === 'recent') return recentAck_(sh, rows, rowNum, olderFp, new Date());
-    return { ok: true, txns: getAllTxns() };
-  }
-  return { ok: true };
+}
+
+/**
+ * The dashboard's write endpoint: several rows' patches in ONE call, under one script lock and
+ * one locate pass. `items` is `[{ id, patch }, ...]`, `id` the row's `交易 ID` (or, on a sheet
+ * without that column, the legacy composite key) and `patch` as updateTxn documents.
+ *
+ * Returns `{ ok: true, results: [{ id, ok, error? }] }` in item order and never a list: the
+ * page reads the list afterwards, once, through getRecentTxns. Each item is written by
+ * writeTxnPatch_ inside its own try/catch, so one rejected item (validation, missing row) writes
+ * nothing of its own and neither blocks nor rolls back the others. A call-level problem (bad
+ * argument, no sheet, lock timeout) still throws and fails every item.
+ *
+ * A write does only the write. The header is read once (it gives both the 交易 ID and 我的消費
+ * positions) and the 交易 ID column once, into an id → row map that serves every item; nothing
+ * reads the whole sheet. It does not call ensureRowIdColIndex_: the load path (readTxnsForLoad_)
+ * and the bot already give every row the page can address an id. No SpreadsheetApp.flush(): the
+ * execution commits its writes on return, before the next call can read them, and nothing here
+ * reads back what it wrote.
+ *
+ * A sheet without the 交易 ID column (offline fixtures only) keeps the legacy composite-key
+ * locate, re-run per item because an amount edit renumbers composite keys: the slow path, with
+ * the same results shape.
+ */
+function updateTxns(items) {
+  if (!Array.isArray(items)) throw new Error('updateTxns 需要一個陣列');
+  const list = items.map(function (item) {
+    return { id: asTxnKey_(item && item.id), patch: (item && item.patch) || {} };
+  });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15 * 1000);
+  try {
+    const sh = getSpreadsheet_().getSheetByName(CFG.DATA_SHEET);
+    if (!sh) throw new Error('找不到 Transactions 工作表');
+    const header = headerRow_(sh);
+    const rowIdIdx = rowIdColIndexIn_(header);
+    const ctx = { mineIdx: mineColIndexIn_(header) };
+    let locate;
+    if (rowIdIdx !== -1) {
+      const last = sh.getLastRow();
+      const ids = last > 1 ? sh.getRange(2, rowIdIdx + 1, last - 1, 1).getValues() : [];
+      const byId = {};
+      for (let i = 0; i < ids.length; i++) {
+        const k = String(ids[i][0] || '');
+        if (k && !Object.prototype.hasOwnProperty.call(byId, k)) byId[k] = i + 2;   // first match, as findRowByKey_
+      }
+      locate = function (id) { return Object.prototype.hasOwnProperty.call(byId, id) ? byId[id] : -1; };
+    } else {
+      locate = function (id) { return findRowByKey_(sh, id); };
+    }
+    const results = list.map(function (item) {
+      try {
+        if (!item.id) throw new Error('缺少 MessageId');
+        const rowNum = locate(item.id);
+        if (rowNum === -1) throw new Error('找不到該筆交易 (key=' + item.id + ')');
+        writeTxnPatch_(sh, rowNum, item.patch, ctx);
+        return { id: item.id, ok: true };
+      } catch (e) {
+        return { id: item.id, ok: false, error: String((e && e.message) || e) };
+      }
+    });
+    return { ok: true, results: results };
   } finally {
     lock.releaseLock();
   }
@@ -1367,15 +1516,18 @@ function getOrCreateDeleted_(ss, src) {
 /** Delete any row, located by immutable `交易 ID`. Moves it to Deleted first so the
  *  bot still treats the mail as already handled (the sheet is its only memory).
  *
- *  Returns `{ ok, txns, olderFp }` (see txnSnapshot_) so the page does not need a nested
- *  getAllTxns, and its next incremental edit ack can keep the older rows it now holds. Nesting
- *  google.script.run after a successful write was the false 找不到 toast: the
- *  row was already gone, then a second lookup (retry or refresh) failed.
+ *  Dashboard path (no `held`): one narrow locate (locateRowById_ reads only the 交易 ID column),
+ *  copy the row to Deleted, deleteRow, and return `{ ok: true }` with no list. The page reads the
+ *  list afterwards through getRecentTxns, once its write queue has drained; no flush and no
+ *  re-read of the sheet happen here. A retry after a successful delete finds the row in Deleted
+ *  and also gets `{ ok: true }`, never 找不到 — the sheet is in the state the owner asked for.
+ *  A row in neither sheet still throws 找不到該筆交易.
  *
  *  `held` is server-only, as in addTxn: `{ ss, sh }` from a caller that already holds the script
- *  lock (the LINE facade's ledgerUndo). With it, the same path returns a status instead of a
- *  snapshot — 'deleted', 'already-deleted' (already in Deleted) or 'missing' — so LINE can say
- *  這筆已不存在 rather than surface an exception. The dashboard's behaviour is unchanged. */
+ *  lock (the LINE facade's ledgerUndo). With it, the same path returns a status instead —
+ *  'deleted', 'already-deleted' (already in Deleted) or 'missing' — so LINE can say
+ *  這筆已不存在 rather than surface an exception. That path keeps its earlier steps (it backfills
+ *  missing ids first and flushes after the delete) and shares only the narrow locate. */
 function deleteTxn(messageId, held) {
   messageId = asTxnKey_(messageId);
   if (held != null && !(held.ss && held.sh && typeof held.sh.getRange === 'function')) throw new Error('held 參數不合法');
@@ -1385,38 +1537,50 @@ function deleteTxn(messageId, held) {
     const ss = held ? held.ss : getSpreadsheet_();
     const sh = held ? held.sh : ss.getSheetByName(CFG.DATA_SHEET);
     if (!sh) throw new Error('找不到 Transactions 工作表');
-    ensureRowIdColIndex_(sh);
-    const last = sh.getLastRow();
-    if (last <= 1) {
-      if (held) return 'missing';
-      throw new Error('沒有交易資料');
+    if (held) {
+      ensureRowIdColIndex_(sh);
+      if (sh.getLastRow() <= 1) return 'missing';
     }
-    const rowNum = findRowByKey_(sh, messageId);
-    if (rowNum === -1) {
+    const loc = locateRowById_(sh, messageId);
+    if (loc.rowNum === -1) {
       // Already moved (double-tap / retry after a successful write). Do not
       // throw 找不到 — the sheet is in the state the owner asked for.
       const del = ss.getSheetByName(CFG.DELETED_SHEET);
-      const migrated = getRowIdColIndex_(sh) !== -1;
-      if (del && (sheetHasRowId_(del, messageId) || (!migrated && sheetHasBaseKey_(del, messageId)))) {
-        if (held) return 'already-deleted';
-        SpreadsheetApp.flush();
-        return Object.assign({ ok: true }, txnSnapshot_(sh, new Date()));
+      if (del && (sheetHasRowId_(del, messageId) || (!loc.migrated && sheetHasBaseKey_(del, messageId)))) {
+        return held ? 'already-deleted' : { ok: true };
       }
       if (held) return 'missing';
       throw new Error('找不到該筆交易 (key=' + messageId + ')');
     }
     const cols = sh.getLastColumn();
-    const row = sh.getRange(rowNum, 1, 1, cols).getValues()[0];
+    const row = sh.getRange(loc.rowNum, 1, 1, cols).getValues()[0];
     const destSheet = getOrCreateDeleted_(ss, sh);
     const dest = Math.max(destSheet.getLastRow() + 1, 2);
     destSheet.getRange(dest, 1, 1, cols).setValues([row]);
-    sh.deleteRow(rowNum);
+    sh.deleteRow(loc.rowNum);
+    if (!held) return { ok: true };
     SpreadsheetApp.flush();
-    if (held) return 'deleted';
-    return Object.assign({ ok: true }, txnSnapshot_(sh, new Date()));
+    return 'deleted';
   } finally {
     if (lock) lock.releaseLock();
   }
+}
+
+/**
+ * Row number of `key` read from the 交易 ID column alone: `{ rowNum, migrated }`, rowNum -1 when
+ * nothing matches. One header read and one single-column read, never the whole sheet. On a sheet
+ * without that column (`migrated` false; offline fixtures) it falls back to findRowByKey_'s
+ * legacy composite-key locate. The first matching row wins, as in findRowByKey_.
+ */
+function locateRowById_(sh, key) {
+  key = asTxnKey_(key);
+  const idx = getRowIdColIndex_(sh);
+  if (idx === -1) return { rowNum: findRowByKey_(sh, key), migrated: false };
+  const last = sh.getLastRow();
+  if (last <= 1) return { rowNum: -1, migrated: true };
+  const ids = sh.getRange(2, idx + 1, last - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) if (String(ids[i][0] || '') === key) return { rowNum: i + 2, migrated: true };
+  return { rowNum: -1, migrated: true };
 }
 
 function sheetHasRowId_(sh, key) {

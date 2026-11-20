@@ -55,7 +55,7 @@ function serverFixture(type, mineValue) {
     }
   };
   const serverRow = row;
-  const sandbox = loadServerFns(['getRowIdColIndex_', 'ensureRowIdColIndex_', 'txnKey_', 'rowMine_', 'getAllTxns', 'txnsFromRows_', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_', 'ymdtFormatter_', 'tzOffsetAt_', 'rowIdColIndexIn_', 'hmFromHms_', 'isAmountCorrectionType_', 'updateTxn'], {
+  const sandbox = loadServerFns(['getRowIdColIndex_', 'ensureRowIdColIndex_', 'txnKey_', 'rowMine_', 'getAllTxns', 'txnsFromRows_', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_', 'ymdtFormatter_', 'tzOffsetAt_', 'rowIdColIndexIn_', 'hmFromHms_', 'isAmountCorrectionType_', 'updateTxn', 'writeTxnPatch_', 'updateTxns'], {
     CFG: CFG,
     getSpreadsheet_: () => ({ getSheetByName: () => sheet }),
     asTxnKey_: key => String(key),
@@ -101,18 +101,16 @@ function run() {
   assert.ok(/field==='amount'[\s\S]*?金額需大於 0/.test(src), 'client validates amount');
   // The old form of this check — does the string getAllTxns() appear anywhere in the file —
   // kept passing off boot()'s call after the edit path stopped making one, so it asserted
-  // nothing about editing. The contract is now one round trip: updateTxn returns the
-  // authoritative list itself, and applyEdit never fetches it separately.
+  // nothing about editing. The contract is now (#98): applyEdit enqueues one patch item on the
+  // page-wide queue, which sends it through updateTxns (coalesced with whatever else is waiting);
+  // the write carries no list back, and settle() books the one post-drain getRecentTxns read.
   const applyEditSrc = extractFunction(extractInlineScript(src), 'applyEdit');
-  // The ack is the incremental 'recent' one (#57): still requested in the same call, and still
-  // adopted, but carrying the last 14 days plus the edited row instead of the whole history.
-  // OLDER_FP goes out with it and the fingerprint that comes back is adopted with the list.
-  assert.ok(/\.updateTxn\(\s*serverId,\s*patch,\s*'recent',\s*OLDER_FP\s*\)/.test(applyEditSrc),
-    'successful edits refresh authoritative transactions in the same call that writes them');
-  assert.ok(/settle\(\s*seq,\s*ackTxns\(\s*TXNS,\s*res\s*\),\s*res\s*&&\s*res\.olderFp\s*\)/.test(applyEditSrc),
-    'the acknowledgement the write returns is adopted, not ignored');
-  assert.ok(!/getAllTxns/.test(applyEditSrc),
-    'the edit path does not follow a successful write with a second fetch');
+  assert.ok(/enqueueRowWrite\(\{\s*kind:'patch',\s*rowKey:rowKey,\s*patch:patch,/.test(applyEditSrc),
+    'an edit enqueues its patch on the page-wide write queue');
+  assert.ok(/onOk:function\(\)\{\s*settle\(seq,\s*true\);\s*\}/.test(applyEditSrc),
+    'a successful edit books the post-drain refresh');
+  assert.ok(!/getAllTxns|google\.script\.run/.test(applyEditSrc),
+    'the edit path makes no call of its own and no separate fetch');
   assert.ok(/row-card \.drill[\s\S]*?stopPropagation/.test(src), 'editor controls cannot toggle the category card');
 
   const server = fs.readFileSync(SERVER, 'utf8');

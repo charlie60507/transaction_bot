@@ -28,18 +28,29 @@ function other(overrides) {
 }
 function serverCopy(list) { return list.map(function (t) { return Object.assign({}, t); }); }
 
+// A write is one updateTxns call; `id` / `patch` name its first item, and a success without
+// `results` means every item succeeded. getRecentTxns' success takes a list and hands the page
+// the JSON string the server returns.
 function recordingRun(rec) {
   let pending = {};
   function take() { const p = pending; pending = {}; return p; }
   const run = {
     withSuccessHandler: function (f) { pending.success = f; return run; },
     withFailureHandler: function (f) { pending.failure = f; return run; },
-    updateTxn: function (id, patch, wantTxns) {
-      const p = take(); rec.calls.push({ id: id, patch: patch, wantTxns: wantTxns, success: p.success, failure: p.failure });
+    updateTxns: function (items) {
+      const p = take();
+      rec.calls.push({ items: items, id: items[0].id, patch: items[0].patch, failure: p.failure,
+        success: function (res) {
+          p.success(res && res.results ? res : { ok: true, results: items.map(function (i) { return { id: i.id, ok: true }; }) });
+        } });
     },
     deleteTxn: function (arg) { const p = take(); rec.deletes.push({ arg: arg, success: p.success, failure: p.failure }); },
     addTxn: function (fields) { const p = take(); rec.adds.push({ fields: fields, success: p.success, failure: p.failure }); },
-    getAllTxns: function () { const p = take(); rec.reads.push({ success: p.success, failure: p.failure }); }
+    getRecentTxns: function (fp) {
+      const p = take();
+      rec.reads.push({ fp: fp, failure: p.failure,
+        success: function (list) { p.success(JSON.stringify({ ok: true, txns: list, olderFp: 'fp' })); } });
+    }
   };
   return run;
 }
@@ -65,7 +76,8 @@ const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'ackTxns', 'spliceAt', 'history
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
   'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
-  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'pumpRowWrites', 'resumeRowWrites', 'cancelRowWrites',
+  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'enqueueRowWrites', 'rowWriteBlocked', 'pumpRowWrites',
+  'finishRowWrite', 'sendRowDelete', 'sendRowPatches', 'maybeRefresh', 'resumeRowWrites', 'cancelRowWrites',
   'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
   'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
   'normalizedTextValue', 'issueTextSave', 'drainTextWrite',
@@ -147,8 +159,7 @@ function run() {
   assert.strictEqual(queued.deletes.length, 0, 'the delete waits behind the merchant write');
   assert.strictEqual(queued.pendingDelRowKey, null, 'the modal closes even though nothing was sent');
   assert.ok(isDeletingMarkup(queued.last(), B), 'a queued delete shows the same deleting state');
-  const renamed = serverCopy(base); renamed[1].merchant = '改名後刪除';
-  queued.calls[0].success({ ok: true, txns: renamed });
+  queued.calls[0].success({ ok: true });
   assert.strictEqual(queued.deletes.length, 1, 'the delete is sent after the edit lands');
   assert.strictEqual(queued.deletes[0].arg.id, 'uuid-b');
   assert.ok(isDeletingMarkup(queued.last(), B), 'the edit acknowledgement repaint keeps the deleting state');
@@ -185,17 +196,22 @@ function run() {
   assert.notStrictEqual(adopt.textTxn(B), null);
   assert.ok(isDeletingMarkup(adopt.last(), B), 'an adopted list keeps the deleting state');
 
-  // ---- success, including a response settle drops as stale: the row never comes back ----
+  // ---- success: the row leaves at once and never comes back, even with a tick queued behind it ----
   const ok = harness(base);
   ok.confirm(B);
-  ok.applyEdit(A, 'posted', true);                        // supersedes the delete's list
-  ok.deletes[0].success({ ok: true, txns: serverCopy(base) });
-  assert.strictEqual(ok.txnById(B), null, 'a stale delete response still removes the row locally');
+  ok.applyEdit(A, 'posted', true);                        // waits behind the delete (a barrier)
+  assert.strictEqual(ok.calls.length, 0, 'the tick waits behind the delete');
+  ok.deletes[0].success({ ok: true });
+  assert.strictEqual(ok.txnById(B), null, 'the delete response removes the row locally');
   assert.ok(ok.last().indexOf('data-erow="' + B + '"') < 0, 'the deleted row is not on screen');
-  assert.strictEqual(ok.toasts.slice(-1)[0].msg, '已刪除');
+  assert.ok(ok.toasts.some(function (t) { return t.msg === '已刪除'; }), 'the delete is confirmed');
+  assert.strictEqual(ok.calls.length, 1, 'the tick goes out after the delete');
+  ok.calls[0].success({ ok: true });
+  assert.strictEqual(ok.reads.length, 1, 'one read after the drain');
   const acked = serverCopy([base[0]]); acked[0].posted = true;
-  ok.calls[0].success({ ok: true, txns: acked });
-  assert.strictEqual(ok.txnById(B), null, 'and the next adoption does not resurrect it');
+  ok.reads[0].success(acked);
+  assert.strictEqual(ok.txnById(B), null, 'and the read does not resurrect it');
+  assert.strictEqual(ok.txnById(A).posted, true, 'and keeps the tick');
 
   // ---- failure: the row returns to normal and editable; nothing re-arms the closed modal ----
   const fail = harness(base);
@@ -231,11 +247,12 @@ function run() {
   two.confirm(A);
   assert.strictEqual(two.deletes.length, 1, 'the first delete is sent; the second waits behind it');
   assert.ok(isDeletingMarkup(two.last(), A) && isDeletingMarkup(two.last(), B), 'both rows show the deleting state');
-  two.deletes[0].success({ ok: true, txns: serverCopy([base[0]]) });
+  two.deletes[0].success({ ok: true });
   assert.ok(isDeletingMarkup(two.last(), A), 'the first success leaves the second still deleting');
   assert.strictEqual(two.deletes.length, 2, 'and then sends it, not drops it');
-  two.deletes[1].success({ ok: true, txns: [] });
+  two.deletes[1].success({ ok: true });
   assert.strictEqual(two.TXNS.length, 0, 'both complete');
+  assert.strictEqual(two.reads.length, 1, 'one read after both deletes');
 
   // ---- 整天記帳 leaves a deleting row out before its optimistic tick ----
   const bulk = harness(base);
