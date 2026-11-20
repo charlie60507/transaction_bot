@@ -46,22 +46,38 @@ function serverCopy(list) {
 }
 
 // Every server entry point the panel reaches, recorded with its handlers so a test decides when
-// — and in which order — each response lands. getAllTxns() is recorded too: the refetch that
-// pays back a discarded list is a counted call, so "an ordinary run pays for no extra read" and
-// "a discarded list is refetched exactly once" are both assertable.
+// — and in which order — each response lands. A write is one updateTxns call (several rows when
+// they were coalesced); `id` / `patch` name its first item. Its success handler takes the server's
+// `{ ok, results }`, or anything without `results` as "every item succeeded" — a write response
+// carries no list any more, so a list passed there is ignored by the page, exactly as the server
+// would never send one. getRecentTxns() is recorded too: the one read after the queue drains is a
+// counted call, and `success` takes either a whole list (as an array) or the server's object, and
+// hands the page the JSON string the server returns.
 function recordingRun(rec) {
   let pending = {};
   function take() { const p = pending; pending = {}; return p; }
   const run = {
     withSuccessHandler: function (f) { pending.success = f; return run; },
     withFailureHandler: function (f) { pending.failure = f; return run; },
-    updateTxn: function (id, patch, wantTxns) {
+    updateTxns: function (items) {
       const p = take();
-      rec.calls.push({ id: id, patch: patch, wantTxns: wantTxns, success: p.success, failure: p.failure });
+      rec.calls.push({
+        items: items, ids: Array.from(items, function (i) { return i.id; }),
+        id: items[0].id, patch: items[0].patch,
+        success: function (res) {
+          p.success(res && res.results ? res : { ok: true, results: items.map(function (i) { return { id: i.id, ok: true }; }) });
+        },
+        failure: p.failure
+      });
     },
     deleteTxn: function (arg) { const p = take(); rec.deletes.push({ arg: arg, success: p.success, failure: p.failure }); },
     addTxn: function (fields) { const p = take(); rec.adds.push({ fields: fields, success: p.success, failure: p.failure }); },
-    getAllTxns: function () { const p = take(); rec.reads.push({ success: p.success, failure: p.failure }); }
+    getRecentTxns: function (fp) {
+      const p = take();
+      rec.reads.push({ fp: fp,
+        success: function (data) { p.success(JSON.stringify(Array.isArray(data) ? { ok: true, txns: data, olderFp: 'fp' } : data)); },
+        failure: p.failure });
+    }
   };
   return run;
 }
@@ -90,7 +106,8 @@ const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'ackTxns', 'spliceAt', 'history
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
   'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
-  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'pumpRowWrites', 'resumeRowWrites', 'cancelRowWrites',
+  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'enqueueRowWrites', 'rowWriteBlocked', 'pumpRowWrites',
+  'finishRowWrite', 'sendRowDelete', 'sendRowPatches', 'maybeRefresh', 'resumeRowWrites', 'cancelRowWrites',
   'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
   'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
   'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
@@ -239,38 +256,45 @@ function run() {
   assert.strictEqual(tick.renders.n, 1, 'the tap itself repaints once');
   assert.deepStrictEqual(tick.toasts.map(function (t) { return t.msg; }), ['已記帳 · 從清單移除'],
     'the success message appears at tap time, not a round trip later');
-  assert.strictEqual(tick.calls.length, 1, 'one server call, not a write followed by a refetch');
-  assert.strictEqual(tick.calls[0].wantTxns, 'recent', 'the edit asks for the fresh (recent-window) data in the same call');
+  assert.strictEqual(tick.calls.length, 1, 'one write call');
+  assert.strictEqual(tick.reads.length, 0, 'no read while the write is out');
+  tick.calls[0].success({ ok: true, results: [{ id: base[0].id, ok: true }] });
+  assert.strictEqual(tick.renders.n, 1, 'the write ack carries no list and repaints nothing');
+  assert.strictEqual(tick.reads.length, 1, 'then exactly one read of the current list');
   const acked = serverCopy(base);
   acked[0].posted = true;
-  tick.calls[0].success({ ok: true, txns: acked });
-  assert.strictEqual(tick.renders.n, 1, 'a server result matching the prediction repaints nothing');
+  tick.reads[0].success(acked);
+  assert.strictEqual(tick.renders.n, 1, 'a read matching the prediction repaints nothing');
   assert.strictEqual(tick.TXNS[0].posted, true, 'the authoritative list is still adopted');
 
-  // ---- a server result that disagrees does repaint ----
+  // ---- a read that disagrees does repaint: the tick stays the de facto refresh ----
   const diverged = harness(base);
   diverged.applyEdit(base[0].id, 'posted', true);
+  diverged.calls[0].success({ ok: true });
   const surprise = serverCopy(base);
   surprise[0].posted = true;
   surprise.push(other({ id: 'msg-d|4000|60|1111|0' }));
-  diverged.calls[0].success({ ok: true, txns: surprise });
+  diverged.reads[0].success(surprise);
   assert.strictEqual(diverged.renders.n, 2, 'a list that differs repaints');
-  assert.strictEqual(diverged.TXNS.length, 3, 'the new row is on screen');
+  assert.strictEqual(diverged.TXNS.length, 3, 'the new bot row is on screen');
 
-  // ---- a snapshot superseded by a later mutation is discarded ----
+  // ---- a read superseded by a later mutation is discarded ----
   const raced = harness(base);
   raced.applyEdit(base[0].id, 'posted', true);          // first tick, seq 1
-  raced.applyEdit(base[1].id, 'posted', true);          // second tick, seq 2
+  raced.calls[0].success({ ok: true });                  // drained: the read goes out
+  raced.applyEdit(base[1].id, 'posted', true);          // second tick, seq 2, while the read is out
   assert.strictEqual(raced.renders.n, 2, 'each tap repaints once');
   const stale = serverCopy(base);
   stale[0].posted = true;                                // knows about the first tick only
-  raced.calls[0].success({ ok: true, txns: stale });
-  assert.strictEqual(raced.renders.n, 2, 'a superseded snapshot repaints nothing');
+  raced.reads[0].success(stale);
+  assert.strictEqual(raced.renders.n, 2, 'a superseded read repaints nothing');
   assert.strictEqual(raced.TXNS[1].posted, true, 'and it does not resurrect the second row');
+  raced.calls[1].success({ ok: true });
+  assert.strictEqual(raced.reads.length, 2, 'the dropped read is re-booked once the write lands');
   const fresh = serverCopy(base);
   fresh[0].posted = true; fresh[1].posted = true;
-  raced.calls[1].success({ ok: true, txns: fresh });
-  assert.strictEqual(raced.renders.n, 2, 'the superseding response agrees with the screen');
+  raced.reads[1].success(fresh);
+  assert.strictEqual(raced.renders.n, 2, 'the fresh read agrees with the screen');
   assert.strictEqual(raced.TXNS[0].posted, true, 'both rows converge on the server state');
   assert.strictEqual(raced.TXNS[1].posted, true, 'both rows converge on the server state');
 
@@ -460,21 +484,23 @@ function run() {
   assert.strictEqual(deleteReconcile.draftValue(deleteReconcile.TXNS[1], 'merchant'), '第三列草稿');
 
   // Delete is bound to the client row, not the occurrence string visible when the modal opened,
-  // and waits for an in-flight amount write that can renumber every duplicate in the group.
-  const deleteAfterRekey = harness(threeDupes);
-  const deleteLogical = deleteAfterRekey.textRowKey(threeDupes[1].id);
+  // and waits for an in-flight amount write that can renumber every duplicate in the group. The
+  // write's ack carries no list any more, so the delete goes out under the row's immutable
+  // 交易 ID, which an amount edit cannot change. (A legacy row without one keeps its composite id
+  // until the next refresh lands; every row the page loads is backfilled with an id.)
+  const idDupes = threeDupes.map(function (t, i) { return Object.assign({}, t, { rowId: 'uuid-dup-' + i }); });
+  const deleteAfterRekey = harness(idDupes);
+  const deleteLogical = deleteAfterRekey.textRowKey(idDupes[1].id);
   deleteAfterRekey.applyEdit(deleteLogical, 'amount', 200);
-  deleteAfterRekey.pendingDelId = threeDupes[1].id;
+  deleteAfterRekey.pendingDelId = idDupes[1].id;
   deleteAfterRekey.pendingDelRowKey = deleteLogical;
   deleteAfterRekey.confirmDelete();
   assert.strictEqual(deleteAfterRekey.deletes.length, 0, 'delete waits for the row write already in flight');
-  const amountShifted = serverCopy(threeDupes);
-  amountShifted[1].amount = 200; amountShifted[1].id = 'del|1000|200|1234|0';
-  amountShifted[2].id = 'del|1000|100|1234|1';
-  deleteAfterRekey.calls[0].success({ ok: true, txns: amountShifted });
-  assert.strictEqual(deleteAfterRekey.deletes.length, 1, 'delete dispatches after the amount response is adopted');
-  assert.strictEqual(deleteAfterRekey.deletes[0].arg.id, 'del|1000|200|1234|0',
-    'delete resolves the intended logical row to its current server id, not the recycled occurrence id');
+  assert.strictEqual(deleteAfterRekey.calls[0].id, 'uuid-dup-1', 'the amount write targets the immutable id');
+  deleteAfterRekey.calls[0].success({ ok: true });
+  assert.strictEqual(deleteAfterRekey.deletes.length, 1, 'delete dispatches after the amount write settles');
+  assert.strictEqual(deleteAfterRekey.deletes[0].arg.id, 'uuid-dup-1',
+    'delete resolves the intended logical row to its immutable id, not a recycled occurrence id');
 
   const fifoBase = serverCopy(base);
   fifoBase[0].rowId = 'uuid-row-a';
@@ -1052,40 +1078,38 @@ function run() {
     'merchant blur retries a preserved dirty draft');
   assert.ok(/commitRow\(id,!t\.posted\)/.test(attachSrc), 'Record uses the combined row commit');
 
-  // ---- a list discarded by the sequence guard is refetched, not lost ----
-  // applySplit, bulkPost and submitAdd bump the counter and adopt no list of their own. When one
-  // of them supersedes an edit, the edit's authoritative list is dropped — and because 金額 is
-  // part of the composite row key, dropping it silently would leave the page holding the row's
-  // PRE-EDIT id, which is the key the NEXT write sends. So the drop must be booked and repaid.
+  // ---- the post-drain read converges a legacy composite key after an amount edit ----
+  // A write's response carries no list, so the page learns the post-edit composite id (金額 is
+  // part of it on a row without 交易 ID) only from the ONE read that goes out once nothing is in
+  // flight. Whatever mutation follows the edit, that read must happen exactly once and be adopted.
   const EDITED_ID = base[0].id.replace('|120|', '|999|');
   function editedList() {
     const l = serverCopy(base);
     l[0].amount = 999; l[0].id = EDITED_ID;
     return l;
   }
-  // A row write (applySplit, bulkPost) joins the page-wide write queue, so it is sent and lands
-  // only after the amount edit's handler has run; addTxn stays outside the queue and can land
-  // first. `land.first` says which order the case drives. Either way the property is the same.
-  function amountEditSupersededBy(name, issue) {
+  // A row write (applySplit, bulkPost) joins the page-wide write queue, so it is sent only after
+  // the amount edit's handler has run; addTxn stays outside the queue and can land first.
+  function amountEditFollowedBy(name, issue) {
     const h = harness(base);
     h.applyEdit(base[0].id, 'amount', 999);
     assert.strictEqual(h.calls.length, 1, name + ': the amount edit is written');
     const land = issue(h);                                 // the other mutation is issued
     if (land.first) land();                                // ...and lands before the edit's ack
-    assert.strictEqual(h.reads.length, 0, name + ': an ordinary run pays for no extra read');
-    h.calls[0].success({ ok: true, txns: editedList() });   // superseded — must not be adopted
-    assert.strictEqual(h.TXNS[0].id, base[0].id, name + ': the superseded snapshot is discarded');
+    assert.strictEqual(h.reads.length, 0, name + ': no read while anything is in flight');
+    h.calls[0].success({ ok: true });
+    assert.strictEqual(h.TXNS[0].id, base[0].id, name + ': a write ack changes no id by itself');
     if (!land.first) {
-      assert.strictEqual(h.reads.length, 0, name + ': the debt waits while the other write is out');
+      assert.strictEqual(h.reads.length, 0, name + ': the read waits while the other write is out');
       land();                                              // the queued write goes out and lands
     }
-    assert.strictEqual(h.reads.length, 1, name + ': and exactly one authoritative refetch is issued');
+    assert.strictEqual(h.reads.length, 1, name + ': and exactly one authoritative read is issued');
     h.reads[0].success(editedList());
     assert.strictEqual(h.TXNS[0].id, EDITED_ID,
       name + ': the page ends on the post-edit row key the next write has to send');
     return h;
   }
-  amountEditSupersededBy('applySplit', function (h) {
+  amountEditFollowedBy('applySplit', function (h) {
     h.applySplit(base[1].id, '50');
     assert.strictEqual(h.calls.length, 1, 'applySplit queues the split behind the edit');
     return function () {
@@ -1093,7 +1117,7 @@ function run() {
       h.calls[1].success({ ok: true });
     };
   });
-  amountEditSupersededBy('bulkPost', function (h) {
+  amountEditFollowedBy('bulkPost', function (h) {
     h.bulkPost([base[1].id]);
     assert.strictEqual(h.calls.length, 1, 'bulkPost queues its row behind the edit');
     return function () {
@@ -1101,7 +1125,7 @@ function run() {
       h.calls[1].success({ ok: true });
     };
   });
-  amountEditSupersededBy('submitAdd', function (h) {
+  amountEditFollowedBy('submitAdd', function (h) {
     h.submitAdd();
     assert.strictEqual(h.adds.length, 1, 'submitAdd writes the new row');
     const land = function () { h.adds[0].success({ id: 'manual-9', hm: '' }); };
@@ -1109,16 +1133,10 @@ function run() {
     return land;
   });
 
-  // ---- a MULTI-ROW bulk post supersedes the very refetch it just armed ----
-  // INFLIGHT===0 is not proof the page is quiescent. bulkPost settles row i and issues row i+1
-  // SYNCHRONOUSLY in the same handler, so the refetch settle() arms while row i is coming home is
-  // already superseded before its own response can return. Dropping it there and waiting for the
-  // next settle strands the page on the PRE-EDIT row key — nothing settles after the last row —
-  // which is exactly the 找不到該筆交易 the debt exists to prevent. The read has to re-book ITSELF.
+  // ---- a multi-row bulk post behind an edit leaves as ONE call, then one read ----
   const third = other({ id: 'msg-c|3000|60|9999|0', merchant: '7-11', amount: 60, charged: 60 });
   function bulkBase() { return [base[0], base[1], third]; }
-  // What the sheet looked like BEFORE the bulk post, with the amount edit already applied: the
-  // list the armed read is answered with. Adopting it would un-post the rows just ticked.
+  // The sheet BEFORE the bulk post, with the amount edit applied: what a stale read would show.
   function preBulkList() {
     const l = serverCopy(bulkBase());
     l[0].amount = 999; l[0].id = EDITED_ID;
@@ -1129,195 +1147,170 @@ function run() {
   }
   const multi = harness(bulkBase());
   multi.applyEdit(base[0].id, 'amount', 999);                  // seq 1, still in flight
-  multi.bulkPost([base[1].id, third.id]);                      // seq 2 queues behind the edit
-  assert.strictEqual(multi.calls.length, 1, 'the first bulk row waits behind the edit in flight');
-  multi.calls[0].success({ ok: true, txns: preBulkList() });    // superseded amount edit — dropped
-  assert.strictEqual(multi.calls.length, 2, 'bulk post writes one row at a time');
-  assert.strictEqual(multi.reads.length, 0, 'the debt waits while a bulk row is still in flight');
-  multi.calls[1].success({ ok: true });                        // settles row 1 AND issues row 2
-  assert.strictEqual(multi.reads.length, 1, 'the debt arms a refetch the moment INFLIGHT hits zero');
-  assert.strictEqual(multi.calls.length, 3, 'and the next bulk row goes out in that same handler');
-  multi.calls[2].success({ ok: true });                        // the last row: nothing settles after it
-  multi.reads[0].success(preBulkList());                       // the read was stale before it returned
-  assert.strictEqual(multi.TXNS[1].posted, true, 'a superseded read does not un-post the bulk rows');
-  assert.strictEqual(multi.TXNS[2].posted, true, 'a superseded read does not un-post the bulk rows');
-  assert.strictEqual(multi.reads.length, 2,
-    'a refetch that is superseded on arrival re-books itself — no later settle is coming');
-  multi.reads[1].success(settledList());
-  assert.strictEqual(multi.TXNS[0].id, EDITED_ID,
-    'the page converges on the post-edit row key the next write has to send');
-  assert.strictEqual(multi.reads.length, 2, 'and the retry that adopted a current list stops there');
+  multi.bulkPost([base[1].id, third.id]);                      // seq 2 and 3 queue behind the edit
+  assert.strictEqual(multi.calls.length, 1, 'the bulk rows wait behind the edit in flight');
+  multi.calls[0].success({ ok: true });
+  assert.strictEqual(multi.calls.length, 2, 'both bulk rows go out together');
+  assert.deepStrictEqual(multi.calls[1].ids, [base[1].id, third.id], 'as one updateTxns call');
+  assert.strictEqual(multi.reads.length, 0, 'no read while the bulk call is out');
+  assert.strictEqual(multi.TXNS[1].posted, true, 'the bulk rows stay posted');
+  multi.calls[1].success({ ok: true });
+  assert.strictEqual(multi.reads.length, 1, 'one read once the bulk call settles');
+  multi.reads[0].success(settledList());
+  assert.strictEqual(multi.TXNS[0].id, EDITED_ID, 'the page converges on the post-edit row key');
+  assert.ok(multi.TXNS.slice(1).every(function (t) { return t.posted; }), 'and every bulk row is posted');
+  assert.deepStrictEqual(multi.toasts.map(function (t) { return t.msg; }).slice(-1), ['已記帳 2 筆'],
+    'the summary counts the per-item results');
 
   // ---- every counter-bumping call site settles on FAILURE too ----
-  // A rejected write must book its end as well, or INFLIGHT never returns to zero and the debt a
-  // dropped list left behind is never repaid — the page keeps the stale row key for good.
-  function debtPaidByFailedMutation(name, issue, reject) {
+  // A rejected write must book its end as well, or INFLIGHT never returns to zero and the read
+  // the earlier write booked never goes out — the page keeps the stale row key for good.
+  function readAfterFailedMutation(name, issue, reject) {
     const h = harness(base);
     h.applyEdit(base[0].id, 'amount', 999);                    // seq 1
     issue(h);                                                  // seq 2, from the site under test
-    h.calls[0].success({ ok: true, txns: editedList() });       // superseded — booked, not adopted
-    assert.strictEqual(h.reads.length, 0, name + ': the debt waits for the in-flight write');
-    reject(h);                                                 // that write is REJECTED
-    assert.strictEqual(h.reads.length, 1, name + ': a rejected write settles, so the debt is repaid');
+    h.calls[0].success({ ok: true });
+    assert.strictEqual(h.reads.length, 0, name + ': the read waits for the in-flight mutation');
+    reject(h);                                                 // that mutation is REJECTED
+    assert.strictEqual(h.reads.length, 1, name + ': a rejected mutation settles, so the read goes out');
     h.reads[0].success(editedList());
     assert.strictEqual(h.TXNS[0].id, EDITED_ID, name + ': and the page ends on the post-edit row key');
+    assert.strictEqual(h.INFLIGHT, 0, name + ': nothing is left in flight');
   }
   const boom = function (h, take) { return function () { take(h).failure(new Error('boom')); }; };
-  debtPaidByFailedMutation('applyEdit',
+  readAfterFailedMutation('applyEdit',
     function (h) { h.applyEdit(base[1].id, 'posted', true); },
     function (h) { boom(h, function (x) { return x.calls[1]; })(); });
-  debtPaidByFailedMutation('applySplit',
+  readAfterFailedMutation('applySplit',
     function (h) { h.applySplit(base[1].id, '50'); },
     function (h) { boom(h, function (x) { return x.calls[1]; })(); });
-  debtPaidByFailedMutation('bulkPost',
+  readAfterFailedMutation('bulkPost',
     function (h) { h.bulkPost([base[1].id]); },
     function (h) { boom(h, function (x) { return x.calls[1]; })(); });
-  debtPaidByFailedMutation('submitAdd',
+  readAfterFailedMutation('submitAdd',
     function (h) { h.submitAdd(); },
     function (h) { boom(h, function (x) { return x.adds[0]; })(); });
-  debtPaidByFailedMutation('confirmDelete',
+  readAfterFailedMutation('confirmDelete',
     function (h) { h.pendingDelId = base[1].id; h.pendingDelRowKey = h.textRowKey(base[1].id); h.confirmDelete(); },
     function (h) { boom(h, function (x) { return x.deletes[0]; })(); });
+  // A per-item failure inside a successful call settles exactly like a rejected call.
+  readAfterFailedMutation('item failure',
+    function (h) { h.applyEdit(base[1].id, 'posted', true); },
+    function (h) { h.calls[1].success({ ok: true, results: [{ id: base[1].id, ok: false, error: 'boom' }] }); });
 
-  // ---- the refetch's own bookkeeping: one read at a time, re-booked when it cannot be used ----
+  // ---- the read's own bookkeeping: one read at a time, re-booked when it cannot be used ----
   // A read that FAILS leaves the debt outstanding for the next settle to retry.
   const retry = harness(base);
-  retry.applyEdit(base[0].id, 'amount', 999);                  // seq 1
-  retry.applySplit(base[1].id, '50');                          // seq 2 supersedes it
-  retry.calls[0].success({ ok: true, txns: editedList() });     // dropped and booked
-  retry.calls[1].success({ ok: true });                        // settles at zero → read #1
-  assert.strictEqual(retry.reads.length, 1, 'the drop is repaid with one read');
+  retry.applyEdit(base[0].id, 'amount', 999);
+  retry.calls[0].success({ ok: true });                         // drained → read #1
+  assert.strictEqual(retry.reads.length, 1, 'one read after the write');
   retry.reads[0].failure(new Error('offline'));
   assert.strictEqual(retry.reads.length, 1, 'a failed read does not retry on the spot');
-  retry.applySplit(base[1].id, '60');                          // the next mutation, adopting no list
-  retry.calls[2].success({ ok: true });
-  assert.strictEqual(retry.reads.length, 2, 'a failed read is re-booked and retried by the next settle');
+  assert.strictEqual(retry.STALE_DROPPED, true, 'the debt stays booked');
+  retry.applySplit(base[1].id, '60');                          // the next mutation
+  retry.calls[1].success({ ok: true });
+  assert.strictEqual(retry.reads.length, 2, 'a failed read is retried by the next settle');
   retry.reads[1].success(editedList());
   assert.strictEqual(retry.TXNS[0].id, EDITED_ID, 'the retried read is what converges the page');
 
-  // A read already in flight is never duplicated: a second drop rides on the one that is out.
+  // A read already in flight is never duplicated: a later write's debt rides on the one that is out.
   const once = harness(base);
-  once.applyEdit(base[0].id, 'amount', 999);                   // seq 1
-  once.applySplit(base[1].id, '50');                           // seq 2
-  once.calls[0].success({ ok: true, txns: editedList() });      // dropped and booked
-  once.calls[1].success({ ok: true });                         // → read #1, in flight from here on
-  assert.strictEqual(once.reads.length, 1, 'one read for the first drop');
-  once.applyEdit(base[0].id, 'posted', true);                  // seq 3
-  once.applySplit(base[1].id, '70');                           // seq 4 supersedes it
-  once.calls[2].success({ ok: true, txns: editedList() });      // a SECOND drop, while read #1 is out
-  once.calls[3].success({ ok: true });                         // settles at zero → would refetch
+  once.applyEdit(base[0].id, 'amount', 999);
+  once.calls[0].success({ ok: true });                          // → read #1, in flight from here on
+  assert.strictEqual(once.reads.length, 1, 'one read for the first write');
+  once.applyEdit(base[0].id, 'posted', true);                  // sent at once: the queue is idle
+  once.calls[1].success({ ok: true });                          // settles at zero → would read
   assert.strictEqual(once.reads.length, 1, 'a read already in flight is not duplicated');
   once.reads[0].success(serverCopy(base));                     // superseded on arrival
-  assert.strictEqual(once.reads.length, 2, 'the in-flight read carries both drops and re-issues once');
+  assert.strictEqual(once.reads.length, 2, 'the in-flight read carries both debts and re-issues once');
   assert.strictEqual(once.TXNS[0].id, base[0].id, 'the superseded read is not adopted');
-  once.reads[1].success(editedList());
+  assert.strictEqual(once.TXNS[0].posted, true, 'and does not un-post the later tick');
+  once.reads[1].success(editedList().map(function (t, i) { return i === 0 ? Object.assign(t, { posted: true }) : t; }));
   assert.strictEqual(once.TXNS[0].id, EDITED_ID, 'and the page still converges on the post-edit key');
+  assert.strictEqual(once.STALE_DROPPED, false, 'with no debt left');
 
-  // ---- the recovered list reaches the SCREEN, and the debt it paid is CLEARED ----
-  // Two properties the rest of this fixture only ever observed through TXNS, which is not what
-  // the owner looks at. Adopting the refetch is half the recovery; repainting it is the other
-  // half — a page holding the corrected list behind a pre-refetch screen is the same 找不到該筆
-  // 交易 for the human, who has no refresh control to force the render. And the debt has to be
-  // cleared when the read GOES OUT, not only when a later response happens to carry a list:
-  // bulk rows carry none, so an uncleared debt turns every subsequent settle into another full
-  // read of the table — the per-row refetch bulkPost exists to avoid, arriving by the back door.
+  // ---- the recovered list reaches the SCREEN, and the read budget is flat in N ----
   const paid = harness(bulkBase());
-  paid.applyEdit(base[0].id, 'amount', 999);                   // seq 1
-  paid.applySplit(base[1].id, '50');                           // seq 2 supersedes it
-  paid.calls[0].success({ ok: true, txns: preBulkList() });     // dropped and booked
-  paid.calls[1].success({ ok: true });                         // settles at zero → the debt's read
-  assert.strictEqual(paid.reads.length, 1, 'the drop is repaid with one read');
+  paid.applyEdit(base[0].id, 'amount', 999);
+  paid.calls[0].success({ ok: true });
+  assert.strictEqual(paid.reads.length, 1, 'one read after the write');
   const beforeRecovery = paid.renders.n;
   paid.reads[0].success(preBulkList());                        // current on arrival → adopted
   assert.strictEqual(paid.TXNS[0].id, EDITED_ID, 'the recovered list is adopted');
   assert.strictEqual(paid.renders.n, beforeRecovery + 1,
-    'and it is REPAINTED: a recovery that differs from the panel must reach the screen, not just TXNS');
-
-  // Read budget, stated as the property rather than as a number: a bulk post that follows a PAID
-  // debt pulls ZERO lists, however many rows it writes. Each extra row must cost one write and
-  // nothing else — the budget is flat in N, not one read per row.
+    'and it is REPAINTED: a read that differs from the panel must reach the screen, not just TXNS');
+  // An N-row bulk post costs ONE write call and ONE read, however many rows it writes.
   const BULK_IDS = [base[1].id, third.id, EDITED_ID];   // every row the recovered list holds
-  const readsAfterDebt = paid.reads.length;
-  const writesBeforeBulk = paid.calls.length;
+  const readsBefore = paid.reads.length;
+  const writesBefore = paid.calls.length;
   paid.bulkPost(BULK_IDS);
-  for (let i = 0; i < BULK_IDS.length; i++) {
-    const c = paid.calls[writesBeforeBulk + i];
-    assert.ok(c, 'bulk row ' + (i + 1) + ' is written');
-    assert.strictEqual(c.wantTxns, undefined, 'bulk row ' + (i + 1) + ' asks for no list');
-    c.success({ ok: true });                                   // settles, then issues the next row
-  }
-  assert.strictEqual(paid.calls.length, writesBeforeBulk + BULK_IDS.length,
-    'a bulk post is exactly one write per row');
-  assert.strictEqual(paid.reads.length - readsAfterDebt, 0,
-    'and pays for no read at all once the debt is paid — an N-row bulk post pulls 0 copies of the list, not N');
+  assert.strictEqual(paid.calls.length, writesBefore + 1, 'a bulk post is one write call');
+  assert.strictEqual(paid.calls[writesBefore].items.length, BULK_IDS.length, 'holding every row');
+  paid.calls[writesBefore].success({ ok: true });
+  assert.strictEqual(paid.reads.length - readsBefore, 1, 'and one read, not one per row');
   assert.ok(paid.TXNS.every(function (t) { return t.posted; }), 'every bulk row is posted');
 
   // ---- a superseded read does NOT go straight back out while a write is still in flight ----
-  // The re-book is unconditional; re-ISSUING on the spot is not. Reading the table while a write
-  // is out fetches a list that is already behind that write, so it can only come home stale and
-  // ask again. The debt is remembered instead and goes out once, when the write has landed.
   const gated = harness(bulkBase());
-  gated.applyEdit(base[0].id, 'amount', 999);                  // seq 1
-  gated.applySplit(base[1].id, '50');                          // seq 2 supersedes it
-  gated.calls[0].success({ ok: true, txns: preBulkList() });    // dropped and booked
-  gated.calls[1].success({ ok: true });                        // settles at zero → read #1 (seq 2)
-  assert.strictEqual(gated.reads.length, 1, 'the drop is repaid with one read');
-  gated.applySplit(base[1].id, '60');                          // seq 3, WHILE read #1 is out
+  gated.applyEdit(base[0].id, 'amount', 999);
+  gated.calls[0].success({ ok: true });                         // → read #1
+  assert.strictEqual(gated.reads.length, 1, 'one read after the write');
+  gated.applySplit(base[1].id, '60');                          // sent WHILE read #1 is out
   gated.reads[0].success(preBulkList());                       // stale on arrival, INFLIGHT is 1
   assert.strictEqual(gated.reads.length, 1,
     'a superseded read is re-booked, not re-issued, while a mutation is still in flight');
   assert.strictEqual(gated.TXNS[0].id, base[0].id, 'and the superseded list is not adopted');
-  gated.calls[2].success({ ok: true });                        // that write lands → INFLIGHT zero
+  gated.calls[1].success({ ok: true });                        // that write lands → INFLIGHT zero
   assert.strictEqual(gated.reads.length, 2, 'the re-booked debt goes out exactly once after it');
   gated.reads[1].success(preBulkList());
   assert.strictEqual(gated.TXNS[0].id, EDITED_ID, 'and the page converges on the post-edit row key');
   assert.strictEqual(gated.reads.length, 2, 'the read that adopted a current list stops there');
 
-  // ---- a superseded delete response neither resurrects rows nor strands the page ----
+  // ---- a delete followed by a tick: the delete is a barrier, and the row never reappears ----
   const del = harness(base);
   del.pendingDelId = base[1].id;
   del.pendingDelRowKey = del.textRowKey(base[1].id);
   del.confirmDelete();
   assert.strictEqual(del.deletes.length, 1, 'the delete is written');
   del.applyEdit(base[0].id, 'posted', true);
-  del.deletes[0].success({ ok: true, txns: serverCopy(base) });   // the sheet before the tick
-  assert.strictEqual(del.TXNS.length, 1, 'a superseded delete response is not adopted, but the deleted row is removed locally');
-  assert.strictEqual(del.txnById(base[1].id), null, 'so it never reappears in a normal state before the refetch');
-  assert.strictEqual(del.txnById(base[0].id).posted, true, 'and does not resurrect the pre-tick value');
+  assert.strictEqual(del.calls.length, 0, 'the tick waits behind the delete');
+  del.deletes[0].success({ ok: true });
+  assert.strictEqual(del.TXNS.length, 1, 'the deleted row is removed locally');
+  assert.strictEqual(del.txnById(base[1].id), null, 'so it never reappears in a normal state before the read');
+  assert.strictEqual(del.txnById(base[0].id).posted, true, 'and the tick is intact');
+  assert.strictEqual(del.calls.length, 1, 'the tick goes out after the delete');
+  assert.strictEqual(del.reads.length, 0, 'no read while it is out');
+  del.calls[0].success({ ok: true });
   const afterTick = serverCopy([base[0]]);
   afterTick[0].posted = true;
-  del.calls[0].success({ ok: true, txns: afterTick });
-  assert.strictEqual(del.TXNS.length, 1, 'the superseding response brings the authoritative list');
-  assert.strictEqual(del.reads.length, 0, 'which settles the debt without a second read');
+  del.reads[0].success(afterTick);
+  assert.strictEqual(del.TXNS.length, 1, 'the read brings the authoritative list');
+  assert.strictEqual(del.reads.length, 1, 'one read for both');
 
-  // ---- the two call sites that ignore the return value stay on two arguments ----
-  // Behaviourally first — the recording stub captures the third argument, so "asks for no list"
-  // is an observation rather than a whitespace-exact match on the file's text.
-  const arity = harness(base);
-  arity.applySplit(base[0].id, '50');
-  assert.strictEqual(arity.calls[0].wantTxns, undefined, 'applySplit asks for no list');
-  arity.calls[0].success({ ok: true });
-  arity.bulkPost([base[1].id]);
-  assert.strictEqual(arity.calls[1].wantTxns, undefined, 'a bulk row asks for no list');
-  arity.calls[1].success({ ok: true });
-  assert.strictEqual(arity.reads.length, 0, 'and an ordinary run of either pays for no extra read');
-
+  // ---- source shape: every row write leaves through the coalescing queue ----
+  ['applySplit', 'bulkPost', 'applyEdit', 'issueTextSave', 'trySendRowCommit'].forEach(function (name) {
+    const fn = extractFunction(script, name);
+    assert.ok(!/google\.script\.run/.test(fn), name + ' sends nothing itself: it enqueues a patch item');
+    assert.ok(/kind:'patch'/.test(fn), name + ' enqueues a patch item');
+    assert.ok(!/getAllTxns|updateTxn\(/.test(fn), name + ' neither calls updateTxn nor reads the full list');
+  });
   const split = extractFunction(script, 'applySplit');
-  assert.ok(/\.updateTxn\(\s*serverId,\s*\{\s*mine:\s*\(v==null\?'':v\)\s*\}\s*\)/.test(split), 'applySplit still calls updateTxn with two arguments');
-  assert.ok(!/getAllTxns/.test(split), 'applySplit does not fetch the full list');
   assert.ok(/revertTxn\(\s*current\.id,\s*\{\s*mine:prevMine,\s*amount:prevAmt\s*\}\s*\)/.test(split), 'applySplit reverts by re-resolving its row');
-  const bulk = extractFunction(script, 'bulkPost');
-  assert.ok(/\.updateTxn\(\s*serverId,\s*\{\s*posted:true\s*\}\s*\)/.test(bulk), 'bulkPost still calls updateTxn with two arguments');
-  assert.ok(!/getAllTxns/.test(bulk), 'a ten-row bulk post does not pull ten copies of the table');
-  const edit = extractFunction(script, 'applyEdit');
-  assert.ok(!/getAllTxns/.test(edit), 'the edit path no longer refetches after a successful write');
+  assert.ok(!/\.updateTxn\(/.test(script), 'no page call site uses updateTxn any more');
+  assert.ok(/\.updateTxns\(payload\)/.test(extractFunction(script, 'sendRowPatches')), 'the one write call is updateTxns');
+  assert.ok(/\.getRecentTxns\(OLDER_FP\)/.test(extractFunction(script, 'refreshTxns')), 'the one read is getRecentTxns');
 
-  // ---- the server half: opt-in list, flushed before it is read ----
+  // ---- the server half ----
   const server = fs.readFileSync(path.resolve(__dirname, '..', 'sidebar', '程式碼.js'), 'utf8');
-  assert.ok(/function updateTxn\(messageId, patch, wantTxns, olderFp\)/.test(server), 'the fresh list is an opt-in third parameter (the fourth is the recent ack\'s fingerprint)');
+  // updateTxn keeps its signature and modes for a tab opened before the deploy.
+  assert.ok(/function updateTxn\(messageId, patch, wantTxns, olderFp\)/.test(server), 'updateTxn keeps its signature');
   assert.ok(/if \(wantTxns\) \{\s*SpreadsheetApp\.flush\(\);\s*if \(wantTxns === 'recent'\) return recentAck_\(sh, rows, rowNum, olderFp, new Date\(\)\);\s*return \{ ok: true, txns: getAllTxns\(\) \};/.test(server),
-    'pending writes are flushed before the list is read, or the page would adopt a pre-write snapshot');
-  assert.ok(/\}\s*return \{ ok: true \};\s*\}/.test(server), 'the default return shape is unchanged for the two-argument call sites');
+    'updateTxn still flushes before a list mode reads');
+  // The batch endpoint does only the write.
+  const batch = extractFunction(server, 'updateTxns');
+  ['ensureRowIdColIndex_', 'SpreadsheetApp.flush', 'txnSnapshot_', 'recentAck_', 'getDataRange', 'getAllTxns'].forEach(function (needle) {
+    assert.ok(batch.indexOf(needle) === -1, 'updateTxns never calls ' + needle);
+  });
 }
 
 if (require.main === module) {

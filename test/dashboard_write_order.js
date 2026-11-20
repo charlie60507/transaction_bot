@@ -1,15 +1,15 @@
 'use strict';
 /*
- * Writes to DIFFERENT rows go out one at a time, in sequence order, through one page-wide queue.
+ * Writes leave through ONE page-wide queue, in sequence order, one call at a time (#92), and every
+ * patch queued behind a call that is out leaves with the next updateTxns call (#98).
  *
- * The page adopts only the acknowledgement of the latest client sequence and trusts it to
- * reflect every earlier write. With one queue per row, two rows' updateTxn calls were in flight
- * together and raced for the server's script lock: when the later row won, its snapshot still
- * showed the earlier row unposted, the page adopted it, and a row ticked 已記帳 came back as
- * pending (and, in one arrival order, stayed pending until a reload because no refetch was
- * booked). These cases drive the real ToolPanel.html functions against a recording
- * google.script.run, so the test decides when each response lands and can assert that the next
- * call does not exist until the previous call's handler has run.
+ * With one queue per row, two rows' writes were in flight together and raced for the server's
+ * script lock: when the later row won, its snapshot still showed the earlier row unposted, the
+ * page adopted it, and a row ticked 已記帳 came back as pending. Write responses now carry no
+ * list at all; the page reads the list once (getRecentTxns) after the queue drains, and drops a
+ * read that a later mutation superseded. These cases drive the real ToolPanel.html functions
+ * against a recording google.script.run, so the test decides when each response lands and can
+ * assert that the next call does not exist until the previous call's handler has run.
  *
  * Every case checks the on-screen `posted` value after EACH delivered response, not only the
  * final state.
@@ -44,13 +44,13 @@ function recordingRun(rec) {
   const run = {
     withSuccessHandler: function (f) { pending.success = f; return run; },
     withFailureHandler: function (f) { pending.failure = f; return run; },
-    updateTxn: function (id, patch, wantTxns) {
+    updateTxns: function (items) {
       const p = take();
-      rec.calls.push({ id: id, patch: patch, wantTxns: wantTxns, success: p.success, failure: p.failure });
+      rec.calls.push({ items: items, ids: Array.from(items, function (i) { return i.id; }), success: p.success, failure: p.failure });
     },
     deleteTxn: function (arg) { const p = take(); rec.deletes.push({ arg: arg, success: p.success, failure: p.failure }); },
     addTxn: function (fields) { const p = take(); rec.adds.push({ fields: fields, success: p.success, failure: p.failure }); },
-    getAllTxns: function () { const p = take(); rec.reads.push({ success: p.success, failure: p.failure }); }
+    getRecentTxns: function (fp) { const p = take(); rec.reads.push({ fp: fp, success: p.success, failure: p.failure }); }
   };
   return run;
 }
@@ -79,7 +79,8 @@ const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'ackTxns', 'spliceAt', 'history
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
   'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
-  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'pumpRowWrites', 'resumeRowWrites', 'cancelRowWrites',
+  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'enqueueRowWrites', 'rowWriteBlocked', 'pumpRowWrites',
+  'finishRowWrite', 'sendRowDelete', 'sendRowPatches', 'maybeRefresh', 'resumeRowWrites', 'cancelRowWrites',
   'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition',
   'textWriteQueue', 'textInputMatches', 'syncTextCopies', 'nextTextRequestToken',
   'beginComposition', 'endComposition', 'cancelTextDraft', 'consumeTextCancel',
@@ -119,6 +120,13 @@ function harness(initial) {
   return fns;
 }
 
+/** Every item of an updateTxns call succeeds (the server's answer shape). */
+function okAll(call) {
+  call.success({ ok: true, results: call.items.map(function (i) { return { id: i.id, ok: true }; }) });
+}
+/** getRecentTxns' answer: a whole list, as the JSON string the server returns. */
+function readOk(read, list) { read.success(JSON.stringify({ ok: true, txns: list, olderFp: 'fp' })); }
+
 /** Assert every listed row shows `posted === true` right now. */
 function allPosted(h, ids, when) {
   ids.forEach(function (id) {
@@ -134,66 +142,67 @@ function quiet(h, name) {
 function run() {
   const base = [A, B, C, X];
 
-  // ---- 1. two ticks in quick succession: B's call waits for A's handler ----
+  // ---- 1. two ticks in quick succession: B's call waits for A's handler, then one read ----
   {
     const h = harness(base);
     h.commitRow(A.id, true);
     h.commitRow(B.id, true);
     allPosted(h, [A.id, B.id], 'AC1 after both taps');
     assert.strictEqual(h.calls.length, 1, 'AC1: only A\'s write is sent while A is in flight');
-    assert.strictEqual(h.calls[0].id, A.id, 'AC1: A\'s write goes first');
-    // A was processed before B was sent, so its snapshot cannot hold B's tick.
-    h.calls[0].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true } }) });
+    assert.deepStrictEqual(h.calls[0].ids, [A.id], 'AC1: A\'s write goes first');
+    okAll(h.calls[0]);
     allPosted(h, [A.id, B.id], 'AC1 after A\'s ack');
     assert.strictEqual(h.calls.length, 2, 'AC1: B\'s write is sent from A\'s handler');
-    assert.strictEqual(h.calls[1].id, B.id, 'AC1: and it is B\'s');
-    h.calls[1].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true }, [B.id]: { posted: true } }) });
+    assert.deepStrictEqual(h.calls[1].ids, [B.id], 'AC1: and it is B\'s');
+    assert.strictEqual(h.reads.length, 0, 'AC1: no read while B is out');
+    okAll(h.calls[1]);
     allPosted(h, [A.id, B.id], 'AC1 after B\'s ack');
-    assert.strictEqual(h.reads.length, 0, 'AC1: the page converges with no reload and no refetch');
+    assert.strictEqual(h.reads.length, 1, 'AC1: one read once the queue has drained');
+    readOk(h.reads[0], sheet(base, { [A.id]: { posted: true }, [B.id]: { posted: true } }));
+    allPosted(h, [A.id, B.id], 'AC1 after the read');
     assert.strictEqual(h.STALE_DROPPED, false, 'AC1: no debt is left');
     quiet(h, 'AC1');
   }
 
-  // ---- 2. the stale-snapshot order: A's ack (B unposted) first, then B's ----
-  // Before the fix this order adopted B's older snapshot, left A posted=false and booked no
-  // refetch. Now A's ack is the stale one, it is dropped, and B's — which went out after A was
-  // acknowledged — already holds A's write.
+  // ---- 2. applyEdit ticks: no write ack carries a list, so none can un-post the other row ----
   {
     const h = harness(base);
     h.applyEdit(A.id, 'posted', true);
     h.applyEdit(B.id, 'posted', true);
     assert.strictEqual(h.calls.length, 1, 'AC2: B is not sent while A is in flight');
-    h.calls[0].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true } }) });
-    allPosted(h, [A.id, B.id], 'AC2 after A\'s stale-for-B ack');
-    assert.strictEqual(h.STALE_DROPPED, true, 'AC2: A\'s superseded snapshot is dropped and booked');
-    assert.strictEqual(h.reads.length, 0, 'AC2: no refetch while B is still out');
-    h.calls[1].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true }, [B.id]: { posted: true } }) });
+    okAll(h.calls[0]);
+    allPosted(h, [A.id, B.id], 'AC2 after A\'s ack');
+    assert.strictEqual(h.reads.length, 0, 'AC2: no read while B is still out');
+    okAll(h.calls[1]);
     allPosted(h, [A.id, B.id], 'AC2 after B\'s ack');
-    assert.strictEqual(h.reads.length, 0, 'AC2: B\'s adopted list already matches the sheet, no getAllTxns');
-    assert.strictEqual(h.STALE_DROPPED, false, 'AC2: the debt is paid by an ack that holds every write');
+    assert.strictEqual(h.reads.length, 1, 'AC2: one read after the drain');
+    readOk(h.reads[0], sheet(base, { [A.id]: { posted: true }, [B.id]: { posted: true } }));
+    allPosted(h, [A.id, B.id], 'AC2 after the read');
     quiet(h, 'AC2');
   }
 
-  // ---- 3. the inverse arrival order cannot occur; A's failure still lets B out ----
+  // ---- 3. A's call fails: A reverts, B still goes out ----
   {
     const h = harness(base);
     h.commitRow(A.id, true);
     h.commitRow(B.id, true);
     assert.strictEqual(h.calls.length, 1, 'AC3: B\'s call does not exist before A\'s handler runs');
-    assert.strictEqual(h.calls[1], undefined, 'AC3: so B\'s ack cannot arrive before A\'s');
     h.calls[0].failure(new Error('boom'));
     assert.strictEqual(h.posted(A.id), false, 'AC3: a failed A reverts');
     assert.strictEqual(h.posted(B.id), true, 'AC3: B stays posted after A fails');
     assert.ok(h.toasts[h.toasts.length - 1].err, 'AC3: the failure is reported');
     assert.strictEqual(h.calls.length, 2, 'AC3: B still goes out after A fails');
-    h.calls[1].success({ ok: true, txns: sheet(base, { [B.id]: { posted: true } }) });
+    okAll(h.calls[1]);
     assert.strictEqual(h.posted(A.id), false, 'AC3: A matches the sheet');
     assert.strictEqual(h.posted(B.id), true, 'AC3: B matches the sheet');
-    assert.strictEqual(h.reads.length, 0, 'AC3: converged with no refetch');
+    readOk(h.reads[0], sheet(base, { [B.id]: { posted: true } }));
+    assert.strictEqual(h.posted(A.id), false, 'AC3: A converged');
+    assert.strictEqual(h.posted(B.id), true, 'AC3: B converged');
+    assert.strictEqual(h.reads.length, 1, 'AC3: one read');
     quiet(h, 'AC3');
   }
 
-  // ---- 4. category, merchant and split edits on B while A's tick is in flight ----
+  // ---- 4. category, merchant and split edits on B while A's tick is in flight: one merged item ----
   {
     const h = harness(base);
     h.commitRow(A.id, true);
@@ -201,25 +210,15 @@ function run() {
     h.applyEdit(B.id, 'merchant', '全聯福利中心');
     h.applySplit(B.id, '200');
     assert.strictEqual(h.calls.length, 1, 'AC4: B\'s edits wait behind A\'s tick');
-    const afterA = sheet(base, { [A.id]: { posted: true } });
-    h.calls[0].success({ ok: true, txns: afterA });
+    okAll(h.calls[0]);
     assert.strictEqual(h.posted(A.id), true, 'AC4: A never shows pending after its own ack');
     assert.strictEqual(h.find(B.id).cat, '交通', 'AC4: B\'s queued edit is not undone by A\'s ack');
-    assert.strictEqual(h.calls.length, 2, 'AC4: B\'s first edit goes out after A\'s handler');
-    assert.deepStrictEqual(Object.keys(h.calls[1].patch), ['cat'], 'AC4: the category edit is next');
-    const afterCat = sheet(base, { [A.id]: { posted: true }, [B.id]: { cat: '交通' } });
-    h.calls[1].success({ ok: true, txns: afterCat });
-    assert.strictEqual(h.posted(A.id), true, 'AC4: A stays posted after B\'s category ack');
-    assert.strictEqual(h.calls.length, 3, 'AC4: then the merchant edit');
-    assert.deepStrictEqual(Object.keys(h.calls[2].patch), ['merchant'], 'AC4: merchant patch');
-    h.calls[2].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true }, [B.id]: { cat: '交通', merchant: '全聯福利中心' } }) });
-    assert.strictEqual(h.posted(A.id), true, 'AC4: A stays posted after B\'s merchant ack');
-    assert.strictEqual(h.calls.length, 4, 'AC4: then the split');
-    assert.deepStrictEqual(Object.keys(h.calls[3].patch), ['mine'], 'AC4: split patch');
-    h.calls[3].success({ ok: true });
-    // The split is the latest sequence and adopts no list, so the dropped acks are repaid by one read.
-    assert.strictEqual(h.reads.length, 1, 'AC4: exactly one refetch repays the dropped acks');
-    h.reads[0].success(sheet(base, { [A.id]: { posted: true }, [B.id]: { cat: '交通', merchant: '全聯福利中心', mine: 200, amount: 200 } }));
+    assert.strictEqual(h.calls.length, 2, 'AC4: B\'s edits go out together after A\'s handler');
+    assert.deepStrictEqual(h.calls[1].ids, [B.id], 'AC4: as one item for B');
+    assert.deepStrictEqual(Object.keys(h.calls[1].items[0].patch).sort(), ['cat', 'merchant', 'mine'], 'AC4: the merged patch holds every field');
+    okAll(h.calls[1]);
+    assert.strictEqual(h.reads.length, 1, 'AC4: one read after the drain');
+    readOk(h.reads[0], sheet(base, { [A.id]: { posted: true }, [B.id]: { cat: '交通', merchant: '全聯福利中心', mine: 200, amount: 200 } }));
     assert.strictEqual(h.posted(A.id), true, 'AC4: A converges posted');
     assert.strictEqual(h.find(B.id).cat, '交通', 'AC4: B converges with every edit');
     assert.strictEqual(h.find(B.id).merchant, '全聯福利中心', 'AC4: B converges with every edit');
@@ -232,22 +231,18 @@ function run() {
     h.bulkPost([A.id, B.id]);
     h.commitRow(C.id, true);
     allPosted(h, [A.id, B.id, C.id], 'AC5 after the taps');
-    assert.strictEqual(h.calls.length, 1, 'AC5: C\'s tick waits behind the bulk row in flight');
-    h.calls[0].success({ ok: true });                    // bulk row A: sends C, then queues B
-    allPosted(h, [A.id, B.id, C.id], 'AC5 after bulk row A');
-    assert.strictEqual(h.calls.length, 2, 'AC5: C goes out from bulk row A\'s handler');
-    assert.strictEqual(h.calls[1].id, C.id, 'AC5: the next call is C\'s tick');
-    // C's snapshot predates bulk row B (still unsent), so it shows B pending — it must be dropped.
-    h.calls[1].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true }, [C.id]: { posted: true } }) });
+    assert.strictEqual(h.calls.length, 1, 'AC5: the bulk run leaves as one call');
+    assert.deepStrictEqual(h.calls[0].ids, [A.id, B.id], 'AC5: holding both bulk rows');
+    okAll(h.calls[0]);
+    allPosted(h, [A.id, B.id, C.id], 'AC5 after the bulk call');
+    assert.strictEqual(h.calls.length, 2, 'AC5: C goes out next');
+    assert.deepStrictEqual(h.calls[1].ids, [C.id], 'AC5: the next call is C\'s tick');
+    assert.strictEqual(h.reads.length, 0, 'AC5: no read while C is out');
+    okAll(h.calls[1]);
     allPosted(h, [A.id, B.id, C.id], 'AC5 after C\'s ack');
-    assert.strictEqual(h.reads.length, 0, 'AC5: no refetch while bulk row B is still out');
-    assert.strictEqual(h.calls.length, 3, 'AC5: bulk row B goes out after C');
-    assert.strictEqual(h.calls[2].id, B.id, 'AC5: and it is B');
-    h.calls[2].success({ ok: true });
-    allPosted(h, [A.id, B.id, C.id], 'AC5 after the last bulk row');
-    assert.strictEqual(h.reads.length, 1, 'AC5: one refetch once the last bulk row settles');
-    h.reads[0].success(sheet(base, { [A.id]: { posted: true }, [B.id]: { posted: true }, [C.id]: { posted: true } }));
-    allPosted(h, [A.id, B.id, C.id], 'AC5 after the refetch');
+    assert.strictEqual(h.reads.length, 1, 'AC5: one read once C settles');
+    readOk(h.reads[0], sheet(base, { [A.id]: { posted: true }, [B.id]: { posted: true }, [C.id]: { posted: true } }));
+    allPosted(h, [A.id, B.id, C.id], 'AC5 after the read');
     assert.strictEqual(h.reads.length, 1, 'AC5: and only one');
     quiet(h, 'AC5');
   }
@@ -258,13 +253,17 @@ function run() {
     h.commitRow(A.id, true);
     h.openDelModal(X.id); h.confirmDelete();
     assert.strictEqual(h.deletes.length, 0, 'AC6a: the delete waits behind A\'s write');
-    h.calls[0].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true } }) });
+    okAll(h.calls[0]);
     assert.strictEqual(h.posted(A.id), true, 'AC6a: A stays posted');
     assert.strictEqual(h.deletes.length, 1, 'AC6a: the delete goes out after A was acknowledged');
-    h.deletes[0].success({ ok: true, txns: sheet([A, B, C], { [A.id]: { posted: true } }) });
-    assert.strictEqual(h.posted(A.id), true, 'AC6a: adopting the delete\'s list never un-posts A');
+    assert.strictEqual(h.reads.length, 0, 'AC6a: no read while the delete is out');
+    h.deletes[0].success({ ok: true });
+    assert.strictEqual(h.posted(A.id), true, 'AC6a: the delete never un-posts A');
     assert.strictEqual(h.find(X.id), null, 'AC6a: X is gone');
-    assert.strictEqual(h.reads.length, 0, 'AC6a: converged with no refetch');
+    assert.strictEqual(h.reads.length, 1, 'AC6a: one read after the drain');
+    readOk(h.reads[0], sheet([A, B, C], { [A.id]: { posted: true } }));
+    assert.strictEqual(h.posted(A.id), true, 'AC6a: A converges posted');
+    assert.strictEqual(h.find(X.id), null, 'AC6a: X stays gone');
     quiet(h, 'AC6a');
   }
 
@@ -276,17 +275,19 @@ function run() {
     h.openDelModal(X.id); h.confirmDelete();
     assert.strictEqual(h.calls.length, 1, 'AC6b: X\'s write is queued, not sent');
     assert.strictEqual(h.deletes.length, 0, 'AC6b: the delete is queued too');
-    h.calls[0].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true } }) });
+    okAll(h.calls[0]);
     assert.strictEqual(h.posted(A.id), true, 'AC6b: A stays posted after its ack');
     assert.strictEqual(h.calls.length, 2, 'AC6b: X\'s write goes next');
+    assert.deepStrictEqual(h.calls[1].ids, [X.id], 'AC6b: alone: the delete is a barrier');
     assert.strictEqual(h.deletes.length, 0, 'AC6b: the delete still follows X\'s write');
-    h.calls[1].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true }, [X.id]: { cat: '交通' } }) });
+    okAll(h.calls[1]);
     assert.strictEqual(h.posted(A.id), true, 'AC6b: A stays posted after X\'s ack');
     assert.strictEqual(h.deletes.length, 1, 'AC6b: the delete is sent after X\'s own write');
-    h.deletes[0].success({ ok: true, txns: sheet([A, B, C], { [A.id]: { posted: true } }) });
-    assert.strictEqual(h.posted(A.id), true, 'AC6b: the delete\'s list never un-posts A');
+    h.deletes[0].success({ ok: true });
     assert.strictEqual(h.find(X.id), null, 'AC6b: X is gone');
-    assert.strictEqual(h.reads.length, 0, 'AC6b: converged with no refetch');
+    readOk(h.reads[0], sheet([A, B, C], { [A.id]: { posted: true } }));
+    assert.strictEqual(h.posted(A.id), true, 'AC6b: the read never un-posts A');
+    assert.strictEqual(h.reads.length, 1, 'AC6b: one read');
     quiet(h, 'AC6b');
   }
 
@@ -296,14 +297,14 @@ function run() {
     h.commitRow(A.id, true);
     h.applyEdit(X.id, 'cat', '交通');
     h.openDelModal(X.id); h.confirmDelete();
-    h.calls[0].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true } }) });
-    h.calls[1].failure(new Error('boom'));
+    okAll(h.calls[0]);
+    h.calls[1].success({ ok: true, results: [{ id: X.id, ok: false, error: 'boom' }] });
     assert.strictEqual(h.deletes.length, 0, 'AC6c: a delete whose earlier write failed is never sent');
     assert.strictEqual(h.ROW_DELETE_INTENTS[h.find(X.id)._textKey], undefined, 'AC6c: the row returns to normal');
     assert.strictEqual(h.find(X.id).cat, '飲食', 'AC6c: X\'s failed edit reverts');
     assert.strictEqual(h.posted(A.id), true, 'AC6c: A stays posted');
-    assert.strictEqual(h.reads.length, 1, 'AC6c: the dropped acks are repaid by one refetch');
-    h.reads[0].success(sheet(base, { [A.id]: { posted: true } }));
+    assert.strictEqual(h.reads.length, 1, 'AC6c: one read after the drain');
+    readOk(h.reads[0], sheet(base, { [A.id]: { posted: true } }));
     assert.strictEqual(h.posted(A.id), true, 'AC6c: converged');
     quiet(h, 'AC6c');
   }
@@ -321,15 +322,16 @@ function run() {
     assert.strictEqual(h.posted(A.id), true, 'AC7: A is posted at tap time');
     h.adds[0].failure(new Error('boom'));
     assert.strictEqual(h.calls.length, 1, 'AC7: the other row\'s queued write still goes out');
-    assert.strictEqual(h.calls[0].id, A.id, 'AC7: and only that one');
+    assert.deepStrictEqual(h.calls[0].ids, [A.id], 'AC7: and only that one');
     assert.strictEqual(h.posted(A.id), true, 'AC7: A stays posted after the add fails');
-    h.calls[0].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true } }) });
+    okAll(h.calls[0]);
+    readOk(h.reads[0], sheet(base, { [A.id]: { posted: true } }));
     assert.strictEqual(h.posted(A.id), true, 'AC7: A converges posted');
     assert.strictEqual(h.calls.length, 1, 'AC7: the failed add\'s write was never sent');
     quiet(h, 'AC7');
   }
 
-  // ---- 7b. a successful add releases its queued write, then the rest, in order ----
+  // ---- 7b. a successful add releases its queued write and the rest, in order, in one call ----
   {
     const h = harness(base);
     h.submitAdd();
@@ -338,35 +340,69 @@ function run() {
     h.applyEdit(A.id, 'posted', true);
     assert.strictEqual(h.calls.length, 0, 'AC7b: both writes wait for the add');
     h.adds[0].success({ id: 'manual-9', hm: '' });
-    assert.strictEqual(h.calls.length, 1, 'AC7b: the new row\'s write goes first');
-    assert.strictEqual(h.calls[0].id, 'manual-9', 'AC7b: under its server id');
-    h.calls[0].success({ ok: true });
-    assert.strictEqual(h.calls.length, 2, 'AC7b: then A\'s');
-    h.calls[1].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true } }).concat([row('manual-9', '午餐', { amount: 80, charged: 80, cat: '交通', posted: true })]) });
+    assert.strictEqual(h.calls.length, 1, 'AC7b: both writes leave together');
+    assert.deepStrictEqual(h.calls[0].ids, ['manual-9', A.id], 'AC7b: the new row first, under its server id');
+    okAll(h.calls[0]);
+    readOk(h.reads[0], sheet(base, { [A.id]: { posted: true } }).concat([row('manual-9', '午餐', { amount: 80, charged: 80, cat: '交通', posted: true })]));
     assert.strictEqual(h.posted(A.id), true, 'AC7b: A converges posted');
     quiet(h, 'AC7b');
   }
 
-  // ---- 8. dropped acks followed by the latest one leave the page converged ----
+  // ---- 8. three ticks: the two behind the first leave together ----
   {
     const h = harness(base);
     h.commitRow(A.id, true);
     h.commitRow(B.id, true);
     h.commitRow(C.id, true);
     allPosted(h, [A.id, B.id, C.id], 'AC8 after the taps');
-    h.calls[0].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true } }) });
+    okAll(h.calls[0]);
     allPosted(h, [A.id, B.id, C.id], 'AC8 after A\'s ack');
-    h.calls[1].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true }, [B.id]: { posted: true } }) });
-    allPosted(h, [A.id, B.id, C.id], 'AC8 after B\'s ack');
-    assert.strictEqual(h.STALE_DROPPED, true, 'AC8: both superseded acks were dropped and booked');
-    // Every earlier call has been acknowledged by the time the latest one is even sent.
-    assert.strictEqual(h.ROW_WRITE_QUEUE.items.length, 0, 'AC8: nothing older waits behind C');
-    assert.strictEqual(h.INFLIGHT, 1, 'AC8: only C is unacknowledged');
-    h.calls[2].success({ ok: true, txns: sheet(base, { [A.id]: { posted: true }, [B.id]: { posted: true }, [C.id]: { posted: true } }) });
-    allPosted(h, [A.id, B.id, C.id], 'AC8 after C\'s ack');
-    assert.strictEqual(h.STALE_DROPPED, false, 'AC8: the latest ack pays the debt');
-    assert.strictEqual(h.reads.length, 0, 'AC8: converged with no refetch');
+    assert.strictEqual(h.calls.length, 2, 'AC8: B and C go out in one call');
+    assert.deepStrictEqual(h.calls[1].ids, [B.id, C.id], 'AC8: in queue order');
+    assert.strictEqual(h.INFLIGHT, 2, 'AC8: both are unacknowledged');
+    okAll(h.calls[1]);
+    allPosted(h, [A.id, B.id, C.id], 'AC8 after the second ack');
+    readOk(h.reads[0], sheet(base, { [A.id]: { posted: true }, [B.id]: { posted: true }, [C.id]: { posted: true } }));
+    allPosted(h, [A.id, B.id, C.id], 'AC8 after the read');
+    assert.strictEqual(h.STALE_DROPPED, false, 'AC8: no debt is left');
+    assert.strictEqual(h.reads.length, 1, 'AC8: one read');
     quiet(h, 'AC8');
+  }
+
+  // ---- 9. #92 order (a): a read out when a new tick is issued arrives stale and is dropped ----
+  {
+    const h = harness(base);
+    h.commitRow(A.id, true);
+    okAll(h.calls[0]);
+    assert.strictEqual(h.reads.length, 1, 'AC9: the read goes out after A');
+    h.commitRow(B.id, true);                            // issued while the read is out
+    // The read predates B's write: it shows B pending and must not be adopted.
+    readOk(h.reads[0], sheet(base, { [A.id]: { posted: true } }));
+    allPosted(h, [A.id, B.id], 'AC9 after the stale read');
+    assert.strictEqual(h.reads.length, 1, 'AC9: no re-read while B is out');
+    okAll(h.calls[1]);
+    allPosted(h, [A.id, B.id], 'AC9 after B\'s ack');
+    assert.strictEqual(h.reads.length, 2, 'AC9: the debt is re-booked into one read');
+    readOk(h.reads[1], sheet(base, { [A.id]: { posted: true }, [B.id]: { posted: true } }));
+    allPosted(h, [A.id, B.id], 'AC9 after the read');
+    quiet(h, 'AC9');
+  }
+
+  // ---- 10. #92 order (b): the later write's ack lands before the superseded read ----
+  {
+    const h = harness(base);
+    h.commitRow(A.id, true);
+    okAll(h.calls[0]);
+    h.commitRow(B.id, true);
+    okAll(h.calls[1]);                                   // B lands first; the old read is still out
+    allPosted(h, [A.id, B.id], 'AC10 after B\'s ack');
+    assert.strictEqual(h.reads.length, 1, 'AC10: no second read while one is out');
+    readOk(h.reads[0], sheet(base, { [A.id]: { posted: true } }));
+    allPosted(h, [A.id, B.id], 'AC10 after the stale read');
+    assert.strictEqual(h.reads.length, 2, 'AC10: the dropped read is re-issued at once');
+    readOk(h.reads[1], sheet(base, { [A.id]: { posted: true }, [B.id]: { posted: true } }));
+    allPosted(h, [A.id, B.id], 'AC10 after the fresh read');
+    quiet(h, 'AC10');
   }
 }
 

@@ -90,7 +90,7 @@ function formatDate(date, tz, fmt) {
 const SERVER_FNS = [
   'txnKey_', 'asTxnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_', 'findRowByKey_',
   'getAllTxns', 'txnsFromRows_', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_', 'txnSnapshot_', 'snapshotOfRows_',
-  'recentSince_', 'rowDays_', 'olderFingerprint_', 'fingerprintCell_', 'addTxn', 'getOrCreateDeleted_', 'deleteTxn',
+  'recentSince_', 'rowDays_', 'olderFingerprint_', 'fingerprintCell_', 'addTxn', 'getOrCreateDeleted_', 'deleteTxn', 'locateRowById_',
   'sheetHasRowId_', 'sheetHasBaseKey_', 'getSpreadsheet_', 'rowCategory_', 'cellDateTime_', 'rowHM_', 'hmFromHms_',
   'lastDataRow_', 'insertPositionForDate_', 'getMineColIndex_', 'headerRow_', 'rowMine_', 'ymdtFormatter_',
   'tzOffsetAt_', 'ymdtOnSide_', 'rowIdColIndexIn_', 'mineColIndexIn_', 'getAccountSources_'

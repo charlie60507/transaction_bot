@@ -1,16 +1,21 @@
 'use strict';
 /*
- * The incremental edit acknowledgement (#57): updateTxn(id, patch, 'recent', olderFp) returns the
- * rows dated in the last 14 days (CFG.TZ) plus the edited row, and the page merges that into
- * TXNS. `olderFp` is the server's fingerprint of the rows older than that window, as the page
- * last received them; when the pre-write sheet no longer matches it, the whole list comes back.
+ * The incremental acknowledgement (#57), and since #98 the read-only refresh built from the same
+ * pieces. updateTxn(id, patch, 'recent', olderFp) still returns the rows dated in the last 14
+ * days (CFG.TZ) plus the edited row for a tab opened before the deploy; the page itself now
+ * writes through updateTxns (no list in the response) and then reads getRecentTxns(olderFp)
+ * once its queue has drained, which returns the window rows when `olderFp` (the server's
+ * fingerprint of the rows older than the window, as the page last received them) still matches
+ * the sheet, and the whole list otherwise.
  *
  * The contract being pinned is the owner's: after an edit the page must show exactly what a full
  * reload would show — same rows, values and order — including rows the bot appended since the
  * page loaded, and older rows changed anywhere else. So every client case below runs the REAL
- * applyEdit against the REAL updateTxn on a fixture sheet, mutates the sheet the way the case
- * describes, and compares the merged TXNS with a fresh getDashboardData() on the same sheet.
- * Each case also pins WHICH shape came back, so "small in the common case" is checked too.
+ * applyEdit against the REAL updateTxns and getRecentTxns on a fixture sheet, mutates the sheet
+ * the way the case describes, and compares the merged TXNS with a fresh getDashboardData() on
+ * the same sheet. Each case also pins WHICH shape the read came back in, so "small in the common
+ * case" is checked too. The fingerprint is compared with the sheet AFTER the page's writes, so
+ * the page's own edit or delete of a row older than the window costs one whole list (#98).
  *
  * NOT evidence about the deployed dashboard: that needs the live sheet.
  */
@@ -65,7 +70,7 @@ function formatDate(date, tz, pattern) {
 
 const SERVER_FNS = ['txnKey_', 'asTxnKey_', 'isDisplayedTxn_', 'getRowIdColIndex_', 'ensureRowIdColIndex_',
   'findRowByKey_', 'getAllTxns', 'txnsFromRows_', 'txnFromRow_', 'nextOccurrence_', 'rowYmdt_', 'recentSince_', 'recentAck_',
-  'txnSnapshot_', 'snapshotOfRows_', 'rowDays_', 'olderFingerprint_', 'fingerprintCell_', 'renumbersOlderSiblings_', 'getDashboardData', 'deleteTxn', 'getOrCreateDeleted_',
+  'txnSnapshot_', 'snapshotOfRows_', 'rowDays_', 'olderFingerprint_', 'fingerprintCell_', 'renumbersOlderSiblings_', 'getDashboardData', 'deleteTxn', 'getOrCreateDeleted_', 'locateRowById_', 'recentWindow_', 'getRecentTxns', 'writeTxnPatch_', 'updateTxns',
   'rowCategory_', 'rowMine_', 'getMineColIndex_', 'ensureMineColIndex_', 'headerRow_', 'rowHM_', 'hmFromHms_',
   'isAmountCorrectionType_', 'updateTxn', 'addTxn', 'insertPositionForDate_', 'lastDataRow_', 'cellDateTime_',
   'sheetHasRowId_', 'sheetHasBaseKey_', 'monthsBackStart_', 'recentSnapshot_', 'txnsOnSide_', 'loadedFingerprint_',
@@ -294,7 +299,8 @@ const PANEL_FNS = ['txnsSignature', 'adoptTxns', 'ackTxns', 'spliceAt', 'history
   'refreshTxns', 'focusKey', 'focusMatches', 'focusIndex', 'repaint', 'revertTxn', 'applyEdit',
   'ensureTextRowKey', 'textTxn', 'textRowKey', 'resolveTextRowId', 'rawDraftKey', 'draftKey',
   'textRowLineage', 'dropTextRowState', 'reconcileTextRowIds', 'preservePendingAddRows',
-  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'pumpRowWrites', 'resumeRowWrites', 'cancelRowWrites',
+  'beginRowWrite', 'endRowWrite', 'enqueueRowWrite', 'enqueueRowWrites', 'rowWriteBlocked', 'pumpRowWrites',
+  'finishRowWrite', 'sendRowDelete', 'sendRowPatches', 'maybeRefresh', 'resumeRowWrites', 'cancelRowWrites',
   'textDraft', 'draftValue', 'captureDraft', 'hasActiveComposition', 'textWriteQueue',
   'textInputMatches', 'syncTextCopies', 'nextTextRequestToken', 'normalizedTextValue',
   'issueTextSave', 'drainTextWrite', 'saveTextDraft', 'trySendRowCommit', 'commitRow',
@@ -318,8 +324,8 @@ function client(payload) {
   const run = {
     withSuccessHandler(f) { pending.success = f; return run; },
     withFailureHandler(f) { pending.failure = f; return run; },
-    updateTxn(id, patch, wantTxns, olderFp) { rec.calls.push(Object.assign({ id, patch, wantTxns, olderFp }, take())); },
-    getAllTxns() { rec.reads.push(take()); },
+    updateTxns(items) { rec.calls.push(Object.assign({ items }, take())); },
+    getRecentTxns(fp) { rec.reads.push(Object.assign({ fp }, take())); },
     addTxn(fields) { rec.adds.push(Object.assign({ fields }, take())); },
     deleteTxn(arg) { rec.deletes.push(Object.assign({ arg }, take())); }
   };
@@ -357,21 +363,36 @@ function assertReload(page, server, label) {
   assert.strictEqual(page.OLDER_FP, boot(server).olderFp, label + ': the page\'s fingerprint is the sheet\'s');
 }
 
-/** One edit through the real applyEdit → updateTxn path, answered by the real server. Asserts the
- *  shape that came back and that the page now equals a reload. */
+/** The page's one post-drain read, answered by the real getRecentTxns. Asserts the shape that
+ *  came back and that the page now equals a reload. */
+function answerRead(page, server, label, readsBefore, expectShape) {
+  assert.strictEqual(page.rec.reads.length, readsBefore + 1, label + ': exactly one read after the drain');
+  const read = page.rec.reads[readsBefore];
+  assert.strictEqual(read.fp, page.OLDER_FP, label + ': the read sends the fingerprint of the list it holds');
+  const raw = server.getRecentTxns(read.fp);
+  assert.strictEqual(typeof raw, 'string', label + ': the read crosses the wire as a JSON string');
+  assert.strictEqual(shape(JSON.parse(raw)), expectShape, label + ': the server answers with the ' + expectShape + ' shape');
+  read.success(raw);
+  assertReload(page, server, label);
+}
+
+/** Answer one updateTxns call with the real server. A write carries no list. */
+function answerWrite(page, server, label, call) {
+  const res = wire(server.updateTxns(wire(call.items)));
+  assert.deepStrictEqual(res.results.map(r => r.ok), wire(call.items).map(() => true), label + ': every item is written');
+  assert.ok(!('txns' in res) && !('recent' in res), label + ': the write response carries no list');
+  call.success(res);
+}
+
+/** One edit through the real applyEdit → updateTxns → getRecentTxns path, answered by the real
+ *  server. Asserts the read's shape and that the page now equals a reload. */
 function edit(page, server, label, e, expectShape) {
   const before = page.rec.calls.length;
+  const readsBefore = page.rec.reads.length;
   page.applyEdit(e.rowId, e.field, e.value);
-  assert.strictEqual(page.rec.calls.length, before + 1, label + ': one server call');
-  const call = page.rec.calls[before];
-  assert.strictEqual(call.wantTxns, 'recent', label + ': the edit asks for the recent acknowledgement');
-  assert.strictEqual(call.olderFp, page.OLDER_FP, label + ': and sends the fingerprint of the list it holds');
-  const res = wire(server.updateTxn(call.id, call.patch, call.wantTxns, call.olderFp));
-  assert.strictEqual(shape(res), expectShape, label + ': the server answers with the ' + expectShape + ' shape');
-  call.success(res);
-  assert.strictEqual(page.rec.reads.length, 0, label + ': no extra full read');
-  assertReload(page, server, label);
-  return res;
+  assert.strictEqual(page.rec.calls.length, before + 1, label + ': one write call');
+  answerWrite(page, server, label, page.rec.calls[before]);
+  answerRead(page, server, label, readsBefore, expectShape);
 }
 
 /** Load the page on the fixture, change the sheet the way the case says, make one edit, and
@@ -409,8 +430,10 @@ function testClientMerge() {
   }, { rowId: 'w-1', field: 'cat', value: '交通' }, 'recent');
   assert.ok(!deleted.TXNS.some(t => t.rowId === 'w-dup-0'), 'the row deleted elsewhere is gone');
 
+  // The page's own edit of a row older than the window changes the older fingerprint, so the
+  // read after it is the whole list (correct, and only a larger payload).
   const olderEdit = editCase('edited row older than window', sheet => insertSorted(sheet, botRow()),
-    { rowId: 'old-dup-1', field: 'amount', value: 95 }, 'recent');
+    { rowId: 'old-dup-1', field: 'amount', value: 95 }, 'full');
   const edited = olderEdit.TXNS.find(t => t.rowId === 'old-dup-1');
   assert.strictEqual(edited.charged, 95, 'the older edited row carries the server value');
   assert.ok(edited.id.indexOf('|95|') > 0, 'and its new composite id (amount is part of the key)');
@@ -419,6 +442,8 @@ function testClientMerge() {
     { rowId: 'w-dup-1', field: 'amount', value: 320 }, 'recent');
   assert.ok(insideEdit.TXNS.find(t => t.rowId === 'w-dup-2').id.endsWith('|300|5678|1'),
     'a sibling renumbered by the edit carries its new id');
+
+  assert.ok(olderEdit.TXNS.some(t => t.rowId === 'bot-new'), 'and the bot row arrives with the whole list');
 
   // The merge itself, on its own: a full-list response is still adopted as-is, and an empty ack is null.
   const page = client({ txns: [], olderFp: null });
@@ -470,7 +495,7 @@ function testBackdatedManualAdd() {
   assert.notDeepStrictEqual(wire(page.TXNS.map(t => t.rowId)), wire(reloadSignature(server).rowIds),
     'precondition: before any edit the backdated row is not where a reload puts it');
   edit(page, server, 'edit after a backdated manual add', { rowId: 'w-1', field: 'posted', value: true }, 'full');
-  edit(page, server, 'the edit after that', { rowId: 'old-1', field: 'cat', value: '交通' }, 'recent');
+  edit(page, server, 'the edit after that', { rowId: 'w-1', field: 'cat', value: '交通' }, 'recent');
 
   // Dated inside the window, the same add needs no whole list: the window carries it.
   const sheet2 = new EditableSheet(fixtureRows());
@@ -481,58 +506,56 @@ function testBackdatedManualAdd() {
   }).nodes);
   page2.submitAdd();
   page2.rec.adds[0].success(wire(server2.addTxn(page2.rec.adds[0].fields)));
-  edit(page2, server2, 'edit after a manual add inside the window', { rowId: 'old-1', field: 'posted', value: true }, 'recent');
+  edit(page2, server2, 'edit after a manual add inside the window', { rowId: 'w-1', field: 'posted', value: true }, 'recent');
 }
 
-// This page's own writes: acknowledged edits and deletes keep the fingerprint current, so the
-// common case stays incremental; a response settle() discards never advances it.
+// This page's own writes: edits and deletes inside the window stay incremental; one that touches
+// a row older than the window costs exactly one whole list, after which the page is current again.
 function testOwnWritesStayIncremental() {
   const sheet = new EditableSheet(fixtureRows());
   const server = loadServer(sheet);
   const page = client(boot(server));
   const fp0 = page.OLDER_FP;
-  edit(page, server, 'own older edit', { rowId: 'old-dup-1', field: 'amount', value: 95 }, 'recent');
+  edit(page, server, 'own older edit', { rowId: 'old-dup-1', field: 'amount', value: 95 }, 'full');
   assert.notStrictEqual(page.OLDER_FP, fp0, 'an older edit advances the page\'s fingerprint');
-  edit(page, server, 'second own older edit', { rowId: 'old-1', field: 'cat', value: '交通' }, 'recent');
   edit(page, server, 'own window edit', { rowId: 'w-1', field: 'posted', value: true }, 'recent');
-  edit(page, server, 'own older edit again', { rowId: 'old-1', field: 'posted', value: true }, 'recent');
+  edit(page, server, 'second own window edit', { rowId: 'w-dup-1', field: 'cat', value: '交通' }, 'recent');
+  edit(page, server, 'own older edit again', { rowId: 'old-1', field: 'posted', value: true }, 'full');
 
-  // A delete from this page returns the whole list WITH a fingerprint, so the next older edit is
-  // still incremental.
-  const rowKey = page.textRowKey('old-dup-0');
-  page.ROW_DELETE_INTENTS[rowKey] = { sent: false, button: null };
-  page.trySendDelete(rowKey);
-  assert.strictEqual(page.rec.deletes.length, 1, 'the delete is sent');
-  page.rec.deletes[0].success(wire(server.deleteTxn(page.rec.deletes[0].arg)));
-  assertReload(page, server, 'own delete');
-  edit(page, server, 'own older edit after a delete', { rowId: 'old-dup-1', field: 'cat', value: '交通' }, 'recent');
+  // A delete from this page carries no list; the read after it does.
+  function del(rowId, label, expectShape) {
+    const rowKey = page.textRowKey(rowId);
+    const before = page.rec.deletes.length;
+    const readsBefore = page.rec.reads.length;
+    page.ROW_DELETE_INTENTS[rowKey] = { sent: false, button: null };
+    page.trySendDelete(rowKey);
+    assert.strictEqual(page.rec.deletes.length, before + 1, label + ': the delete is sent');
+    const res = wire(server.deleteTxn(page.rec.deletes[before].arg));
+    assert.deepStrictEqual(res, { ok: true }, label + ': the delete response carries no list');
+    page.rec.deletes[before].success(res);
+    answerRead(page, server, label, readsBefore, expectShape);
+  }
+  del('w-150', 'own window delete', 'recent');
+  del('old-dup-0', 'own older delete', 'full');
+  edit(page, server, 'own window edit after a delete', { rowId: 'w-1', field: 'cat', value: '交通' }, 'recent');
 
-  // Two overlapping edits: the first one's ack is superseded and dropped, and its fingerprint
-  // with it. The second was written after the first, so its pre-write sheet no longer matches the
-  // fingerprint the page sent, and it gets the whole list.
-  const fpBefore = page.OLDER_FP;
-  // Both join the page-wide write queue, so the second is sent only after the first's handler ran.
+  // Two overlapping edits: the second waits for the first, and ONE read follows both.
   const callsBefore = page.rec.calls.length;
-  page.applyEdit('old-1', 'cat', '飲食');
+  const readsBefore = page.rec.reads.length;
+  page.applyEdit('old-1', 'cat', '娛樂');
   page.applyEdit('w-1', 'posted', false);
   assert.strictEqual(page.rec.calls.length, callsBefore + 1, 'overlap: the second edit waits for the first');
-  const a = page.rec.calls[page.rec.calls.length - 1];
-  const resA = wire(server.updateTxn(a.id, a.patch, a.wantTxns, a.olderFp));
-  assert.strictEqual(shape(resA), 'recent', 'overlap: the first edit alone is incremental');
-  a.success(resA);
-  assert.strictEqual(page.OLDER_FP, fpBefore, 'overlap: a superseded ack does not advance the fingerprint');
+  answerWrite(page, server, 'overlap first', page.rec.calls[callsBefore]);
+  assert.strictEqual(page.rec.reads.length, readsBefore, 'overlap: no read while the second edit is out');
   assert.strictEqual(page.rec.calls.length, callsBefore + 2, 'overlap: the second edit goes out from the first one\'s handler');
-  const b = page.rec.calls[page.rec.calls.length - 1];
-  const resB = wire(server.updateTxn(b.id, b.patch, b.wantTxns, b.olderFp));
-  assert.strictEqual(shape(resB), 'full', 'overlap: the second edit sees the first one\'s older write and gets the whole list');
-  b.success(resB);
-  assert.strictEqual(page.rec.reads.length, 0, 'overlap: no extra read needed');
-  assertReload(page, server, 'overlapping edits');
+  answerWrite(page, server, 'overlap second', page.rec.calls[callsBefore + 1]);
+  answerRead(page, server, 'overlapping edits', readsBefore, 'full');
 }
 
 // An older edit that moves a row into or out of a same-day duplicate group renumbers the
-// group's OTHER rows in a full reload (amount is part of the base key). Those siblings are not
-// in the recent shape, so such an edit must come back as the whole list.
+// group's OTHER rows in a full reload (amount is part of the base key). Every own edit of an
+// older row is followed by the whole list (the fingerprint is compared after the write), and
+// each case still has to equal a reload, renumbered siblings included.
 function testOlderDuplicateGroups() {
   function pageOn(rows) {
     const server = loadServer(new EditableSheet(rows));
@@ -556,20 +579,20 @@ function testOlderDuplicateGroups() {
     ['0', '1', '2'], 'the group it joined is renumbered around it');
 
   // Joining a group as its LAST member, or leaving it as its last member, renumbers no other
-  // row (an occurrence counts only earlier rows), so those edits stay incremental.
+  // row (an occurrence counts only earlier rows).
   const tailRows = fixtureRows();
   tailRows.splice(tailRows.findIndex(r => r[12] === 'old-dup-1') + 1, 0,
     txnRow('old-solo', new Date('2026-09-05T02:00:00Z'), 'grp', 77, '1234', '舊單筆'));
   const tail = pageOn(tailRows);
-  edit(tail.page, tail.server, 'older row joins a group as its last member', { rowId: 'old-solo', field: 'amount', value: 88 }, 'recent');
+  edit(tail.page, tail.server, 'older row joins a group as its last member', { rowId: 'old-solo', field: 'amount', value: 88 }, 'full');
   assert.ok(tail.page.TXNS.find(t => t.rowId === 'old-solo').id.endsWith('|88|1234|2'), 'it takes the next occurrence');
-  edit(tail.page, tail.server, 'older row leaves a group as its last member', { rowId: 'old-solo', field: 'amount', value: 66 }, 'recent');
+  edit(tail.page, tail.server, 'older row leaves a group as its last member', { rowId: 'old-solo', field: 'amount', value: 66 }, 'full');
 
-  // No sibling under either base key: still incremental, even though the id changes.
+  // No sibling under either base key: the id still changes.
   const solo = pageOn(fixtureRows());
-  edit(solo.page, solo.server, 'amount edit on an older row with no sibling', { rowId: 'old-1', field: 'amount', value: 101 }, 'recent');
+  edit(solo.page, solo.server, 'amount edit on an older row with no sibling', { rowId: 'old-1', field: 'amount', value: 101 }, 'full');
   assert.ok(solo.page.TXNS.find(t => t.rowId === 'old-1').id.indexOf('|101|') > 0, 'its new id is adopted');
-  edit(solo.page, solo.server, 'older non-amount edit inside a duplicate group', { rowId: 'old-dup-0', field: 'cat', value: '交通' }, 'recent');
+  edit(solo.page, solo.server, 'older non-amount edit inside a duplicate group', { rowId: 'old-dup-0', field: 'cat', value: '交通' }, 'full');
 }
 
 const CASES = { testServerWindow, testFingerprintCoverage, testCompositeIds, testClientMerge,
