@@ -185,6 +185,24 @@
   .mtable th:first-child, .mtable td:first-child { text-align: left; padding-left: 0; }
   .mtable td:last-child { font-weight: 600; }
   .mtable tr:last-child td { border-bottom: none; }
+  /* #89: 每月明細 as a stacked list at 640px and below; the table above is not touched. */
+  .mlist { display: none; container-type: inline-size; font-size: 12px; }
+  .ml-block { padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .ml-block:first-child { padding-top: 0; }
+  .ml-block:last-child { border-bottom: none; padding-bottom: 0; }
+  .ml-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp2); margin-bottom: var(--sp1); }
+  .ml-month { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ml-sofar { margin-left: var(--sp1); font-size: 11px; color: var(--text-muted); }
+  .ml-tot { flex: none; white-space: nowrap; }
+  .ml-tl { margin-right: 6px; color: var(--text-muted); }
+  .ml-total { font-size: 14px; font-weight: 600; }
+  .ml-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px var(--sp3); }
+  .ml-cell { display: flex; justify-content: space-between; gap: 6px; min-width: 0; }
+  .ml-lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+  .ml-amt { flex: none; white-space: nowrap; }
+  .ml-empty { color: var(--text-muted); }
+  @container (max-width: 305px) { .ml-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 640px) { .mtable-wrap { display: none; } .mlist { display: block; } }
   .tlegend { display: flex; gap: var(--sp4); font-size: 11px; color: var(--text-muted); margin-top: var(--sp3); flex-wrap: wrap; }
   .tlegend span { display: inline-flex; align-items: center; gap: 5px; }
   .tlegend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
@@ -1258,7 +1276,27 @@
       PROJECTS.forEach(function(pj){ h+='<td>'+(o.proj[pj.name]?'$'+fmt(o.proj[pj.name]):'—')+'</td>'; });
       h+='<td>$'+fmt(o.total)+'</td></tr>';
     });
-    return h+'</tbody></table></div></div>';
+    return h+'</tbody></table></div>'+monthList(rows)+'</div>';
+  }
+  /** #89: the same rows as monthTable, stacked one block per month for phones. CSS shows exactly
+   *  one of the two (the list at 640px and below), so crossing the breakpoint needs no re-render. */
+  function monthList(rows){
+    function cell(label, value){
+      return '<div class="ml-cell" title="'+esc(label)+'"><span class="ml-lbl">'+esc(label)+'</span>'+value+'</div>';
+    }
+    var h='<div class="mlist num">';
+    rows.slice().reverse().forEach(function(o){
+      var p=o.key.split('-');
+      h+='<div class="ml-block"><div class="ml-head"><span class="ml-month">'+p[0].slice(2)+'/'+p[1]+(o.partial?'<span class="ml-sofar">至今</span>':'')+'</span>'
+        +'<span class="ml-tot"><span class="ml-tl">總流出</span><b class="ml-total">$'+fmt(o.total)+'</b></span></div><div class="ml-grid">'
+        +cell('日常','<span class="ml-amt">$'+fmt(o.daily)+'</span>');
+      PROJECTS.forEach(function(pj){
+        var v=o.proj[pj.name];
+        h+=cell(pj.name, v?'<span class="ml-amt">$'+fmt(v)+'</span>':'<span class="ml-amt ml-empty">—</span>');
+      });
+      h+='</div></div>';
+    });
+    return h+'</div>';
   }
 
   function categoryTxn(t){
