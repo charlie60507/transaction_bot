@@ -12,7 +12,9 @@
 // exists: a small public facade over private helpers. `check_sidebar.js` verifies that every
 // `Ledger.<fn>(` call in linebot/ resolves to a public function here.
 //
-// Every function that writes takes the dashboard script lock. Nothing here writes to META.
+// Every function that writes takes the dashboard script lock. The only META write is
+// ledgerDismissSubscription, which appends one key under the 訂閱忽略 header and touches no
+// other cell.
 
 var LEDGER_TYPES_ = ['支出', '收入', '轉帳'];
 var LEDGER_GEMINI_MODEL_ = 'gemini-2.5-flash';
@@ -254,9 +256,16 @@ function ledgerWeeklyCfo(reportDateYmd) {
     const read = sh ? readTxnsForLoad_(sh) : { rows: [], mineIdx: -1, rowIdIdx: -1 };
     const txns = read.rows.length ? txnsFromRows_(read.rows, read.mineIdx, read.rowIdIdx) : [];
     const settings = readMetaSettings_(ss);
-    // The repository has no verified subscription-change detector yet. When one is added, only
-    // its explicit verified events belong here; absence must never be inferred as a missed charge.
-    const verifiedSubscriptions = [];
+    // The report week's subscription events from the detector (sidebar/subscriptions.js), with the
+    // dismissals read under the same lock. Only these explicit events are reported; the detector
+    // decides a missed charge from its own deadline rule, never from absence alone.
+    const weekEnd = wcfoAddDays_(wcfoDay_(String(reportDateYmd || '')), -1);
+    const verifiedSubscriptions = subscriptionWeekEvents({
+      transactions: txns, weekStart: wcfoYmd_(wcfoAddDays_(weekEnd, -6)), weekEnd: wcfoYmd_(weekEnd),
+      dismissed: readSubscriptionIgnores_(ss)
+    }).map(function (e) {
+      return { type: e.type, key: e.key, name: e.name, amount: e.amount, reference: e.reference, date: e.date, verified: true };
+    });
     facts = weeklyCfoCalculate({
       reportDate: String(reportDateYmd || ''), transactions: txns,
       projects: settings.projects, baseline: settings.baseline,
@@ -279,6 +288,47 @@ function ledgerWeeklyCfo(reportDateYmd) {
   return { facts: facts, copy: copy };
 }
 
+/**
+ * Dismiss one subscription key from the weekly report's 忽略 button: append it under META's
+ * 訂閱忽略 header, under the dashboard script lock. The header is located by name in row 1; when
+ * it is missing, the first write claims column K (CFG.META_SUB_IGNORE_COL), and a K cell holding
+ * anything else fails the write with nothing changed. The key goes after the column's last
+ * non-blank cell (found by scanning the column, not getLastRow). No other cell is touched, and
+ * META column E never is. Returns 'dismissed', or 'already-dismissed' when the key is present.
+ */
+function ledgerDismissSubscription(key) {
+  key = String(key == null ? '' : key).trim();
+  if (!key || Array.from(key).length > SUB_KEY_LEN) throw new Error('訂閱名稱不合法');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15 * 1000);
+  try {
+    const sh = getSpreadsheet_().getSheetByName(CFG.META_SHEET);
+    if (!sh) throw new Error('找不到 META 工作表');
+    let col = subscriptionIgnoreCol_(sh);
+    if (!col) {
+      col = CFG.META_SUB_IGNORE_COL;
+      // Widening only happens when the sheet is narrower than K, so K is then blank and the claim
+      // succeeds; a foreign K header throws before any cell is written.
+      ensureMetaWidth_(sh, col);
+      claimMetaHeader_(sh, col, CFG.META_SUB_IGNORE_HEADER, 'K');
+    }
+    const last = sh.getLastRow();
+    const values = last > 1 ? sh.getRange(2, col, last - 1, 1).getValues() : [];
+    let lastRow = 1;
+    for (let i = 0; i < values.length; i++) {
+      const current = String(values[i][0] == null ? '' : values[i][0]).trim();
+      if (current === key) return 'already-dismissed';
+      if (current) lastRow = i + 2;
+    }
+    // Plain text, so a key that looks like a number or a date stays exactly as written.
+    sh.getRange(lastRow + 1, col).setNumberFormat('@').setValue(key);
+    SpreadsheetApp.flush();
+    return 'dismissed';
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function ledgerWeeklyCfoGemini_(facts) {
   const apiKey = CONFIG.geminiApiKey;
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
@@ -287,7 +337,8 @@ function ledgerWeeklyCfoGemini_(facts) {
     '請用台灣繁體中文回覆 JSON：{"conclusion":"一句結論","explanations":["逐筆說明"]}。',
     'explanations 最多兩句，順序與 observations 相同；沒有 observations 時必須是空陣列。',
     '不要提出通用建議，不要邀請使用者輸入文字，不要提及未記錄或預期扣款。',
-    JSON.stringify(facts)
+    // Subscription events render from fixed text in the card, never from model prose.
+    JSON.stringify(weeklyCfoFactsForWording(facts))
   ].join('\n');
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + LEDGER_GEMINI_MODEL_ + ':generateContent';
   let res;

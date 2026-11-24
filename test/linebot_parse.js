@@ -98,6 +98,25 @@ function run() {
   ['', 'undo:', 'pick:short:1', 'pick:ab12cd34:x', 'cancel:../../x', 'other:1', 'undo:a b'].forEach(d =>
     assert.strictEqual(lp.lpDecodePostback(d), null, 'rejects ' + JSON.stringify(d)));
   assert.ok(lp.lpEncodeUndo(rowId).length <= 300, 'within LINE postback data limit');
+
+  // ---- subscription dismissal postback (the weekly report's 忽略) ----------------
+  ['NETFLIX.COM', '健身工廠', 'A:B:C 訂閱', 'X12345', '50% off & more?', '一二三四五六七八九十一二三四五六七八九十'].forEach(key => {
+    const data = lp.lpEncodeSubIgnore(key);
+    assert.ok(data.indexOf('subignore:') === 0 && data.length <= 300, 'encoded within the 300-character limit: ' + key);
+    assert.deepStrictEqual(plain(lp.lpDecodePostback(data)), { action: 'subignore', key }, 'round trip: ' + key);
+  });
+  assert.strictEqual(lp.lpEncodeSubIgnore('a:b').split(':').length, 2, 'a key\'s own colon is encoded');
+  ['subignore:', 'subignore:%20', 'subignore:%E0%A4%A', 'subignore:' + encodeURIComponent(' 前後空白 '),
+    'subignore:' + encodeURIComponent('一二三四五六七八九十一二三四五六七八九十多'), 'subignore:' + 'a'.repeat(300)].forEach(d =>
+    assert.strictEqual(lp.lpDecodePostback(d), null, 'rejects ' + JSON.stringify(d.slice(0, 40))));
+
+  // ---- subscription event lines: fixed text, both readings of a missed charge ----
+  const missed = lp.lpSubscriptionEventText({ type: 'missed', key: 'NETFLIX.COM', name: 'NETFLIX.COM 12', amount: 390, reference: 390, date: '2026-07-30' });
+  assert.strictEqual(missed, '「NETFLIX.COM 12」上次扣款 7/30 NT$390，之後沒有新的扣款：可能已取消，或改由未記錄的卡片扣款');
+  assert.strictEqual(lp.lpSubscriptionEventText({ type: 'price', key: 'K', name: '健身工廠', amount: 1200, reference: 1000, date: '2026-04-05' }),
+    '「健身工廠」扣款金額變動：NT$1,000 → NT$1,200（4/5）');
+  assert.strictEqual(lp.lpSubscriptionEventText({ type: 'new', key: 'WORLDGYM', name: 'WORLDGYM 0012', amount: 1288, reference: 1288, date: '2026-03-05' }),
+    '新的定期扣款「WORLDGYM 0012」：每月 NT$1,288（3/5）');
 }
 
 if (require.main === module) {

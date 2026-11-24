@@ -154,8 +154,11 @@ const EXPECTED = {
 };
 
 /** #65 appended `categories` (META!D) to getDashboardData's payload as its LAST key, and #80 put
- *  `projects` and `baseline` (META H:J) right in front of it. Strip only those three keys, so the
- *  rest of the text is still compared byte for byte with the 5b3edcc captures; the captures
+ *  `projects` and `baseline` (META H:J) right in front of it. The subscription-change issue puts
+ *  `subscriptionIgnores` (META 訂閱忽略) in front of `projects` whenever the server has its reader
+ *  (this loader lifts getDashboardData without it, so the key is absent here; the
+ *  dashboard_subscriptions fixture covers the payload with the reader). Strip only those keys, so
+ *  the rest of the text is still compared byte for byte with the 5b3edcc captures; the captures
  *  themselves stay untouched. Returns the text and whether the keys were stripped. */
 function stripCategories(s) {
   const obj = JSON.parse(s);
@@ -166,6 +169,12 @@ function stripCategories(s) {
   assert.ok(Array.isArray(obj.categories), '`categories` is an array');
   assert.ok(Array.isArray(obj.projects), '`projects` is an array');
   assert.ok(obj.baseline && (obj.baseline.mode === 'median' || obj.baseline.mode === 'budget'), '`baseline` carries a mode');
+  if (Object.prototype.hasOwnProperty.call(obj, 'subscriptionIgnores')) {
+    assert.deepStrictEqual(keys.slice(-4), ['subscriptionIgnores', 'projects', 'baseline', 'categories'],
+      '`subscriptionIgnores` sits right before `projects`');
+    assert.ok(Array.isArray(obj.subscriptionIgnores), '`subscriptionIgnores` is an array');
+    delete obj.subscriptionIgnores;
+  }
   delete obj.projects;
   delete obj.baseline;
   delete obj.categories;

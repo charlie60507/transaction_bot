@@ -744,6 +744,8 @@
   var PROJECTS = [];
   // META J: the daily baseline, { mode: 'median' | 'budget', amount } (setDailyBaseline).
   var BASELINE = { mode:'median', amount:null };
+  // META 訂閱忽略: merchant keys the owner dismissed from subscription detection (getDashboardData).
+  var SUB_IGNORES = [];
   var PROJECT_SAVING = {};          // category -> true while its setCategoryProject is in flight
   var BASELINE_SAVING = false;
 
@@ -778,7 +780,7 @@
   }
   /** Whether a period's numbers need rows not loaded yet: 全部期間, a year that starts before the
    *  loaded range, a month before it. Both tabs also read the last six months whatever the period
-   *  (recurring() for the projection and 定期訂閱, the six-month trend chart), so those count too. */
+   *  (activeSubs() for the projection and 定期訂閱, the six-month trend chart), so those count too. */
   function scopeNeedsHistory(r){
     if(HISTORY.complete) return false;
     var six=monthsBack(6)[0];
@@ -955,7 +957,7 @@
   /**
    * The median of a sorted list; an even count averages the middle pair. A median, not a mean:
    * a few extreme months (a house down payment, a trip) would otherwise label most normal months
-   * "below average". `median()` above returns the upper middle and is kept for recurring().
+   * "below average". `median()` above returns the upper middle and is kept for its other callers.
    */
   function median_(sorted){
     if(!sorted.length) return 0;
@@ -987,13 +989,14 @@
     });
     return { byCat:byCat, months:keys.length };
   }
-  /** Detected subscriptions (recurring()) whose recent rows are all in daily categories. A project's
-   *  recurring charge (a car loan, say) never feeds the daily estimate. */
+  /** Active subscriptions (activeSubs()) whose merchant key has no consumption row in a project
+   *  category within the last 6 months. A project's recurring charge (a car loan, say) never feeds
+   *  the daily estimate. */
   function dailySubs(){
     var recent={}; monthsBack(6).forEach(function(o){ recent[ymKey(o.y,o.m)]=1; });
-    var projMerchants={};
-    TXNS.forEach(function(t){ if(isConsumption(t)&&isProjectCat(t.cat)&&recent[ymKey(t.y,t.m)]) projMerchants[t.merchant]=1; });
-    return recurring().filter(function(s){ return !projMerchants[s.name]; });
+    var projKeys={};
+    TXNS.forEach(function(t){ if(isConsumption(t)&&isProjectCat(t.cat)&&recent[ymKey(t.y,t.m)]) projKeys[subscriptionKey(t.merchant)]=1; });
+    return activeSubs().filter(function(s){ return !projKeys[s.key]; });
   }
   /** Month-end estimate of daily spending for the current month r: daily so far without the
    *  daily-category subscriptions, per elapsed day, times the days in the month, plus those
@@ -1001,9 +1004,11 @@
   function dailyEstimate(r,dly){
     var dim=daysInMonth(r.year,r.month), el=Math.min(NOW.day,dim);
     if(el>=dim) return dly.total;
-    var subs=dailySubs(), names={}, subTot=0;
-    subs.forEach(function(s){ names[s.name]=1; subTot+=s.amt; });
-    var base=sum(dly.list.filter(function(t){ return !names[t.merchant]; }));
+    // A subscription's own rows leave the per-day base by merchant key; its newest amount comes back
+    // in whole. With no keyed subscription there is nothing to take out.
+    var subs=dailySubs(), keys={}, keyed=0, subTot=0;
+    subs.forEach(function(s){ if(s.key){ keys[s.key]=1; keyed++; } subTot+=s.amt; });
+    var base=sum(keyed?dly.list.filter(function(t){ return !keys[subscriptionKey(t.merchant)]; }):dly.list);
     return Math.round(base/el*dim+subTot-dly.refunds);
   }
   /** Average daily total of the 3 months ending with the selected month (the previous month while
@@ -1033,7 +1038,139 @@
   function txnRow(t,showCat){ return '<div class="txn"><span class="badge">'+t.bank+'</span><span class="m">'+esc(t.merchant)+(showCat?' <span class="cat">'+esc(t.cat)+'</span>':'')+'</span><span class="d num">'+t.y+'/'+('0'+t.m).slice(-2)+'/'+('0'+t.d).slice(-2)+'</span><span class="a num">$'+fmt(t.amount)+splitMark(t)+'</span></div>'; }
   function incomeList(list,incTotal){ if(!list.length) return '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">此範圍沒有收入</div>'; var imap={}; list.forEach(function(t){ imap[t.cat]=(imap[t.cat]||0)+t.amount; }); var items=Object.keys(imap).map(function(k){return {name:k,total:imap[k]};}).sort(function(a,b){return b.total-a.total;}); var out=''; items.forEach(function(it){ var pct=incTotal>0?it.total/incTotal*100:0; out+='<div style="padding:6px 0;border-bottom:1px solid var(--border)"><div class="lrow" style="padding:0;border:none"><span class="ln">'+esc(it.name)+'</span><span class="la inc num">$'+fmt(it.total)+'</span></div><div class="sharebar"><i style="width:'+pct.toFixed(0)+'%"></i></div></div>'; }); out+='<div class="ltot"><span class="t-l">收入合計</span><span class="t-v num" style="color:var(--income)">$'+fmt(incTotal)+'</span></div>'; return out; }
   function monthsBack(n){ var arr=[],y=NOW.year,mm=NOW.month; for(var i=0;i<n;i++){ arr.unshift({y:y,m:mm}); mm--; if(mm<1){mm=12;y--;} } return arr; }
-  function recurring(){ var m={}; TXNS.filter(isConsumption).forEach(function(t){ var k=t.y+'-'+('0'+t.m).slice(-2); if(!m[t.merchant])m[t.merchant]={}; m[t.merchant][k]=(m[t.merchant][k]||0)+t.amount; }); var recent=monthsBack(6).map(function(o){return o.y+'-'+('0'+o.m).slice(-2);}); var last2=recent.slice(-2); var out=[]; Object.keys(m).forEach(function(name){ var present=recent.filter(function(k){return m[name][k]!=null;}); if(present.length<4) return; if(!last2.some(function(k){return m[name][k]!=null;})) return; var amts=present.map(function(k){return m[name][k];}); var med=median(amts); if(amts.every(function(a){return Math.abs(a-med)<=med*0.12;})) out.push({name:name,amt:med}); }); return out.sort(function(a,b){return b.amt-a.amt;}); }
+  // ---------- 定期訂閱 (subscriptions) ----------
+  // Ported verbatim from sidebar/subscriptions.js, from SUB_FLOOR through subscriptionDetect: the panel and
+  // the month-end estimate are recomputed from TXNS after every in-page edit, so the page runs the
+  // rule itself instead of reading a server result that an edit would make stale. Edit both copies
+  // together; test/dashboard_subscriptions.js fails when they differ in text or in output.
+  var SUB_FLOOR = '2025-10-01';
+  var SUB_KEY_LEN = 20;
+  var SUB_TOLERANCE_PCT = 5;
+  var SUB_GAP_MIN = 26;
+  var SUB_GAP_MAX = 35;
+  var SUB_GRACE_DAYS = 7;
+  var SUB_WINDOW = 6;
+
+  /** The merchant key: trimmed, a trailing run of digits, whitespace and #*- stripped, trimmed
+   *  again, first 20 characters; case preserved. When fewer than 2 characters remain, the trimmed
+   *  original's first 20 characters instead, so a reference code such as X12345 never becomes X. */
+  function subscriptionKey(merchant) {
+    var s = String(merchant == null ? '' : merchant).trim();
+    var k = Array.from(s.replace(/[\d\s#*\-]+$/, '').trim()).slice(0, SUB_KEY_LEN).join('');
+    return Array.from(k).length < 2 ? Array.from(s).slice(0, SUB_KEY_LEN).join('') : k;
+  }
+
+  function subDay_(ymd) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || ''));
+    if (!m) throw new Error('date must be YYYY-MM-DD');
+    return Math.round(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 86400000);
+  }
+
+  function subYmd_(t) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(t.date || ''))) return String(t.date);
+    if (t.y && t.m && t.d) return t.y + '-' + ('0' + t.m).slice(-2) + '-' + ('0' + t.d).slice(-2);
+    return '';
+  }
+
+  function subIsConsumption_(t) {
+    var cat = String(t.cat || '').trim();
+    return t.type === '支出' || (t.type === '轉帳' && cat !== '' && cat !== '未分類');
+  }
+
+  /** Whether `amount` lies within ±5% of `ref`, in integer-safe arithmetic. */
+  function subNear_(amount, ref) {
+    return Math.abs(amount - ref) * 100 <= ref * SUB_TOLERANCE_PCT;
+  }
+
+  /** Charges per key, each list ordered by date, then time, then row id, then input order.
+   *  Dismissed keys (trimmed, exact match) are left out entirely. */
+  function subCharges_(transactions, dismissed) {
+    var skip = {};
+    (dismissed || []).forEach(function (k) {
+      k = String(k == null ? '' : k).trim();
+      if (k) skip[k] = true;
+    });
+    var byKey = {};
+    var keys = [];
+    (transactions || []).forEach(function (t, i) {
+      if (!t || !subIsConsumption_(t)) return;
+      var ymd = subYmd_(t);
+      if (!ymd || ymd < SUB_FLOOR) return;
+      var key = subscriptionKey(t.merchant);
+      if (!key || skip[key]) return;
+      if (!byKey[key]) { byKey[key] = []; keys.push(key); }
+      byKey[key].push({ day: subDay_(ymd), date: ymd, hm: String(t.hm || ''), id: String(t.rowId || t.id || ''), seq: i,
+        amount: Number(t.amount) || 0, name: String(t.merchant == null ? '' : t.merchant).trim() });
+    });
+    keys.forEach(function (k) {
+      byKey[k].sort(function (a, b) {
+        if (a.day !== b.day) return a.day - b.day;
+        if (a.hm !== b.hm) return a.hm < b.hm ? -1 : 1;
+        if (a.id !== b.id) return a.id < b.id ? -1 : 1;
+        return a.seq - b.seq;
+      });
+    });
+    keys.sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; });
+    return { byKey: byKey, keys: keys };
+  }
+
+  /** The median of the triple starting at charges[i] when it qualifies, else 0. */
+  function subTriple_(charges, i) {
+    var a = [charges[i].amount, charges[i + 1].amount, charges[i + 2].amount].sort(function (x, y) { return x - y; });
+    var med = a[1];
+    if (!(med > 0) || !subNear_(a[0], med) || !subNear_(a[2], med)) return 0;
+    var g1 = charges[i + 1].day - charges[i].day;
+    var g2 = charges[i + 2].day - charges[i + 1].day;
+    if (g1 < SUB_GAP_MIN || g1 > SUB_GAP_MAX || g2 < SUB_GAP_MIN || g2 > SUB_GAP_MAX) return 0;
+    return med;
+  }
+
+  /** One key's state as of day `day`, counting only charges dated on or before it: null when no
+   *  qualifying triple exists among its last 6 charges, otherwise the most recent qualifying
+   *  triple's start index and median (the reference), the newest and previous charge, the newest
+   *  gap, and whether the key is active. */
+  function subStateAt_(charges, day) {
+    var n = 0;
+    while (n < charges.length && charges[n].day <= day) n++;
+    if (n < 3) return null;
+    var from = Math.max(0, n - SUB_WINDOW);
+    for (var i = n - 3; i >= from; i--) {
+      var ref = subTriple_(charges, i);
+      if (!ref) continue;
+      var last = charges[n - 1];
+      var prev = charges[n - 2];
+      var gap = last.day - prev.day;
+      return { n: n, triple: i, reference: ref, last: last, prev: prev, gap: gap,
+        active: day <= last.day + gap + SUB_GRACE_DAYS };
+    }
+    return null;
+  }
+
+  /** The active, non-dismissed subscriptions as of `asOf` ('YYYY-MM-DD'), largest amount first:
+   *  { subscriptions: [{ key, name, amount, reference, lastDate }] }. `name` is the newest charge's
+   *  merchant text, `amount` the newest charge's amount, `reference` the median of the most recent
+   *  qualifying triple. */
+  function subscriptionDetect(input) {
+    input = input || {};
+    var day = subDay_(input.asOf);
+    var c = subCharges_(input.transactions, input.dismissed);
+    var out = [];
+    c.keys.forEach(function (key) {
+      var s = subStateAt_(c.byKey[key], day);
+      if (s && s.active) {
+        out.push({ key: key, name: s.last.name, amount: s.last.amount, reference: s.reference, lastDate: s.last.date });
+      }
+    });
+    out.sort(function (a, b) { return (b.amount - a.amount) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0); });
+    return { subscriptions: out };
+  }
+  /** The active, non-dismissed subscriptions as of today, largest first, in the panel's shape:
+   *  { key, name, amt } with amt the newest charge's amount. */
+  function activeSubs(){
+    var asOf=NOW.year+'-'+('0'+NOW.month).slice(-2)+'-'+('0'+NOW.day).slice(-2);
+    return subscriptionDetect({ transactions:TXNS, asOf:asOf, dismissed:SUB_IGNORES }).subscriptions
+      .map(function(s){ return { key:s.key, name:s.name, amt:s.amount }; });
+  }
   function subPanel(subs,tot){ if(!subs.length) return '<div style="color:var(--text-muted);font-size:12px">未偵測到定期扣款</div>'; var out=''; subs.forEach(function(x){ out+='<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls">每月</span><span class="la num">$'+fmt(x.amt)+'</span></div>'; }); out+='<div class="ltot"><span class="t-l">每月合計</span><span class="t-v num">$'+fmt(tot)+'</span></div>'; return out; }
   function topMerchants(exp){ var m={}; exp.forEach(function(t){ if(!m[t.merchant])m[t.merchant]={total:0,count:0}; m[t.merchant].total+=t.amount; m[t.merchant].count++; }); var arr=Object.keys(m).map(function(k){return {name:k,total:m[k].total,count:m[k].count};}).sort(function(a,b){return b.total-a.total;}).slice(0,6); if(!arr.length) return '<div style="color:var(--text-muted);font-size:12px">無資料</div>'; var out=''; arr.forEach(function(x){ out+='<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls num">'+x.count+' 筆</span><span class="la num">$'+fmt(x.total)+'</span></div>'; }); return out; }
 
@@ -1205,7 +1342,7 @@
     if(scopeNeedsHistory(r)) return historyPanel(r);
     var expList=TXNS.filter(function(t){return isConsumption(t)&&inScope(t,r);});
     var cardExpList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
-    var subs=recurring(), subTot=subs.reduce(function(s,x){return s+x.amt;},0);
+    var subs=activeSubs(), subTot=subs.reduce(function(s,x){return s+x.amt;},0);
     var dailyOnly=state.trendMode==='daily';
     var seg='<span class="seg" role="group" aria-label="圖表範圍"><button type="button" data-trendmode="all" aria-pressed="'+(!dailyOnly)+'">日常＋專案</button><button type="button" data-trendmode="daily" aria-pressed="'+dailyOnly+'">只看日常</button></span>';
     var h='<div class="panel" style="margin-bottom:var(--sp4)"><h3>每月支出 '+seg+'</h3>';
@@ -3422,6 +3559,7 @@
         CATEGORY_LIST=(data&&data.categories)||[];
         PROJECTS=(data&&data.projects)||[];
         BASELINE=(data&&data.baseline)||{ mode:'median', amount:null };
+        SUB_IGNORES=(data&&data.subscriptionIgnores)||[];
         var partial=!!(data&&data.complete===false&&data.before);
         HISTORY={ complete:!partial, before:partial?data.before:null, loadedFp:partial?data.loadedFp:null, loading:false, failed:null };
         adoptTxns(data&&data.txns, data&&data.olderFp); render();

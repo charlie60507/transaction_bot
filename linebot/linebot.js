@@ -92,6 +92,7 @@ function lbRoute_(evt, props, now) {
     if (p.action === 'undo') return lbOnUndo_(p.rowId);
     if (p.action === 'pick') return lbOnPick_(props, p.token, p.index, now);
     if (p.action === 'cancel') return lbOnCancel_(props, p.token, now);
+    if (p.action === 'subignore') return lbOnSubIgnore_(p.key);
   }
   return [];
 }
@@ -217,6 +218,15 @@ function lbOnCancel_(props, token, now) {
 function lbOnUndo_(rowId) {
   const status = Ledger.ledgerUndo(rowId);
   return [lbText_(status === 'deleted' ? '已撤銷' : '這筆已不存在')];
+}
+
+// ---- subscription dismissal (the weekly report's 忽略 button) -------------
+
+function lbOnSubIgnore_(key) {
+  const status = Ledger.ledgerDismissSubscription(key);
+  return [lbText_(status === 'dismissed'
+    ? '已忽略「' + key + '」，之後不會再當成定期訂閱提醒'
+    : '「' + key + '」已經在忽略清單中')];
 }
 
 // ---- housekeeping --------------------------------------------------------
@@ -382,6 +392,18 @@ function lbWeeklyCfoFlex_(report) {
       { type: 'text', text: String(text), size: 'sm', color: '#d9dde5', wrap: true, maxLines: 2, flex: 1 }
     ] });
   });
+  const subs = Array.isArray(facts.subscriptionEvents) ? facts.subscriptionEvents : [];
+  if (subs.length) {
+    body.push({ type: 'separator', margin: 'lg', color: '#303542' });
+    body.push({ type: 'text', text: '定期訂閱變化', size: 'xs', color: '#8b91a1', weight: 'bold', margin: 'md' });
+    subs.forEach(function (e) {
+      body.push({ type: 'box', layout: 'horizontal', margin: 'md', spacing: 'sm', alignItems: 'center', contents: [
+        { type: 'text', text: lpSubscriptionEventText(e), size: 'sm', color: '#d9dde5', wrap: true, flex: 5 },
+        { type: 'button', style: 'secondary', height: 'sm', flex: 2,
+          action: { type: 'postback', label: '忽略', data: lpEncodeSubIgnore(e.key), displayText: '忽略' } }
+      ] });
+    });
+  }
   if (facts.week.project !== 0) {
     body.push({ type: 'separator', margin: 'lg', color: '#303542' });
     body.push({ type: 'box', layout: 'horizontal', margin: 'md', contents: [

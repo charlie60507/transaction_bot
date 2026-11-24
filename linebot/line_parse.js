@@ -151,6 +151,11 @@ function lpPendingText(entry, truncated) {
 function lpEncodeUndo(rowId) { return 'undo:' + rowId; }
 function lpEncodePick(token, index) { return 'pick:' + token + ':' + index; }
 function lpEncodeCancel(token) { return 'cancel:' + token; }
+/** A subscription key may hold any character, `:` included, so it travels URI-encoded. */
+function lpEncodeSubIgnore(key) { return 'subignore:' + encodeURIComponent(String(key)); }
+
+// A subscription key is at most 20 characters (subscriptionKey in sidebar/subscriptions.js).
+var LP_SUB_KEY_MAX = 20;
 
 /** Decode postback data, or null when it is not one of ours. */
 function lpDecodePostback(data) {
@@ -161,5 +166,36 @@ function lpDecodePostback(data) {
   if (m) return { action: 'pick', token: m[1], index: Number(m[2]) };
   m = /^cancel:([A-Za-z0-9]{8})$/.exec(data);
   if (m) return { action: 'cancel', token: m[1] };
+  m = /^subignore:(.+)$/.exec(data);
+  if (m && data.length <= 300) {
+    let key;
+    try { key = decodeURIComponent(m[1]); } catch (err) { return null; }
+    if (!key.trim() || key !== key.trim() || Array.from(key).length > LP_SUB_KEY_MAX) return null;
+    return { action: 'subignore', key: key };
+  }
   return null;
+}
+
+// ---- weekly report: subscription events ---------------------------------
+
+function lpMonthDay(ymd) {
+  const p = String(ymd || '').split('-');
+  return p.length === 3 ? Number(p[1]) + '/' + Number(p[2]) : '';
+}
+
+function lpNt(n) { return 'NT$' + Math.round(Number(n) || 0).toLocaleString('en-US'); }
+
+/**
+ * One fixed line per subscription event of the weekly report. Every number comes from the event.
+ * A missed charge admits both readings: cancelled, or charged on a card the bot cannot see.
+ */
+function lpSubscriptionEventText(e) {
+  const name = '「' + String(e.name || e.key) + '」';
+  if (e.type === 'missed') {
+    return name + '上次扣款 ' + lpMonthDay(e.date) + ' ' + lpNt(e.amount) + '，之後沒有新的扣款：可能已取消，或改由未記錄的卡片扣款';
+  }
+  if (e.type === 'price') {
+    return name + '扣款金額變動：' + lpNt(e.reference) + ' → ' + lpNt(e.amount) + '（' + lpMonthDay(e.date) + '）';
+  }
+  return '新的定期扣款' + name + '：每月 ' + lpNt(e.amount) + '（' + lpMonthDay(e.date) + '）';
 }

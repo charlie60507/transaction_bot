@@ -23,7 +23,9 @@ function report() {
   };
 }
 
-function load() {
+const PARSE = path.resolve(__dirname, '..', 'linebot', 'line_parse.js');
+
+function load(events) {
   const store = { CHANNEL_ACCESS_TOKEN: TOKEN, OWNER_USER_ID: OWNER };
   const fetches = [];
   const ledgerCalls = [];
@@ -60,7 +62,12 @@ function load() {
     Date: FakeDate, JSON, Math, Number, String, Object, Array, RegExp, isNaN,
     console: { log: m => logs.push(String(m)), error: m => logs.push(String(m)) },
     Utilities: { formatDate }, ScriptApp: scriptApp,
-    Ledger: { ledgerWeeklyCfo: date => { ledgerCalls.push(date); return report(); } },
+    Ledger: { ledgerWeeklyCfo: date => {
+      ledgerCalls.push(date);
+      const r = report();
+      if (events) r.facts.subscriptionEvents = events;
+      return r;
+    } },
     PropertiesService: { getScriptProperties: () => ({
       getProperty: k => Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null,
       setProperty: (k, v) => { store[k] = String(v); }, deleteProperty: k => { delete store[k]; },
@@ -70,6 +77,7 @@ function load() {
     UrlFetchApp: { fetch: (url, req) => { fetches.push({ url, req }); return { getResponseCode: () => response.code, getContentText: () => '{}' }; } }
   };
   vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(PARSE, 'utf8'), sandbox, { filename: 'line_parse.js' });
   vm.runInContext(fs.readFileSync(SOURCE, 'utf8'), sandbox, { filename: 'linebot.js' });
   return { sandbox, store, fetches, ledgerCalls, locks, logs, response, triggers };
 }
@@ -119,6 +127,30 @@ function run() {
     assert.ok(nodes.filter(n => n.text === report().copy.conclusion || (n.text && n.text.indexOf('很長但必須換行') >= 0))
       .every(n => n.maxLines === 2), 'dynamic copy has a fixed two-line render budget');
     assert.ok(!nodes.some(n => n.type === 'button'), 'approved card has no buttons or free-text invitation');
+    assert.ok(!nodes.some(n => n.text === '定期訂閱變化'), 'no subscription section without events');
+  }
+
+  // Subscription events: one fixed line and one 忽略 postback button per event.
+  {
+    const events = [
+      { type: 'missed', key: 'NETFLIX.COM', name: 'NETFLIX.COM 12', amount: 390, reference: 390, date: '2026-07-30', verified: true },
+      { type: 'price', key: 'A:B 健身', name: 'A:B 健身', amount: 1200, reference: 1000, date: '2026-10-07', verified: true }
+    ];
+    const h = load(events);
+    h.sandbox.sendWeeklyCfoReportManual();
+    const card = payload(h.fetches[0]).messages[0];
+    const nodes = allNodes(card);
+    assert.ok(nodes.some(n => n.text === '定期訂閱變化'), 'a subscription section');
+    const buttons = nodes.filter(n => n.type === 'button');
+    assert.strictEqual(buttons.length, 2, 'one button per event');
+    buttons.forEach((b, i) => {
+      assert.strictEqual(b.action.type, 'postback', 'a postback, never typed text');
+      assert.strictEqual(b.action.label, '忽略');
+      assert.strictEqual(b.action.data, h.sandbox.lpEncodeSubIgnore(events[i].key));
+      assert.ok(b.action.data.length <= 300);
+    });
+    events.forEach(e => assert.ok(nodes.some(n => n.text === h.sandbox.lpSubscriptionEventText(e) && n.wrap === true), 'the fixed line for ' + e.type));
+    assert.ok(nodes.some(n => n.text && n.text.indexOf('可能已取消，或改由未記錄的卡片扣款') >= 0), 'a missed charge admits both readings');
   }
 
   // Failed push does not advance the key; a later scheduled retry succeeds.
