@@ -24,6 +24,10 @@ const CFG = {
   META_PROJECT_START_HEADER: '專案起始月',
   META_BASELINE_COL: 10,
   META_BASELINE_HEADER: '日常比較對象',
+  // K: 訂閱忽略 — merchant keys (subscriptionKey) the owner dismissed from subscription detection,
+  // one per row. Read by header name (row 1 is scanned, E never); K is where the first write claims it.
+  META_SUB_IGNORE_COL: 11,
+  META_SUB_IGNORE_HEADER: '訂閱忽略',
   TZ: 'Asia/Taipei',
 
   // Transactions column indices (0-based)
@@ -727,16 +731,22 @@ function getDashboardData(opts) {
     const settings = (typeof readMetaSettings_ === 'function')
       ? readMetaSettings_(ss)
       : { projects: [], baseline: { mode: 'median', amount: null } };
+    // The dismissed subscription keys (META 訂閱忽略) ride right in front of `projects`. A fixture
+    // that lifts this function without the reader gets the payload without the key, exactly as
+    // before it existed; the deployed project always has the reader, so the page always gets it.
+    const ignores = (typeof readSubscriptionIgnores_ === 'function')
+      ? { subscriptionIgnores: readSubscriptionIgnores_(ss) } : {};
     if (!(months >= 1) || Math.floor(months) !== months) {
       const snap = (read && read.rows.length)
         ? snapshotOfRows_(read.rows, read.mineIdx, read.rowIdIdx, new Date())
         : { txns: [], olderFp: null };
-      // `categories` stays the LAST key: the load-parity test strips it and compares the rest.
-      return JSON.stringify({ txns: snap.txns, olderFp: snap.olderFp, accounts: getAccountSources_(ss),
-        projects: settings.projects, baseline: settings.baseline, categories: getCategories_(ss) });
+      // `categories` stays the LAST key, after `subscriptionIgnores`, `projects` and `baseline`: the
+      // load-parity test strips those and compares the rest.
+      return JSON.stringify(Object.assign({ txns: snap.txns, olderFp: snap.olderFp, accounts: getAccountSources_(ss) }, ignores,
+        { projects: settings.projects, baseline: settings.baseline, categories: getCategories_(ss) }));
     }
-    return JSON.stringify(Object.assign(recentSnapshot_(read, months, new Date()), { accounts: getAccountSources_(ss),
-      projects: settings.projects, baseline: settings.baseline, categories: getCategories_(ss) }));
+    return JSON.stringify(Object.assign(recentSnapshot_(read, months, new Date()), { accounts: getAccountSources_(ss) }, ignores,
+      { projects: settings.projects, baseline: settings.baseline, categories: getCategories_(ss) }));
   } finally {
     lock.releaseLock();
   }
@@ -1104,6 +1114,36 @@ function readMetaSettings_(ss) {
 
 function getProjects_(ss) { return readMetaSettings_(ss).projects; }
 function getBaselineSetting_(ss) { return readMetaSettings_(ss).baseline; }
+
+/** Column (1-based) of the 訂閱忽略 header in META row 1, or 0 when absent. Column E (the retired
+ *  TAG清單) is never read. */
+function subscriptionIgnoreCol_(sh) {
+  const width = sh.getLastColumn();
+  if (width < 1) return 0;
+  const header = sh.getRange(1, 1, 1, width).getValues()[0];
+  for (let c = 0; c < header.length; c++) {
+    if (c === 4) continue;
+    if (String(header[c] == null ? '' : header[c]).trim() === CFG.META_SUB_IGNORE_HEADER) return c + 1;
+  }
+  return 0;
+}
+
+/** The dismissed subscription keys: the trimmed, non-blank cells below the 訂閱忽略 header, in row
+ *  order, without duplicates. [] when META or the header is missing. */
+function readSubscriptionIgnores_(ss) {
+  const sh = (ss || getSpreadsheet_()).getSheetByName(CFG.META_SHEET);
+  if (!sh) return [];
+  const col = subscriptionIgnoreCol_(sh);
+  const last = sh.getLastRow();
+  if (!col || last < 2) return [];
+  const out = [];
+  const seen = {};
+  sh.getRange(2, col, last - 1, 1).getValues().forEach(function (r) {
+    const k = String(r[0] == null ? '' : r[0]).trim();
+    if (k && !seen[k]) { seen[k] = true; out.push(k); }
+  });
+  return out;
+}
 
 /** Grow META to at least `col` columns, so a write to H / I / J never lands past its width. */
 function ensureMetaWidth_(sh, col) {

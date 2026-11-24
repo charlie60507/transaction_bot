@@ -26,7 +26,7 @@ function formatDate(date, tz, fmt) {
 /** A Ledger that records calls and keeps written rows in memory. `parse` maps text → entries
  *  (or throws, standing in for a Gemini failure). */
 function fakeLedger(parse, accounts) {
-  const st = { rows: {}, adds: [], undos: [], parses: [], seq: 0 };
+  const st = { rows: {}, adds: [], undos: [], parses: [], dismissals: [], dismissed: {}, seq: 0 };
   const api = {
     ledgerContext: () => ({ accounts: (accounts || ['中信', 'LINE Pay', '現金', '富邦', '國泰']).slice(), categories: ['飲食', '交通'], rules: [] }),
     ledgerParse: (text, today, acc) => { st.parses.push({ text, today, acc }); return { entries: parse(text) }; },
@@ -40,7 +40,13 @@ function fakeLedger(parse, accounts) {
         return { rowId, bank: e.account, merchant: e.merchant, amount: e.amount, cat: e.cat || '未分類', type: e.type, m: p[1], d: p[2] };
       });
     },
-    ledgerUndo: id => { st.undos.push(id); if (st.rows[id]) { delete st.rows[id]; return 'deleted'; } return 'missing'; }
+    ledgerUndo: id => { st.undos.push(id); if (st.rows[id]) { delete st.rows[id]; return 'deleted'; } return 'missing'; },
+    ledgerDismissSubscription: key => {
+      st.dismissals.push(key);
+      if (st.dismissed[key]) return 'already-dismissed';
+      st.dismissed[key] = true;
+      return 'dismissed';
+    }
   };
   return { st, api };
 }
@@ -281,6 +287,23 @@ function run() {
     h.clock.now += 400 * 24 * HOUR;
     h.post([h.postback('undo:row-999')]);
     assert.strictEqual(h.last().messages[0].text, '這筆已不存在', 'deleted elsewhere; no time limit on asking');
+  }
+
+  // ---- weekly report 忽略: a subscription dismissal postback ---------------------
+  {
+    const h = load(fakeLedger(() => { throw new Error('the transaction parser must not be reached'); }));
+    const data = h.sandbox.lpEncodeSubIgnore('A:B 健身');
+    h.post([h.postback(data)]);
+    assert.deepStrictEqual(h.st.dismissals, ['A:B 健身'], 'routed to Ledger.ledgerDismissSubscription with the decoded key');
+    assert.strictEqual(h.last().messages[0].text, '已忽略「A:B 健身」，之後不會再當成定期訂閱提醒');
+    h.post([h.postback(data)]);
+    assert.strictEqual(h.last().messages[0].text, '「A:B 健身」已經在忽略清單中', 'a repeated tap says it is already dismissed');
+    h.post([h.postback('subignore:%E0%A4%A')]);
+    assert.strictEqual(h.st.dismissals.length, 2, 'a malformed key never reaches the ledger');
+    assert.strictEqual(h.st.parses.length, 0, 'never sent to the transaction parser');
+    assert.strictEqual(h.st.adds.length, 0);
+    h.post([h.postback(data, { user: STRANGER })]);
+    assert.strictEqual(h.st.dismissals.length, 2, 'a stranger cannot dismiss');
   }
 
   // ---- AC8: duplicate hint for the auto-imported cards ------------------------

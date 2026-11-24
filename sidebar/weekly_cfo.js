@@ -294,7 +294,17 @@ function wcfoConclusionMatchesVerdict_(facts, conclusion) {
 const WCFO_CONCLUSION_MAX_CHARS = 60;
 const WCFO_EXPLANATION_MAX_CHARS = 120;
 
-/** All numeric tokens in Gemini output must occur in the serialized computed facts. */
+/** The facts Gemini may word: everything except `subscriptionEvents`, which the card renders from
+ *  fixed deterministic text. Keeping them out of the prompt and out of the allowed numbers stops
+ *  their amounts from being quoted in, or validating, the conclusion and explanations. */
+function weeklyCfoFactsForWording(facts) {
+  const out = {};
+  Object.keys(facts || {}).forEach(function (k) { if (k !== 'subscriptionEvents') out[k] = facts[k]; });
+  return out;
+}
+
+/** All numeric tokens in Gemini output must occur in the serialized computed facts (subscription
+ *  events excluded, see weeklyCfoFactsForWording). */
 function weeklyCfoValidateGeminiCopy(facts, copy) {
   if (!copy || typeof copy.conclusion !== 'string' || !Array.isArray(copy.explanations)) return false;
   if (copy.explanations.some(function (s) { return typeof s !== 'string'; })) return false;
@@ -309,6 +319,6 @@ function weeklyCfoValidateGeminiCopy(facts, copy) {
   })) return false;
   if (wcfoHasChineseNumericClaim_(copy.conclusion + '\n' + copy.explanations.join('\n'))) return false;
   const allowed = {};
-  wcfoNumericTokens_(JSON.stringify(facts)).forEach(function (n) { allowed[n] = true; });
+  wcfoNumericTokens_(JSON.stringify(weeklyCfoFactsForWording(facts))).forEach(function (n) { allowed[n] = true; });
   return wcfoNumericTokens_(copy.conclusion + '\n' + copy.explanations.join('\n')).every(function (n) { return !!allowed[n]; });
 }
