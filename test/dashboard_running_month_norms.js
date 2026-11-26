@@ -17,7 +17,7 @@
  *      no rc-mark, no 已超出, no 常態還剩 and no h3 note text.
  *   7. With the norms loaded the h3 note reads 白線 = 常態月 · 只標已超出.
  *   8. A completed month renders exactly as before #94 (the 2026-09 card is pinned to a string
- *      produced by the pre-#94 code), and the year / 全部期間 scopes carry none of the new strings.
+ *      produced by the pre-#94 code), and the year scopes carry none of the new strings.
  *
  * NOT evidence of the live look on a phone: that is the owner's post-deploy check.
  */
@@ -177,7 +177,7 @@ function testCompletedMonth() {
 
   // The window for 2026-09 starts at BASE_FLOOR, so 娛樂's 2025-12 / 2026-05 spend has a median of 0
   // there too, and 2026-09 has no 寵物 or 娛樂 rows: the pinned card above has neither.
-  ['year', 'all', '2025'].forEach(s => {
+  ['year', '2025'].forEach(s => {
     const y = card(view(p, { scope: s }));
     NEW_STRINGS.forEach(x => assert.ok(y.indexOf(x) < 0, '(8) ' + s + ': no ' + x));
     assert.ok(y.indexOf('rc-mark') < 0 && !/class="delta/.test(y), '(8) ' + s + ': no marker and no chip');

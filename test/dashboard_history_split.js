@@ -30,7 +30,7 @@ function ymKey(t) { return t.y * 100 + t.m; }
 function parsed(s) { assert.strictEqual(typeof s, 'string', 'load calls return a JSON string'); return JSON.parse(s); }
 
 // ---------------------------------------------------------------- fixture
-// Nearly four years of rows, so 全部期間, older years, baselines and the 待記帳 backlog all reach
+// Nearly four years of rows, so older years, baselines and the 待記帳 backlog all reach
 // past the loaded range. Deterministic: no randomness, no clock.
 const MERCHANTS = ['全聯', '星巴克', '中油', '誠品', '好市多', '台電'];
 const CATS = ['超市', '飲食', '交通', '個人', '家居', '房屋'];
@@ -240,17 +240,33 @@ function answerHistory(p, server) {
 // Every view the dashboard has, as state + an optional open heat day.
 const VIEWS = [];
 ['analysis', 'trend'].forEach(tab => {
-  ['month', 'year', 'all', '2026-09', '2026-03', '2025-10', '2025-09', '2025', '2024', '2024-02', '2023'].forEach(scope => {
+  ['month', 'year', '2026-09', '2026-03', '2025-10', '2025-09', '2025', '2024', '2024-02', '2023'].forEach(scope => {
     VIEWS.push({ tab, scope });
   });
 });
+// #103: 趨勢 月 shows a 12-month window that ends at state.trendWinEnd. 2026-09 with the window ending
+// there starts at the first loaded month (2025-10); in 只看日常 its first two 3-month-average points
+// read 2025-08 and 2025-09, which a partial load does not have. 'month' is the default window,
+// 2025-11..2026-10, whose average reads back to 2025-09.
+const TREND_DAILY = [
+  { tab: 'trend', scope: '2026-09', trendWinEnd: '2026-09', trendMode: 'daily' },
+  { tab: 'trend', scope: 'month', trendMode: 'daily' },
+  { tab: 'trend', scope: '2026-03', trendMode: 'daily' },
+];
+const TREND_RENDERS = [
+  { tab: 'trend', scope: 'month' },
+  { tab: 'trend', scope: '2026-09' },
+  { tab: 'trend', scope: '2026-09', trendWinEnd: '2026-09' },
+];
+TREND_DAILY.concat([TREND_RENDERS[2]]).forEach(v => VIEWS.push(v));
 VIEWS.push({ tab: 'analysis', scope: '2026-09', openHeatDay: '2026-9-25' });
 VIEWS.push({ tab: 'analysis', scope: '2024-02', openHeatDay: '2024-2-10' });
 [['all', false], ['all', true], ['year', false], ['year', true]].forEach(([inboxScope, inboxDone]) => VIEWS.push({ tab: 'inbox', inboxScope, inboxDone }));
 ['全聯', '彙整', '390', '文字日期', '薪資'].forEach(q => VIEWS.push({ tab: 'analysis', scope: 'month', q }));
 
 function show(p, v) {
-  Object.assign(p.state, { tab: 'analysis', scope: 'month', selYear: 2026, selMonth: 10, q: '', inboxScope: 'all', inboxDone: false }, v);
+  Object.assign(p.state, { tab: 'analysis', scope: 'month', selYear: 2026, selMonth: 10, q: '', inboxScope: 'all', inboxDone: false,
+    trendMode: 'all', trendWinEnd: null }, v);
   delete p.state.openHeatDay;
   p.openHeatDay = v.openHeatDay || null;
   p.openRow = null;
@@ -296,12 +312,18 @@ function testPartialViews() {
     assert.ok(p.TXNS.every(t => ymKey(t) >= BEFORE_KEY), order + ': only the recent months are on the page');
 
     // Views that need older rows wait instead of showing a partial number.
-    const needsHistory = VIEWS.filter(v => (v.tab === 'analysis' || v.tab === 'trend') && !v.q &&
-      (v.scope === 'all' || /^(2025|2024|2023)$/.test(v.scope) || /^(2025-09|2024-02)$/.test(v.scope)));
-    needsHistory.forEach(v => {
+    // 總覽: a period before the loaded months. 趨勢: every view but the windows inside them in
+    // 日常＋專案 (#103): 年 needs every year, an older month's window reaches before them, and 只看日常
+    // needs the two months before its window.
+    const renders = v => TREND_RENDERS.some(r => label(r) === label(v));
+    const needsHistory = VIEWS.filter(v => !v.q && ((v.tab === 'analysis' &&
+      (/^(2025|2024|2023)$/.test(v.scope) || /^(2025-09|2024-02)$/.test(v.scope))) || (v.tab === 'trend' && !renders(v))));
+    assert.ok(TREND_DAILY.every(v => needsHistory.indexOf(v) >= 0), order + ': precondition, every 只看日常 view is checked');
+    assert.ok(needsHistory.some(v => v.tab === 'trend' && v.scope === 'year'), order + ': precondition, 年 of the current year is checked too');
+    needsHistory.concat([{ tab: 'trend', scope: '2026' }]).forEach(v => {
       const h = body(p, v);
       assert.ok(h.indexOf(WAIT) >= 0, order + ': ' + label(v) + ' shows the loading state');
-      assert.ok(h.indexOf('class="panel hero"') < 0 && h.indexOf('row-card') < 0 && h.indexOf('class="tchart"') < 0,
+      assert.ok(h.indexOf('class="panel hero"') < 0 && h.indexOf('row-card') < 0 && h.indexOf('class="tchart"') < 0 && h.indexOf('class="mtable') < 0,
         order + ': ' + label(v) + ' shows no number at all');
     });
     // #80: a loaded month's baseline is the median of the 12 months before it from 2025-10 on, all
@@ -315,11 +337,14 @@ function testPartialViews() {
       assert.strictEqual(h, body(ref, v), order + ': ' + scope + ': every total, baseline, list and calendar equals a full load\'s');
     });
     assert.ok(/常態（11 個月中位數）\$/.test(body(p, { tab: 'analysis', scope: '2026-09' })), order + ': 2026-09 is compared with the 11 months from 2025-10');
-    ['month', '2026-09', 'year', '2026'].forEach(scope => {
-      const h = body(p, { tab: 'trend', scope });
-      assert.ok(h.indexOf(WAIT) < 0 && h.indexOf('class="tchart"') >= 0, order + ': trend ' + scope + ' needs only loaded months and renders');
-      assert.strictEqual(h, body(ref, { tab: 'trend', scope }), order + ': trend ' + scope + ' equals a full load\'s');
+    TREND_RENDERS.forEach(v => {
+      const h = body(p, v);
+      assert.ok(h.indexOf(WAIT) < 0 && h.indexOf('class="tchart"') >= 0, order + ': ' + label(v) + ' needs only loaded months and renders');
+      assert.strictEqual(h, body(ref, v), order + ': ' + label(v) + ' equals a full load\'s');
     });
+    assert.ok(/<tr class="sel" aria-selected="true"><td>26\/09<\/td>/.test(body(p, TREND_RENDERS[2])) &&
+      body(p, TREND_RENDERS[2]).indexOf('data-tsel="2025-10"') >= 0 && body(p, TREND_RENDERS[2]).indexOf('data-tsel="2025-09"') < 0,
+      order + ': the window ending 2026-09 starts at the first loaded month');
     // The 待記帳 badge and totals cover every date, so they wait; the loaded rows stay workable.
     const inbox = show(p, { tab: 'inbox', inboxScope: 'all' });
     assert.ok(inbox.indexOf('<span class="tsub">' + WAIT + '</span>') >= 0, order + ': the inbox badge waits');
@@ -517,8 +542,8 @@ function testBackgroundFailureAndRetry() {
   const p = partialPage(server);
   take(p, 'getTxnsBefore').failure(new Error('逾時'));
   assert.strictEqual(p.HISTORY.complete, false, 'a failed read leaves the history incomplete');
-  const all = body(p, { tab: 'analysis', scope: 'all' });
-  assert.ok(all.indexOf('完整歷史載入失敗') >= 0 && all.indexOf('data-hretry') >= 0, '全部期間 shows the failure and a retry control');
+  const all = body(p, { tab: 'analysis', scope: '2024' });
+  assert.ok(all.indexOf('完整歷史載入失敗') >= 0 && all.indexOf('data-hretry') >= 0, 'an older year shows the failure and a retry control');
   assert.ok(all.indexOf('<button class="ev-toggle" style="margin-left:6px" data-hretry title="逾時">重試</button>') >= 0,
     'the retry control is a well-formed button carrying the error');
   assert.ok(all.indexOf('class="panel hero"') < 0, 'and still no partial number');
@@ -531,7 +556,7 @@ function testBackgroundFailureAndRetry() {
   p.loadHistory();
   const again = take(p, 'getTxnsBefore');
   assert.strictEqual(p.HISTORY.failed, null, 'retrying clears the failure');
-  assert.ok(body(p, { tab: 'analysis', scope: 'all' }).indexOf(WAIT) >= 0, 'and shows the loading state again');
+  assert.ok(body(p, { tab: 'analysis', scope: '2024' }).indexOf(WAIT) >= 0, 'and shows the loading state again');
   again.success(server.getTxnsBefore.apply(null, again.args));
   assertReload(p, server, 'after a retry');
   assertSameViews(p, fullPage(server), 'after a retry');
@@ -542,7 +567,7 @@ function testBackgroundFailureAndRetry() {
   take(p2, 'getTxnsBefore').failure(new Error('逾時'));
   edit(p2, server2, rid(server2, 'cathay-win', 0), 'posted', true).deliver();
   assertReload(p2, server2, 'an edit after a failed read');
-  assert.strictEqual(show(p2, { tab: 'analysis', scope: 'all' }).indexOf('data-hretry'), -1, 'and the retry control is gone');
+  assert.strictEqual(show(p2, { tab: 'analysis', scope: '2024' }).indexOf('data-hretry'), -1, 'and the retry control is gone');
 }
 
 // A retry clicked while a tick is still in flight, after a bot row has landed since boot: the
