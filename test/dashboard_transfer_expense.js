@@ -287,14 +287,10 @@ function run() {
     { kind: 'spend-hit', value: 3845 },
     'categorized transfers contribute to heatmap intensity'
   );
-  const trend = dashboard.trendRows(dashboard.monthTotals());
+  const trend = dashboard.trendRows(dashboard.monthTotals(), ['2026-08', '2026-09']);
   const month = key => trend.find(o => o.key === key);
   assert.strictEqual(month('2026-08').total, 700, 'historical categorized transfer contributes to its month trend');
   assert.strictEqual(month('2026-09').total, 3845, 'current categorized transfers contribute to trend totals');
-
-  const cardRows = dashboardTxns.filter(txn => txn.type === '支出');
-  assert.strictEqual(cardRows.map(txn => txn.id.split('|')[0]).join(','), 'historical-expense',
-    'credit-card analysis remains restricted to actual expense rows');
 
   server.updateTxn(retained.rowId, { cat: '' }, true);
   retained = server.getAllTxns().find(txn => txn.id.startsWith('cathay-transfer-1|'));

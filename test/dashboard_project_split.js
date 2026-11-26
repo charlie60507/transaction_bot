@@ -430,7 +430,7 @@ function testRendering() {
   assert.ok(/<span class="chip [a-z]+">預估 /.test(h), '(5) the current month\'s chip compares the estimate');
   assert.ok(h.indexOf('預估月底 $6,500') >= 0, '(5) and the legend shows it');
   assert.ok(!/class="delta (up|down|flat)"/.test(h.split('日常類別')[1].split('class="panel projects"')[0]), '(5) no ≈ / ▲ / ▼ per-category delta in a running month');
-  ['year', 'all', '2025'].forEach(s => {
+  ['year', '2025'].forEach(s => {
     const y = view(p, { scope: s });
     assert.ok(y.indexOf('class="chip') < 0, '(5) ' + s + ': no baseline chip');
     assert.ok(!/class="delta (up|down|flat|new)"/.test(y.split('日常類別')[1].split('class="panel projects"')[0]), '(5) ' + s + ': no per-category deltas');
@@ -464,7 +464,7 @@ function testHistory() {
   assert.ok(h.indexOf('2025/09 起累計 ' + WAIT) >= 0, '(6) 旅遊 started before the loaded months: its running total waits');
   assert.ok(h.indexOf('2026/01 起累計 $80,000') >= 0, '(6) 房屋 started inside them: shown');
   assert.ok(h.indexOf('常態（11 個月中位數）$6,000') >= 0, '(6) the 2026-09 baseline needs only loaded months and is shown');
-  assert.ok(view(p, { scope: 'all' }).indexOf('class="panel hero"') < 0, '(6) 全部期間 still waits');
+  assert.ok(view(p, { scope: '2025' }).indexOf('class="panel hero"') < 0, '(6) a year before the loaded months still waits');
   // Settings (#82): 日常 → 專案 no longer waits for the whole history. The switch is usable and opens
   // the start-month picker, which leaves out the earliest-month hint and reaches back to 2020.
   const kind = p.categoryKind('飲食', 0);

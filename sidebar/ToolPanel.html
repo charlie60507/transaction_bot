@@ -56,7 +56,6 @@
   .stepper button[disabled] { color: var(--text-muted); opacity: .35; cursor: default; }
   .stepper button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .step-label { font-size: 14px; font-weight: 600; min-width: 92px; text-align: center; white-space: nowrap; }
-  .controls > .step-label { margin-left: auto; color: var(--text-muted); font-weight: 500; }
   .hint { font-size: 11px; color: var(--text-muted); }
 
   .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin-bottom: var(--sp3); background: var(--border);
@@ -120,8 +119,6 @@
   .pj-amt span { font-size: 12px; color: var(--text-muted); }
   .pj-row.open .chev { transform: rotate(90deg); }
   .pj-row .drill { display: block; margin-top: 0; }
-  .grid2 { display: grid; grid-template-columns: 1.15fr 1fr; gap: var(--sp3); margin-bottom: var(--sp4); }
-  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
   .panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-card); padding: var(--sp4); }
   .panel h3 { font-size: 14px; color: var(--text-primary); font-weight: 650; margin-bottom: var(--sp3); display: flex; justify-content: space-between; align-items: center; gap: var(--sp2); flex-wrap: wrap; }
   .panel h3.inc { color: var(--income); }
@@ -203,6 +200,38 @@
   .ml-empty { color: var(--text-muted); }
   @container (max-width: 305px) { .ml-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   @media (max-width: 640px) { .mtable-wrap { display: none; } .mlist { display: block; } }
+  /* #103: the shared period control above the tabs, the selected 趨勢 bar / row and its expansion */
+  .head .period-controls { margin: 0 0 var(--sp2); }
+  .head .period-controls + .tabs { margin-bottom: var(--sp3); }
+  .tc-col[data-tsel] { cursor: pointer; border-radius: 4px; }
+  .tc-col[data-tsel]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .tc-bars.has-sel .tc-col:not(.sel) .tc-bar i { opacity: .5; }
+  .tc-bars.has-sel .tc-col.partial:not(.sel) .tc-bar i { opacity: .28; }
+  .tc-col.sel .tc-bar { background: var(--bg-raised); border-radius: 4px 4px 0 0; box-shadow: 0 0 0 1px var(--accent); }
+  .tc-col.sel .tc-lbl { color: var(--accent); font-weight: 600; }
+  .mtable tbody tr[data-tsel] { cursor: pointer; }
+  .mtable tbody tr[data-tsel]:hover td { background: var(--bg-raised); }
+  .mtable tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .mtable tr.sel td { background: var(--bg-raised); border-bottom-color: transparent; }
+  .mtable tr.sel td:first-child { box-shadow: inset 2px 0 0 var(--accent); padding-left: var(--sp2); color: var(--accent); font-weight: 600; }
+  .mtable tr.mdetail td { background: var(--bg-raised); text-align: left; white-space: normal; font-weight: 400; padding: 0 var(--sp3) var(--sp3); }
+  .mtable tr.mdetail td:first-child { padding-left: var(--sp3); box-shadow: inset 2px 0 0 var(--accent); }
+  .ml-block[data-tsel] { cursor: pointer; }
+  .ml-block:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-ctl); }
+  .ml-block.collapsed { padding: 10px 0; }
+  .ml-block.collapsed .ml-head { margin-bottom: 0; }
+  .ml-block.collapsed .ml-total { font-size: 13px; }
+  .ml-block.sel { background: var(--bg-raised); border-radius: var(--r-ctl); padding: var(--sp2); margin: 2px calc(-1 * var(--sp2)); border-bottom-color: transparent; }
+  .ml-block.sel:first-child { padding-top: var(--sp2); }
+  .ml-block.sel .ml-month { color: var(--accent); font-weight: 600; }
+  .pdetail { margin-top: var(--sp2); padding-top: var(--sp2); border-top: 1px solid var(--border); }
+  .pd-cols { display: grid; grid-template-columns: 1fr; gap: var(--sp3); }
+  .mtable .pd-cols { grid-template-columns: 1fr 1fr; gap: var(--sp5); }
+  .pd-col { min-width: 0; }
+  .pd-h { font-size: 12px; color: var(--text-muted); font-weight: 600; margin-bottom: 2px; }
+  .pd-h .num { font-weight: 400; margin-left: 4px; }
+  .pd-none { font-size: 12px; color: var(--text-muted); padding: 6px 0; }
+  .pd-act { display: flex; justify-content: flex-end; margin-top: var(--sp2); }
   .tlegend { display: flex; gap: var(--sp4); font-size: 11px; color: var(--text-muted); margin-top: var(--sp3); flex-wrap: wrap; }
   .tlegend span { display: inline-flex; align-items: center; gap: 5px; }
   .tlegend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
@@ -250,14 +279,6 @@
   .badge { font-size: 11px; padding: 1px 7px; border-radius: 4px; color: var(--text-muted); background: var(--bg-raised); border: 1px solid var(--border); }
 
   /* per-card panel */
-  .cardrow { padding: 9px 0; border-bottom: 1px solid var(--border); }
-  .cardrow:last-child { border-bottom: none; }
-  .cardrow .ctop { display: flex; align-items: baseline; gap: var(--sp2); }
-  .cardrow .cname { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: var(--sp2); min-width: 0; }
-  .cardrow .cdot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
-  .cardrow .camt { margin-left: auto; font-weight: 600; white-space: nowrap; }
-  .cardrow .cpct { color: var(--text-muted); font-size: 12px; min-width: 38px; text-align: right; }
-  .cardrow .cmeta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
   .delta.flat { color: var(--text-muted); }
 
@@ -693,9 +714,6 @@
   </div>
 </div>
 <script>
-  // Card colours for 信用卡別 (cardPanel) only: muted, cool-leaning, and deliberately AVOIDS
-  // red/green so they never read as spend/income. Categories use catColor (CATEGORY_COLOR).
-  var PALETTE = ['#5f9aa0','#6f88a8','#9a8bb0','#b39a68','#6d8f9e','#8497b8','#7b9ca6','#a99a6a'];
   // Category icons: a fixed in-code map, not stored in the sheet and not editable in Settings.
   // 24x24 line icons; an element with class "f" is filled. A category missing from
   // CATEGORY_ICON (e.g. one added later in Settings) falls back to "q".
@@ -750,7 +768,10 @@
   var BASELINE_SAVING = false;
 
   var state = { tab:'analysis', scope:'month', selYear:NOW.year, selMonth:NOW.month, q:'',
-                inboxScope:'all', inboxDone:false, trendMode:'all' };
+                inboxScope:'all', inboxDone:false, trendMode:'all',
+                // 趨勢 月 (#103): the last month key of the 12-month chart window; null = it ends at the
+                // selection. Re-clamped by trendWindow on every render, reset by setPeriod.
+                trendWinEnd:null };
   var openRow=null, openHeatDay=null, openSplit=null, openProject=null, incomeOpen=false;
   var addHeatDate=null;
   var openCategoryTxn=null;
@@ -778,9 +799,9 @@
   function historyCovers(y,m){
     return HISTORY.complete||!HISTORY.before||(y*100+m)>=(HISTORY.before.y*100+HISTORY.before.m);
   }
-  /** Whether a period's numbers need rows not loaded yet: 全部期間, a year that starts before the
-   *  loaded range, a month before it. Both tabs also read the last six months whatever the period
-   *  (activeSubs() for the projection and 定期訂閱, the six-month trend chart), so those count too. */
+  /** Whether 總覽's numbers for a period need rows not loaded yet: a year that starts before the
+   *  loaded range, a month before it. 總覽 also reads the last six months whatever the period
+   *  (activeSubs() for the projection), so those count too. 趨勢 gates itself (trendWindow, #103). */
   function scopeNeedsHistory(r){
     if(HISTORY.complete) return false;
     var six=monthsBack(6)[0];
@@ -824,7 +845,7 @@
       return (b.amount||0)-(a.amount||0);
     });
   }
-  function periodLabel(r){ if(r.level==='all') return '全部期間'; if(r.level==='year') return r.year+' 全年'+(r.year===NOW.year?'(1–'+NOW.month+' 月)':''); return r.year+' 年 '+r.month+' 月'+(isPartialCur(r)?'(至今 '+NOW.day+' 日)':''); }
+  function periodLabel(r){ if(r.level==='year') return r.year+' 全年'+(r.year===NOW.year?'(1–'+NOW.month+' 月)':''); return r.year+' 年 '+r.month+' 月'+(isPartialCur(r)?'(至今 '+NOW.day+' 日)':''); }
   function isIncome(t){ return t.type==='收入'&&t.cat!=='退款'; }
   function isRefund(t){ return t.type==='收入'&&t.cat==='退款'; }
   function isConsumption(t){ var cat=String(t.cat||'').trim(); return t.type==='支出'||(t.type==='轉帳'&&cat!==''&&cat!=='未分類'); }
@@ -1171,8 +1192,6 @@
     return subscriptionDetect({ transactions:TXNS, asOf:asOf, dismissed:SUB_IGNORES }).subscriptions
       .map(function(s){ return { key:s.key, name:s.name, amt:s.amount }; });
   }
-  function subPanel(subs,tot){ if(!subs.length) return '<div style="color:var(--text-muted);font-size:12px">未偵測到定期扣款</div>'; var out=''; subs.forEach(function(x){ out+='<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls">每月</span><span class="la num">$'+fmt(x.amt)+'</span></div>'; }); out+='<div class="ltot"><span class="t-l">每月合計</span><span class="t-v num">$'+fmt(tot)+'</span></div>'; return out; }
-  function topMerchants(exp){ var m={}; exp.forEach(function(t){ if(!m[t.merchant])m[t.merchant]={total:0,count:0}; m[t.merchant].total+=t.amount; m[t.merchant].count++; }); var arr=Object.keys(m).map(function(k){return {name:k,total:m[k].total,count:m[k].count};}).sort(function(a,b){return b.total-a.total;}).slice(0,6); if(!arr.length) return '<div style="color:var(--text-muted);font-size:12px">無資料</div>'; var out=''; arr.forEach(function(x){ out+='<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls num">'+x.count+' 筆</span><span class="la num">$'+fmt(x.total)+'</span></div>'; }); return out; }
 
   // ---------- 總覽 ----------
   // Daily spending is the headline, compared with a normal month (the median of the window, or the
@@ -1325,46 +1344,88 @@
     return h+'</div>';
   }
 
-  // ---------- 趨勢: only what needs MORE THAN ONE period to mean anything ----------
-  /** One row per month from BASE_FLOOR through the current month: daily (net of refunds), each
-   *  project, total outflow, income, and whether the month is still running. */
-  function trendRows(mt){
-    var cp=curPartialKey(), now=ymKey(NOW.year,NOW.month), out=[];
-    for(var k=BASE_FLOOR;k<=now;k=addMonths(k,1)){
+  // ---------- 趨勢: many periods around the one selection (#103) ----------
+  /** 月: one row per month key of the chart window: daily (net of refunds), each project, total
+   *  outflow, income, and whether the month is still running. */
+  function trendRows(mt,keys){
+    var cp=curPartialKey();
+    return keys.map(function(k){
       var o=mt[k]||{ daily:0, income:0, proj:{} }, proj={}, pt=0;
       PROJECTS.forEach(function(p){ proj[p.name]=o.proj[p.name]||0; pt+=proj[p.name]; });
-      out.push({ key:k, daily:o.daily, proj:proj, total:o.daily+pt, income:o.income, partial:k===cp });
+      return { key:k, daily:o.daily, proj:proj, total:o.daily+pt, income:o.income, partial:k===cp };
+    });
+  }
+  /** 年: one row per calendar year from the first data year through this one, each the sum of its
+   *  months. `months` counts the months it covers (from the first data month through the current
+   *  month); `partial` marks the current year, the only one drawn faded. */
+  function yearRows(mt){
+    var first=firstDataKey(), now=ymKey(NOW.year,NOW.month), out=[];
+    for(var y=+first.split('-')[0]; y<=NOW.year; y++){
+      var row={ key:String(y), daily:0, proj:{}, total:0, income:0, months:0, partial:y===NOW.year };
+      PROJECTS.forEach(function(p){ row.proj[p.name]=0; });
+      for(var m=1;m<=12;m++){
+        var k=ymKey(y,m); if(k<first||k>now) continue;
+        row.months++;
+        var o=mt[k]; if(!o) continue;
+        row.daily+=o.daily; row.income+=o.income;
+        PROJECTS.forEach(function(p){ row.proj[p.name]+=o.proj[p.name]||0; });
+      }
+      row.total=row.daily+PROJECTS.reduce(function(s,p){ return s+row.proj[p.name]; },0);
+      out.push(row);
     }
     return out;
   }
+  /**
+   * 月: the month keys of the 12-month chart window around the selected month `selKey`, or 'wait'.
+   * The window end lives in state.trendWinEnd and is re-clamped here on every render: it moves by
+   * the least amount that keeps the selection inside (so a ‹ › step shifts it by one month only
+   * when the selection would leave it, and a bar or row tap never moves it), and never ends after
+   * the current month. While the history is partial (#58) it waits when the window needs a month not
+   * loaded: its first month, or in 只看日常 the month two before it, which the first two 3-month
+   * average points read. The gate reads the unclamped start: firstDataKey() is the first LOADED month
+   * on a partial load, so a start clamped to it would always look covered. Only after the gate does
+   * the end move up to firstDataKey() + 11 months (fewer than 12 bars when less data exists), so a
+   * clamp from a partial firstDataKey() is never written back.
+   */
+  function trendWindow(selKey,dailyOnly){
+    var now=ymKey(NOW.year,NOW.month);
+    var end=state.trendWinEnd||selKey;
+    if(selKey>end) end=selKey;
+    if(selKey<addMonths(end,-11)) end=addMonths(selKey,11);
+    if(end>now) end=now;
+    var start=addMonths(end,-11);
+    if(!keyCovered(dailyOnly?addMonths(start,-2):start)){ state.trendWinEnd=end; return 'wait'; }
+    var first=firstDataKey(), minEnd=addMonths(first,11);
+    if(minEnd>now) minEnd=now;
+    if(end<minEnd) end=minEnd;
+    state.trendWinEnd=end;
+    var keys=[];
+    for(var k=addMonths(end,-11);k<=end;k=addMonths(k,1)) if(k>=first) keys.push(k);
+    return keys;
+  }
+  /** Exactly two panels: the chart and the 明細 panel, both following the one selection. 年 needs
+   *  every year's rows, so it waits for the whole history; 月 waits only as trendWindow says. */
   function trendTab(){
     var r=resolveScope(state.scope);
-    if(scopeNeedsHistory(r)) return historyPanel(r);
-    var expList=TXNS.filter(function(t){return isConsumption(t)&&inScope(t,r);});
-    var cardExpList=TXNS.filter(function(t){return t.type==='支出'&&inScope(t,r);});
-    var subs=activeSubs(), subTot=subs.reduce(function(s,x){return s+x.amt;},0);
+    if(r.level!=='year'&&r.level!=='month') r=resolveScope('month');   // nothing produces {level:'all'}
+    var yearMode=r.level==='year', selKey=yearMode?String(r.year):ymKey(r.year,r.month);
     var dailyOnly=state.trendMode==='daily';
     var seg='<span class="seg" role="group" aria-label="圖表範圍"><button type="button" data-trendmode="all" aria-pressed="'+(!dailyOnly)+'">日常＋專案</button><button type="button" data-trendmode="daily" aria-pressed="'+dailyOnly+'">只看日常</button></span>';
-    var h='<div class="panel" style="margin-bottom:var(--sp4)"><h3>每月支出 '+seg+'</h3>';
-    var floor=BASE_FLOOR.split('-');
-    if(!historyCovers(+floor[0],+floor[1])) h+='<div class="empty">'+historyWaitText()+historyRetry()+'</div></div>';
-    else {
-      var mt=monthTotals(), rows=trendRows(mt);
-      h+=trendChart(rows,mt,dailyOnly)+'</div>'+monthTable(rows);
-    }
-    h+='<div class="grid2"><div class="panel"><h3>定期訂閱 <span class="h3note">每月固定 · 年約 $'+fmt(subTot*12)+'</span></h3>'+subPanel(subs,subTot)+'</div>'
-      +'<div class="panel"><h3>Top 商店 <span class="h3note">本範圍</span></h3>'+topMerchants(expList)+'</div></div>';
-    // 信用卡別 sits here rather than on 總覽: which card was used is not part of reading a month,
-    // it is a slow-moving habit, and it was crowding the page the owner actually reads.
-    h+='<div class="panel"><h3>信用卡別分析 <span class="h3note">各卡本範圍支出</span></h3>'+cardPanel(cardExpList)+'</div>';
-    return h;
+    var h='<div class="panel" style="margin-bottom:var(--sp4)"><h3>'+(yearMode?'每年支出':'每月支出')+' '+seg+'</h3>';
+    var keys=yearMode?null:trendWindow(selKey,dailyOnly);
+    if(yearMode?!HISTORY.complete:keys==='wait') return h+'<div class="empty">'+historyWaitText()+historyRetry()+'</div></div>';
+    var mt=monthTotals(), rows=yearMode?yearRows(mt):trendRows(mt,keys);
+    return h+trendChart(rows,mt,dailyOnly,yearMode,selKey)+'</div>'+monthTable(rows,yearMode,selKey);
   }
   function wan(n){ var v=n/10000; return (v>=10||v===Math.round(v)?Math.round(v):v.toFixed(1))+' 萬'; }
-  /** Stacked monthly bars (daily, then each project), y-axis in 萬. Daily-only mode adds the
-   *  dashed baseline (the current month's) and the 3-month rolling average of complete months; an
-   *  income line is drawn whenever the range has income. Lines are one SVG laid over the bars. */
-  function trendChart(rows,mt,dailyOnly){
-    var n=rows.length, base=dailyOnly?dailyBaseline(ymKey(NOW.year,NOW.month),mt):null;
+  /** Stacked bars (daily, then each project), y-axis in 萬: the window's months in 月, one bar per
+   *  year in 年. The selected bar is framed and the others dimmed; tapping a bar selects it
+   *  (data-tsel). 只看日常 in 月 adds the dashed baseline (the current month's) and the 3-month
+   *  average of each complete month, read from monthTotals so the window's first two bars get a point
+   *  too; a month whose month − 2 is before the first data month gets none. 年 has neither line (they
+   *  are monthly concepts). An income line whenever the range has income. */
+  function trendChart(rows,mt,dailyOnly,yearMode,selKey){
+    var n=rows.length, monthLines=dailyOnly&&!yearMode, base=monthLines?dailyBaseline(ymKey(NOW.year,NOW.month),mt):null;
     var baseRef=(base&&base!=='wait'&&base.ref>0)?base.ref:0;
     var hasInc=rows.some(function(o){ return o.income>0; });
     var max=1;
@@ -1372,19 +1433,29 @@
     if(baseRef) max=Math.max(max,baseRef);
     max=Math.ceil(max/10000)*10000;
     var H=150, y=function(v){ return (1-Math.max(0,v)/max)*100; }, x=function(i){ return (i+0.5)/n*100; };
-    var bars=rows.map(function(o){
+    var bars=rows.map(function(o,i){
       var segs='<i style="height:'+(Math.max(0,o.daily)/max*H).toFixed(1)+'px;background:'+DAILY_COLOR+'" title="日常 $'+fmt(o.daily)+'"></i>';
       if(!dailyOnly) PROJECTS.forEach(function(p){ var v=o.proj[p.name]; if(v>0) segs='<i style="height:'+(v/max*H).toFixed(1)+'px;background:'+catColor(p.name)+'" title="'+esc(p.name)+' $'+fmt(v)+'"></i>'+segs; });
-      var m=+o.key.split('-')[1];
-      return '<div class="tc-col'+(o.partial?' partial':'')+'"><div class="tc-bar">'+segs+'</div><div class="tc-lbl">'+(m===1||o.key===BASE_FLOOR?o.key.split('-')[0].slice(2)+'/':'')+m+'</div></div>';
+      var lbl, aria;
+      if(yearMode){ lbl=o.key; aria=o.key+' 年'; }
+      else {
+        // A January carries its year; so does the first bar, unless a January follows within two bars.
+        var p=o.key.split('-'), m=+p[1];
+        lbl=(m===1||(i===0&&m<=10)?p[0].slice(2)+'/':'')+m; aria=p[0]+' 年 '+m+' 月';
+      }
+      var sel=o.key===selKey;
+      return '<div class="tc-col'+(o.partial?' partial':'')+(sel?' sel':'')+'" data-tsel="'+o.key+'" role="button" tabindex="0" aria-pressed="'+sel+'" aria-label="'+aria+' '+(dailyOnly?'日常':'總流出')+' $'+fmt(dailyOnly?o.daily:o.total)+'">'
+        +'<div class="tc-bar">'+segs+'</div><div class="tc-lbl">'+lbl+'</div></div>';
     }).join('');
     var lines='';
     if(baseRef) lines+='<line class="tl-base" x1="0" x2="100" y1="'+y(baseRef).toFixed(2)+'" y2="'+y(baseRef).toFixed(2)+'"/>';
-    if(dailyOnly){
-      var pts=[];
+    if(monthLines){
+      var first=firstDataKey(), pts=[];
       rows.forEach(function(o,i){
-        if(i<2||o.partial||rows[i-1].partial) return;
-        pts.push(x(i).toFixed(2)+','+y((o.daily+rows[i-1].daily+rows[i-2].daily)/3).toFixed(2));
+        if(o.partial) return;
+        var k1=addMonths(o.key,-1), k2=addMonths(o.key,-2);
+        if(k2<first) return;
+        pts.push(x(i).toFixed(2)+','+y((o.daily+(mt[k1]?mt[k1].daily:0)+(mt[k2]?mt[k2].daily:0))/3).toFixed(2));
       });
       if(pts.length>1) lines+='<polyline class="tl-avg" points="'+pts.join(' ')+'"/>';
     }
@@ -1392,46 +1463,86 @@
     var out='<div class="tchart"><div class="tc-axis num"><span style="top:0">'+wan(max)+'</span><span style="top:'+(H/2)+'px">'+wan(max/2)+'</span><span style="top:'+H+'px">0</span></div>'
       +'<div class="tc-plot"><div class="tc-grid" style="top:0"></div><div class="tc-grid" style="top:'+(H/2)+'px"></div>'
       +'<svg class="tc-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">'+lines+'</svg>'
-      +'<div class="tc-bars">'+bars+'</div></div></div>';
+      +'<div class="tc-bars has-sel">'+bars+'</div></div></div>';
     var leg='<div class="tlegend"><span><i style="background:'+DAILY_COLOR+'"></i>日常</span>';
     if(!dailyOnly) PROJECTS.forEach(function(p){ leg+='<span><i style="background:'+catColor(p.name)+'"></i>'+esc(p.name)+'</span>'; });
     if(baseRef) leg+='<span><i class="lk-base"></i>'+(base.budget?'自訂預算':'常態')+' $'+fmt(baseRef)+'</span>';
-    else if(dailyOnly&&base==='wait') leg+='<span>常態 '+historyWaitText()+'</span>';
-    if(dailyOnly) leg+='<span><i class="lk-avg"></i>3 個月平均</span>';
+    else if(monthLines&&base==='wait') leg+='<span>常態 '+historyWaitText()+'</span>';
+    if(monthLines) leg+='<span><i class="lk-avg"></i>3 個月平均</span>';
     if(hasInc) leg+='<span><i class="lk-inc"></i>收入</span>';
-    if(rows.some(function(o){ return o.partial; })) leg+='<span>淡色 = 本月至今</span>';
+    if(rows.some(function(o){ return o.partial; })) leg+='<span>淡色 = '+(yearMode?'本年至今':'本月至今')+'</span>';
+    leg+='<span>點長條選'+(yearMode?'年份':'月份')+'</span>';
     return out+leg+'</div>';
   }
-  /** 月份 / 日常 / one column per project / 總流出, newest first. */
-  function monthTable(rows){
-    var h='<div class="panel" style="margin-bottom:var(--sp4)"><h3>每月明細</h3><div class="mtable-wrap"><table class="mtable num"><thead><tr><th>月份</th><th>日常</th>';
+  /** The 明細 label of a row: '26/09' in 月; in 年 the year, with its month count when it covers
+   *  fewer than 12 months ('2026 · 11 個月'). */
+  function periodRowLabel(o,yearMode){
+    if(yearMode) return o.key+(o.months<12?' · '+o.months+' 個月':'');
+    var p=o.key.split('-'); return p[0].slice(2)+'/'+p[1];
+  }
+  /** The expansion of the selected period ('YYYY-MM' or 'YYYY'): its top 5 consumption merchants,
+   *  the active subscriptions (activeSubs) actually charged in it, summed per subscription, and a
+   *  jump to 總覽 on the same selection. 定期扣款 $X · N 筆: X sums those rows and N counts them, so
+   *  a monthly subscription charged in 11 months of a year is 11 筆. Never the transaction list. */
+  function periodDetail(selKey,yearMode){
+    var r=resolveScope(selKey);
+    var exp=TXNS.filter(function(t){ return isConsumption(t)&&inScope(t,r); });
+    var m={}; exp.forEach(function(t){ if(!m[t.merchant]) m[t.merchant]={total:0,count:0}; m[t.merchant].total+=t.amount; m[t.merchant].count++; });
+    var top=Object.keys(m).map(function(k){ return {name:k,total:m[k].total,count:m[k].count}; }).sort(function(a,b){ return b.total-a.total; }).slice(0,5);
+    var topH=top.length?top.map(function(x){ return '<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="ls num">'+x.count+' 筆</span><span class="la num">$'+fmt(x.total)+'</span></div>'; }).join('')
+      :'<div class="pd-none">這期間沒有支出</div>';
+    var subName={}; activeSubs().forEach(function(x){ subName[x.key]=x.name; });
+    var sm={}, order=[], sTot=0, sN=0;
+    exp.forEach(function(t){
+      var k=subscriptionKey(t.merchant); if(!Object.prototype.hasOwnProperty.call(subName,k)) return;
+      if(!sm[k]){ sm[k]={name:subName[k],total:0}; order.push(k); }
+      sm[k].total+=t.amount; sTot+=t.amount; sN++;
+    });
+    var subs=order.map(function(k){ return sm[k]; }).sort(function(a,b){ return b.total-a.total; });
+    var subH=subs.length?subs.map(function(x){ return '<div class="lrow"><span class="ln">'+esc(x.name)+'</span><span class="la num">$'+fmt(x.total)+'</span></div>'; }).join('')
+      :'<div class="pd-none">這期間沒有定期扣款</div>';
+    return '<div class="pdetail"><div class="pd-cols">'
+      +'<div class="pd-col"><div class="pd-h">Top 商店</div>'+topH+'</div>'
+      +'<div class="pd-col"><div class="pd-h">定期扣款'+(subs.length?' <span class="num">$'+fmt(sTot)+' · '+sN+' 筆</span>':'')+'</div>'+subH+'</div>'
+      +'</div><div class="pd-act"><button type="button" class="ev-toggle" data-goov>'+(yearMode?'在總覽看這一年 →':'在總覽看這個月 →')+'</button></div></div>';
+  }
+  /** 每月明細 (the window's months) or 每年明細 (one row per year), newest first. The selected row
+   *  is highlighted with one full-width detail row under it; tapping another row selects it. */
+  function monthTable(rows,yearMode,selKey){
+    var h='<div class="panel" style="margin-bottom:var(--sp4)"><h3>'+(yearMode?'每年明細':'每月明細')+'</h3><div class="mtable-wrap"><table class="mtable num"><thead><tr><th>'+(yearMode?'年份':'月份')+'</th><th>日常</th>';
     PROJECTS.forEach(function(p){ h+='<th>'+esc(p.name)+'</th>'; });
     h+='<th>總流出</th></tr></thead><tbody>';
     rows.slice().reverse().forEach(function(o){
-      var p=o.key.split('-');
-      h+='<tr><td>'+p[0].slice(2)+'/'+p[1]+(o.partial?' 至今':'')+'</td><td>$'+fmt(o.daily)+'</td>';
+      var sel=o.key===selKey;
+      h+='<tr'+(sel?' class="sel" aria-selected="true"':' data-tsel="'+o.key+'" tabindex="0" aria-selected="false"')+'><td>'+periodRowLabel(o,yearMode)+(o.partial&&!yearMode?' 至今':'')+'</td><td>$'+fmt(o.daily)+'</td>';
       PROJECTS.forEach(function(pj){ h+='<td>'+(o.proj[pj.name]?'$'+fmt(o.proj[pj.name]):'—')+'</td>'; });
       h+='<td>$'+fmt(o.total)+'</td></tr>';
+      if(sel) h+='<tr class="mdetail"><td colspan="'+(PROJECTS.length+3)+'">'+periodDetail(o.key,yearMode)+'</td></tr>';
     });
-    return h+'</tbody></table></div>'+monthList(rows)+'</div>';
+    return h+'</tbody></table></div>'+monthList(rows,yearMode,selKey)+'</div>';
   }
-  /** #89: the same rows as monthTable, stacked one block per month for phones. CSS shows exactly
-   *  one of the two (the list at 640px and below), so crossing the breakpoint needs no re-render. */
-  function monthList(rows){
+  /** #89: the same rows as monthTable for phones. The selected period is one expanded block; every
+   *  other one is a single line (period + 總流出) that selects and expands it on tap. CSS shows
+   *  exactly one of table / list (the list at 640px and below), so crossing it needs no re-render. */
+  function monthList(rows,yearMode,selKey){
     function cell(label, value){
       return '<div class="ml-cell" title="'+esc(label)+'"><span class="ml-lbl">'+esc(label)+'</span>'+value+'</div>';
     }
     var h='<div class="mlist num">';
     rows.slice().reverse().forEach(function(o){
-      var p=o.key.split('-');
-      h+='<div class="ml-block"><div class="ml-head"><span class="ml-month">'+p[0].slice(2)+'/'+p[1]+(o.partial?'<span class="ml-sofar">至今</span>':'')+'</span>'
-        +'<span class="ml-tot"><span class="ml-tl">總流出</span><b class="ml-total">$'+fmt(o.total)+'</b></span></div><div class="ml-grid">'
-        +cell('日常','<span class="ml-amt">$'+fmt(o.daily)+'</span>');
-      PROJECTS.forEach(function(pj){
-        var v=o.proj[pj.name];
-        h+=cell(pj.name, v?'<span class="ml-amt">$'+fmt(v)+'</span>':'<span class="ml-amt ml-empty">—</span>');
-      });
-      h+='</div></div>';
+      var sel=o.key===selKey;
+      h+=(sel?'<div class="ml-block sel" aria-current="true">':'<div class="ml-block collapsed" data-tsel="'+o.key+'" role="button" tabindex="0" aria-expanded="false">')
+        +'<div class="ml-head"><span class="ml-month">'+periodRowLabel(o,yearMode)+(o.partial&&!yearMode?'<span class="ml-sofar">至今</span>':'')+'</span>'
+        +'<span class="ml-tot"><span class="ml-tl">總流出</span><b class="ml-total">$'+fmt(o.total)+'</b></span></div>';
+      if(sel){
+        h+='<div class="ml-grid">'+cell('日常','<span class="ml-amt">$'+fmt(o.daily)+'</span>');
+        PROJECTS.forEach(function(pj){
+          var v=o.proj[pj.name];
+          h+=cell(pj.name, v?'<span class="ml-amt">$'+fmt(v)+'</span>':'<span class="ml-amt ml-empty">—</span>');
+        });
+        h+='</div>'+periodDetail(o.key,yearMode);
+      }
+      h+='</div>';
     });
     return h+'</div>';
   }
@@ -1448,20 +1559,6 @@
   // blend --spend (#c46a58) toward --bg-raised (#222630) by t in 0..1 -> rgb() (avoids CSS color-mix dependency)
   function blendSpend(t){ var a=[196,106,88], b=[34,38,48];
     return 'rgb('+Math.round(b[0]+(a[0]-b[0])*t)+','+Math.round(b[1]+(a[1]-b[1])*t)+','+Math.round(b[2]+(a[2]-b[2])*t)+')'; }
-
-  // per-card spending: group scope expenses by bank + last-4; blank last-4 -> per-bank 未知 bucket
-  function cardPanel(expList){
-    if(!expList.length) return '<div class="empty" style="padding:var(--sp4) 0">此範圍沒有支出</div>';
-    var m={}; expList.forEach(function(t){ var bank=t.bank||'未知'; var l4=(t.last4==null||String(t.last4).trim()==='')?'未知':String(t.last4).trim();
-      var k=bank+'|'+l4; if(!m[k])m[k]={bank:bank,last4:l4,total:0,count:0}; m[k].total+=t.amount; m[k].count++; });
-    var arr=Object.keys(m).map(function(k){return m[k];}).sort(function(a,b){return b.total-a.total;});
-    var grand=arr.reduce(function(s,x){return s+x.total;},0), maxv=arr.length?arr[0].total:1, out='';
-    arr.forEach(function(c,i){ var color=PALETTE[i%PALETTE.length], pct=grand>0?Math.round(c.total/grand*100):0;
-      out+='<div class="cardrow"><div class="ctop"><span class="cname"><span class="cdot" style="background:'+color+'"></span>'+esc(c.bank)+' <span class="badge">•'+esc(c.last4)+'</span></span><span class="camt num">$'+fmt(c.total)+'</span><span class="cpct num">'+pct+'%</span></div>'
-        +'<div class="sharebar"><i style="width:'+(c.total/maxv*100).toFixed(1)+'%;background:'+color+'"></i></div>'
-        +'<div class="cmeta num">'+c.count+' 筆 · 平均 $'+fmt(c.total/c.count)+'/筆</div></div>'; });
-    return out;
-  }
 
   // 類別排行 lived here: the same expList grouped by the same t.cat, drawn as a second ranked
   // list purely to carry the vs-previous-period ▲▼. That delta now sits on the rowCard it
@@ -3357,7 +3454,8 @@
     return h+'</div>';
   }
 
-  // ---------- period controls: 月 / 當年 / 全部 plus a ‹ label › stepper ----------
+  // ---------- period controls (#103): 月 / 年 plus a ‹ label › stepper, above the tabs ----------
+  // One selection (state.scope / selYear / selMonth) drives 總覽 and 趨勢 alike.
   /** The scope string for a month or a year: 'month' / 'year' for the current one (so the period
    *  follows the clock as before), 'YYYY-MM' / 'YYYY' for any other. */
   function monthScope(y,m){ return (y===NOW.year&&m===NOW.month)?'month':ymKey(y,m); }
@@ -3369,16 +3467,28 @@
     var now=ymKey(NOW.year,NOW.month);
     return (first==null||first>now)?now:first;
   }
+  /** The 月 / 年 switch. 年 → 月 keeps selMonth inside the selected year (in the current year, no
+   *  later than this month) and never before the first data month. Every press re-defaults the 趨勢
+   *  window to end at the selection. */
   function setPeriod(level){
     var r=resolveScope(state.scope);
     if(r.level==='month'||r.level==='year') state.selYear=r.year;
     if(r.level==='month') state.selMonth=r.month;
     if(level==='month'){
-      // From a year, land on its last month that has happened.
-      var y=state.selYear, m=(y===NOW.year)?Math.min(state.selMonth,NOW.month):state.selMonth;
-      state.scope=monthScope(y,m); state.selMonth=m;
+      var y=state.selYear, m=(y===NOW.year)?Math.min(state.selMonth,NOW.month):state.selMonth, first=firstDataKey();
+      if(ymKey(y,m)<first){ var fp=first.split('-'); y=+fp[0]; m=+fp[1]; }
+      state.scope=monthScope(y,m); state.selYear=y; state.selMonth=m;
     } else if(level==='year') state.scope=yearScope(state.selYear);
-    else state.scope='all';
+    else return;
+    state.trendWinEnd=null;
+    openRow=null; openHeatDay=null; openProject=null;
+  }
+  /** A tapped 趨勢 bar or 明細 row / block: 'YYYY-MM' or 'YYYY'. Only the selection moves; the 趨勢
+   *  window stays where it is (the tapped period is inside it). */
+  function selectPeriod(key){
+    if(/^\d{4}-\d{2}$/.test(key)){ var p=key.split('-'); state.selYear=+p[0]; state.selMonth=+p[1]; state.scope=monthScope(+p[0],+p[1]); }
+    else if(/^\d{4}$/.test(key)){ state.selYear=+key; state.scope=yearScope(+key); }
+    else return;
     openRow=null; openHeatDay=null; openProject=null;
   }
   function stepPeriod(dir){
@@ -3395,17 +3505,16 @@
     openRow=null; openHeatDay=null; openProject=null;
   }
   function periodControls(){
-    var r=resolveScope(state.scope), lv=r.level;
+    var r=resolveScope(state.scope), lv=r.level==='year'?'year':'month';
+    if(r.level!=='year'&&r.level!=='month') r=resolveScope('month');   // nothing produces {level:'all'}
     function sb(level,label){ return '<button type="button" data-period="'+level+'" aria-pressed="'+(lv===level)+'">'+label+'</button>'; }
-    var h='<div class="controls"><span class="seg" role="group" aria-label="期間">'+sb('month','月')+sb('year','當年')+sb('all','全部')+'</span>';
-    if(lv!=='all'){
-      var first=firstDataKey(), canPrev, canNext, label;
-      if(lv==='month'){ var k=ymKey(r.year,r.month); canPrev=addMonths(k,-1)>=first; canNext=k<ymKey(NOW.year,NOW.month); label=r.year+' 年 '+r.month+' 月'; }
-      else { canPrev=r.year>+first.split('-')[0]; canNext=r.year<NOW.year; label=r.year+' 年'; }
-      h+='<span class="stepper"><button type="button" data-step="-1" aria-label="上一'+(lv==='month'?'個月':'年')+'"'+(canPrev?'':' disabled')+'>‹</button>'
-        +'<span class="step-label num">'+label+'</span>'
-        +'<button type="button" data-step="1" aria-label="下一'+(lv==='month'?'個月':'年')+'"'+(canNext?'':' disabled')+'>›</button></span>';
-    } else h+='<span class="step-label">全部期間</span>';
+    var h='<div class="controls period-controls"><span class="seg" role="group" aria-label="期間">'+sb('month','月')+sb('year','年')+'</span>';
+    var first=firstDataKey(), canPrev, canNext, label;
+    if(lv==='month'){ var k=ymKey(r.year,r.month); canPrev=addMonths(k,-1)>=first; canNext=k<ymKey(NOW.year,NOW.month); label=r.year+' 年 '+r.month+' 月'; }
+    else { canPrev=r.year>+first.split('-')[0]; canNext=r.year<NOW.year; label=r.year+' 年'; }
+    h+='<span class="stepper"><button type="button" data-step="-1" aria-label="上一'+(lv==='month'?'個月':'年')+'"'+(canPrev?'':' disabled')+'>‹</button>'
+      +'<span class="step-label num">'+label+'</span>'
+      +'<button type="button" data-step="1" aria-label="下一'+(lv==='month'?'個月':'年')+'"'+(canNext?'':' disabled')+'>›</button></span>';
     return h+'</div>';
   }
 
@@ -3418,13 +3527,12 @@
     var settingsIcon='<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
     var h='<div class="head"><div class="head-top"><span class="title-row"><span class="title">交易 Dashboard</span>'+sheetLink()+'</span><span class="head-actions"><button class="settingsbtn" data-settings aria-label="開啟設定" title="設定">'+settingsIcon+'</button><button class="addbtn" data-add aria-label="新增交易">＋ 新增</button></span></div>'
       +'<div class="head-search">'+headSearch()+'</div>'
+      +(isInbox?'':periodControls())
       +'<div class="tabs">'+tb('analysis','總覽','')+tb('trend','趨勢','')+tb('inbox','待記帳',inboxSub)+'</div>';
     if(isInbox){
       h+='<div class="controls"><span class="seg" role="group" aria-label="範圍"><button type="button" data-iscope="all" aria-pressed="'+(state.inboxScope==='all')+'">全部</button><button type="button" data-iscope="year" aria-pressed="'+(state.inboxScope==='year')+'">本年</button></span>'
         +'<button class="ev-toggle" data-inboxdone>'+(state.inboxDone?'只看待記帳':'一併顯示近 '+INBOX_DONE_DAYS+' 天已記帳')+'</button>'
         +'<span class="hint">'+(state.inboxDone?'已記帳只回看 '+INBOX_DONE_DAYS+' 天(誤按時取回用)':'待記帳與期間篩選分開,積壓不會被月份藏起來')+'</span></div>';
-    } else {
-      h+=periodControls();
     }
     // A failed background history read keeps one retry control in view whatever the tab.
     if(!HISTORY.complete&&HISTORY.failed) h+='<div class="hint">完整歷史載入失敗:'+esc(HISTORY.failed)+' · 需要完整歷史的數字暫不顯示'+historyRetry()+'</div>';
@@ -3447,6 +3555,13 @@
       c.onkeydown=function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); this.onclick(); } };
     });
     app.querySelectorAll('[data-dayadd]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); openAddModal(this.getAttribute('data-dayadd')); }; });
+    // 趨勢 (#103): a bar, 明細 row or collapsed block selects its period; the selected one carries no
+    // data-tsel, so nothing inside its expansion re-selects.
+    app.querySelectorAll('[data-tsel]').forEach(function(el){
+      el.onclick=function(){ selectPeriod(this.getAttribute('data-tsel')); render(); };
+      el.onkeydown=function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); this.onclick(); } };
+    });
+    app.querySelectorAll('[data-goov]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); state.tab='analysis'; openRow=null; openProject=null; openHeatDay=null; render(); if(window.scrollTo) window.scrollTo(0,0); }; });
     app.querySelectorAll('[data-trendmode]').forEach(function(b){ b.onclick=function(){ state.trendMode=this.getAttribute('data-trendmode'); render(); }; });
     app.querySelectorAll('[data-incsrc]').forEach(function(b){ b.onclick=function(){ incomeOpen=!incomeOpen; render(); }; });
     app.querySelectorAll('[data-projtoggle]').forEach(function(b){ b.onclick=function(e){ e.stopPropagation(); var n=this.getAttribute('data-projtoggle'); openProject=(openProject===n)?null:n; openCategoryTxn=null; openSplit=null; render(); }; });
